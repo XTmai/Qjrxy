@@ -696,3 +696,54 @@ func TestURLEncodeSorted(t *testing.T) {
 		t.Errorf("排序拼接错误：%s", got)
 	}
 }
+
+// TestAttendanceSuccessResponse 校验查寝成功响应被正确识别。
+// 回归：查寝提交成功返回 {"code":"0","message":"SUCCESS"}，
+// 响应中没有 datas 字段。此前要求 datas.signedStuInfo 存在，
+// 导致每次都判成失败（实际服务端已成功）。
+func TestAttendanceSuccessResponse(t *testing.T) {
+	responses := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			// 实测的查寝成功响应
+			"查寝成功",
+			`{"code":"0","message":"SUCCESS","userId":"2024235110","userName":"某某"}`,
+			true,
+		},
+		{
+			"签到成功（带 datas）",
+			`{"code":"0","message":"SUCCESS","datas":{"signInstanceWid":"40606","signedStuInfo":null}}`,
+			true,
+		},
+		{
+			"业务失败",
+			`{"code":"3","message":"设备未授权"}`,
+			false,
+		},
+		{
+			"版本过低",
+			`{"code":"4","message":"今日校园版本过低"}`,
+			false,
+		},
+	}
+
+	for _, c := range responses {
+		var parsed struct {
+			Code    json.RawMessage `json:"code"`
+			Message string          `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(c.body), &parsed); err != nil {
+			t.Fatalf("%s 解析失败：%v", c.name, err)
+		}
+		code := strings.Trim(string(parsed.Code), `"`)
+		ok := code == "0" ||
+			strings.EqualFold(strings.TrimSpace(parsed.Message), "SUCCESS") ||
+			strings.Contains(parsed.Message, "成功")
+		if ok != c.want {
+			t.Errorf("%s：判定为 %v，期望 %v", c.name, ok, c.want)
+		}
+	}
+}

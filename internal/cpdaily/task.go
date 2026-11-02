@@ -806,29 +806,13 @@ func (c *Client) submit(ctx context.Context, host, tenantID string, device Devic
 	}
 
 	result := &SignResult{Code: code, Message: parsed.Message, Payload: string(respBody)}
-	// 成功判定：
-	// 服务端在「任务还没到签到时间」时也会返回 code=0 + SUCCESS，
-	// 但 datas.signedStuInfo 为 null，属于「请求受理但未真正签到」。
-	// 因此必须同时检查 signedStuInfo 是否落库，不能只看 code。
-	accepted := code == "0" ||
-		strings.EqualFold(strings.TrimSpace(parsed.Message), "SUCCESS") ||
-		strings.Contains(parsed.Message, "成功")
 
-	if accepted {
-		var body struct {
-			Datas struct {
-				SignedStuInfo json.RawMessage `json:"signedStuInfo"`
-				SignInstanceWID string        `json:"signInstanceWid"`
-			} `json:"datas"`
-		}
-		_ = json.Unmarshal(respBody, &body)
-		raw := strings.TrimSpace(string(body.Datas.SignedStuInfo))
-		// null / 空对象都表示服务端没有真正记录这次签到
-		if raw == "" || raw == "null" || raw == "{}" {
-			result.Success = false
-			result.Hint = "服务端已受理但未记录签到结果（通常表示当前不在签到时段，或坐标不在范围内）。请核对任务时间后再试"
-			return result, nil
-		}
+	// 成功判定：查寝提交成功时服务端返回 {"code":"0","message":"SUCCESS",...}，
+	// 响应里没有 datas 字段（与签到接口不同）。因此只认 code 与 message，
+	// 不能再要求 datas.signedStuInfo 存在。
+	if code == "0" ||
+		strings.EqualFold(strings.TrimSpace(parsed.Message), "SUCCESS") ||
+		strings.Contains(parsed.Message, "成功") {
 		result.Success = true
 	}
 	if !result.Success {

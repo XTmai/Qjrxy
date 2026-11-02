@@ -113,6 +113,22 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 
 	detailJSON := marshalDetail(buildLogDetail(detail, result, account, lon, lat))
 	if result.Success {
+		// 事后核对：服务端在「任务还没到签到时间」时也会返回 code=0 SUCCESS，
+		// 靠响应字段无法区分。这里回查一次任务列表，确认该任务确实从
+		//「未签到」里消失了，才算真成功。
+		confirmed, checkErr := s.confirmSigned(ctx, account, task)
+		if checkErr == nil && !confirmed {
+			_ = s.db.UpdateLog(ctx, logID, store.StatusPending,
+				"服务端返回成功，但任务仍在待办列表中", detailJSON)
+			return &RunOutcome{
+				LogID:   logID,
+				Status:  store.StatusPending,
+				Message: "服务端返回成功，但任务仍在待办列表中",
+				Hint:    "可能是当前不在该任务的签到时段。请核对任务时间，到时间后再执行",
+				Task:    task.TaskName,
+			}, nil
+		}
+
 		_ = s.db.UpdateLog(ctx, logID, store.StatusSuccess, defaultIfEmpty(result.Message, "已完成"), detailJSON)
 		_ = s.db.MarkTaskDone(ctx, account.ID, task.Kind, task.SignInstanceWID)
 		return &RunOutcome{LogID: logID, Status: store.StatusSuccess,
@@ -171,6 +187,25 @@ func (s *Service) pickTask(ctx context.Context, account *store.Account, opts Run
 		return &t, nil
 	}
 	return nil, errors.New("当前没有待处理的查寝任务")
+}
+
+// confirmSigned 回查任务列表，确认任务是否真的完成了。
+//
+// 返回 (true, nil) 表示已不在待办中（成功）；
+// (false, nil) 表示仍在待办中（未真正签到）；
+// 查询失败时返回 err，调用方应视为「无法确认」而不是失败。
+func (s *Service) confirmSigned(ctx context.Context, account *store.Account, task *store.Task) (bool, error) {
+	client := s.clientFor(account)
+	list, err := client.ListAllTasks(ctx, account.Host, []cpdaily.TaskKind{cpdaily.KindAttendance})
+	if err != nil {
+		return false, err
+	}
+	for _, t := range list {
+		if t.SignInstanceWID == task.SignInstanceWID {
+			return false, nil // 还在待办里，说明没签上
+		}
+	}
+	return true, nil
 }
 
 // buildLogDetail 组装可回溯的执行详情。
