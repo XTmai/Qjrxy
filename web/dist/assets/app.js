@@ -1,104 +1,107 @@
 /* =========================================================
-   小麦校园 · 主入口
+   青衿前端主入口：路由、会话、主题
    ========================================================= */
 import { api, getToken, setToken } from './api.js';
-import { el, toast, initModal, closeModal, initial } from './ui.js';
+import { h, toast, initModal, closeModal } from './ui.js';
 
-import { pageHome } from './page-home.js';
-import { pageAccounts } from './page-accounts.js';
-import { pageTasks } from './page-tasks.js';
-import { pagePlans } from './page-plans.js';
-import { pageLogs } from './page-logs.js';
-import { pageQuota } from './page-quota.js';
-import { pageSettings } from './page-settings.js';
+import { renderDashboard } from './page-dashboard.js';
+import { renderAccounts } from './page-accounts.js';
+import { renderTasks } from './page-tasks.js';
+import { renderLogs } from './page-logs.js';
+import { renderQuota } from './page-quota.js';
+import { renderSecurity } from './page-security.js';
 
 const ROUTES = {
-  home: { title: '概览', page: pageHome },
-  accounts: { title: '校园账号', page: pageAccounts },
-  tasks: { title: '查寝任务', page: pageTasks },
-  plans: { title: '自动计划', page: pagePlans },
-  logs: { title: '执行记录', page: pageLogs },
-  quota: { title: '额度', page: pageQuota },
-  settings: { title: '设置', page: pageSettings },
+  dashboard: { title: '工作台', render: renderDashboard },
+  accounts: { title: '学生账号', render: renderAccounts },
+  tasks: { title: '任务执行', render: renderTasks },
+  logs: { title: '执行记录', render: renderLogs },
+  quota: { title: '额度与卡密', render: renderQuota },
+  security: { title: '账号与安全', render: renderSecurity },
 };
 
-const THEME_KEY = 'wheat_theme';
-
-const dom = {
-  gate: document.getElementById('gate'),
-  app: document.getElementById('app'),
-  page: document.getElementById('page'),
-  nav: document.getElementById('nav'),
-  tabbar: document.getElementById('tabbar'),
-  topTitle: document.getElementById('topTitle'),
-  topSub: document.getElementById('topSub'),
-  sideName: document.getElementById('sideName'),
-  sideQuota: document.getElementById('sideQuota'),
-  sideAvatar: document.getElementById('sideAvatar'),
-  topAvatar: document.getElementById('topAvatar'),
-};
+const THEME_KEY = 'qj_theme';
+const contentEl = document.getElementById('content');
+const appEl = document.getElementById('app');
+const authEl = document.getElementById('authScreen');
 
 let currentUser = null;
+let currentRoute = '';
 
 const ctx = {
   go(path) {
-    const hash = path.startsWith('#') ? path : '#' + path;
-    if (location.hash === hash) route();
-    else location.hash = hash;
+    const target = path.startsWith('#') ? path : '#' + path;
+    if (location.hash === target) {
+      route();
+    } else {
+      location.hash = target;
+    }
   },
   logout,
   setTheme,
   refreshUser,
-  user: () => currentUser,
 };
 
 /* ---------------- 主题 ---------------- */
 
-function firstTheme() {
+function initialTheme() {
   let saved = '';
   try { saved = localStorage.getItem(THEME_KEY) || ''; } catch { /* 忽略 */ }
   if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function setTheme(mode) {
   document.documentElement.dataset.theme = mode;
-  const label = document.getElementById('themeText');
-  if (label) label.textContent = mode === 'dark' ? '深色' : '浅色';
-  const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', mode === 'dark' ? '#1a1713' : '#f7f3ec');
+  document.body.dataset.theme = mode;
   try { localStorage.setItem(THEME_KEY, mode); } catch { /* 忽略 */ }
+  const label = document.getElementById('themeLabel');
+  if (label) label.textContent = mode === 'dark' ? '深色' : '浅色';
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (meta) meta.setAttribute('content', mode === 'dark' ? 'dark' : 'light');
 }
 
-/* ---------------- 登录 ---------------- */
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  setTheme(next);
+}
 
-function showGate() {
-  dom.gate.hidden = false;
-  dom.app.hidden = true;
+/* ---------------- 认证 ---------------- */
+
+function showAuth() {
+  authEl.hidden = false;
+  appEl.hidden = true;
+  document.body.classList.add('auth-mode');
 }
 
 function showApp(user) {
   currentUser = user;
-  dom.gate.hidden = true;
-  dom.app.hidden = false;
-  paintUser(user);
+  authEl.hidden = true;
+  appEl.hidden = false;
+  document.body.classList.remove('auth-mode');
+  updateUserChrome(user);
 }
 
-function paintUser(user) {
+function updateUserChrome(user) {
   if (!user) return;
-  const name = user.nickname || user.username || '用户';
-  const left = Math.max(0, (user.quota || 0) - (user.quotaUsed || 0));
-  if (dom.sideName) dom.sideName.textContent = name;
-  if (dom.sideQuota) dom.sideQuota.textContent = left + ' 次可用';
-  if (dom.sideAvatar) dom.sideAvatar.textContent = initial(name);
-  if (dom.topAvatar) dom.topAvatar.textContent = initial(name);
+  const name = user.nickname || user.username;
+  const remaining = Math.max(0, (user.quota || 0) - (user.quotaUsed || 0));
+  setText('userName', name);
+  setText('chipName', name);
+  setText('userQuota', `${remaining} 次`);
+  setText('userAvatar', name.slice(0, 1));
+  setText('chipAvatar', name.slice(0, 1));
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
 }
 
 async function refreshUser() {
   try {
     const { user } = await api.me();
-    currentUser = user;
-    paintUser(user);
+    updateUserChrome(user);
   } catch { /* 忽略 */ }
 }
 
@@ -106,82 +109,82 @@ async function logout() {
   try { await api.logout(); } catch { /* 忽略 */ }
   setToken('');
   currentUser = null;
-  closeModal();
-  showGate();
+  showAuth();
   toast('已退出登录');
 }
 
 /* ---------------- 路由 ---------------- */
 
-function currentRoute() {
-  const raw = location.hash.replace(/^#\/?/, '').split('?')[0].toLowerCase();
-  return ROUTES[raw] ? raw : 'home';
+function parseHash() {
+  const raw = location.hash.replace(/^#\/?/, '');
+  const [path] = raw.split('?');
+  return (path || 'dashboard').toLowerCase();
 }
 
 async function route() {
   closeModal();
-  const name = currentRoute();
-  const def = ROUTES[name];
+  const name = ROUTES[parseHash()] ? parseHash() : 'dashboard';
+  currentRoute = name;
+  const { title, render } = ROUTES[name];
 
-  document.querySelectorAll('[data-route]').forEach((node) => {
-    node.classList.toggle('on', node.dataset.route === name);
+  document.querySelectorAll('[data-nav]').forEach((el) => {
+    el.classList.toggle('active', el.dataset.nav === name);
   });
-  if (dom.topTitle) dom.topTitle.textContent = def.title;
-  document.title = def.title + ' · 小麦校园';
+  setText('crumbCurrent', title);
+  document.title = `${title} · 青衿`;
 
-  dom.page.replaceChildren();
+  contentEl.replaceChildren();
   try {
-    await def.page(dom.page, ctx);
+    await render(contentEl, ctx);
   } catch (err) {
-    dom.page.replaceChildren(
-      el('div', { class: 'head' }, el('h1', null, def.title)),
-      el('div', { class: 'empty' },
-        el('strong', null, '页面加载失败'),
-        el('div', null, err.message || String(err)),
+    contentEl.replaceChildren(
+      h('div', { class: 'page-head' }, h('div', null, h('h1', null, title))),
+      h('div', { class: 'empty' },
+        h('strong', null, '页面渲染出错'),
+        h('span', null, err.message || String(err)),
       ),
     );
   }
-  window.scrollTo({ top: 0 });
-}
-
-function setSub(text) {
-  if (dom.topSub) dom.topSub.textContent = text || '';
+  contentEl.scrollTop = 0;
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 }
 
 /* ---------------- 登录表单 ---------------- */
 
-function initGate() {
-  const form = document.getElementById('gateForm');
-  const err = document.getElementById('gateErr');
-  const submit = document.getElementById('gateSubmit');
-  const nickField = document.getElementById('gateNickField');
-  const pass = document.getElementById('gatePass');
+function initAuthForm() {
+  const form = document.getElementById('authForm');
+  const nicknameField = document.getElementById('nicknameField');
+  const errorEl = document.getElementById('authError');
+  const submitBtn = document.getElementById('authSubmit');
   let mode = 'login';
 
-  document.querySelectorAll('.gate-tabs button').forEach((btn) => {
+  document.querySelectorAll('[data-auth-tab]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      mode = btn.dataset.mode;
-      document.querySelectorAll('.gate-tabs button').forEach((b) =>
-        b.classList.toggle('on', b === btn));
-      nickField.hidden = mode !== 'register';
-      submit.textContent = mode === 'register' ? '注册并登录' : '登录';
-      pass.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
-      err.textContent = '';
+      mode = btn.dataset.authTab;
+      document.querySelectorAll('[data-auth-tab]').forEach((b) => {
+        b.classList.toggle('active', b === btn);
+      });
+      nicknameField.hidden = mode !== 'register';
+      submitBtn.textContent = mode === 'register' ? '注册并登录' : '登录';
+      errorEl.textContent = '';
+      const pwd = document.getElementById('authPassword');
+      pwd.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
     });
   });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    err.textContent = '';
-    const username = document.getElementById('gateUser').value.trim();
-    const password = pass.value;
-    const nickname = document.getElementById('gateNick').value.trim();
+    errorEl.textContent = '';
+    const data = new FormData(form);
+    const username = String(data.get('username') || '').trim();
+    const password = String(data.get('password') || '');
+    const nickname = String(data.get('nickname') || '').trim();
 
-    if (username.length < 3) { err.textContent = '用户名至少 3 位'; return; }
-    if (password.length < 6) { err.textContent = '密码至少 6 位'; return; }
+    if (username.length < 3) { errorEl.textContent = '用户名至少 3 位'; return; }
+    if (password.length < 6) { errorEl.textContent = '密码至少 6 位'; return; }
 
-    submit.disabled = true;
-    submit.textContent = '处理中…';
+    submitBtn.disabled = true;
+    submitBtn.textContent = '处理中…';
     try {
       const res = mode === 'register'
         ? await api.register(username, password, nickname)
@@ -189,14 +192,14 @@ function initGate() {
       setToken(res.token);
       showApp(res.user);
       form.reset();
-      if (!location.hash) location.hash = '#/home';
+      if (!location.hash) location.hash = '#/dashboard';
       await route();
       toast(mode === 'register' ? '注册成功' : '登录成功', 'ok');
-    } catch (e2) {
-      err.textContent = e2.message;
+    } catch (err) {
+      errorEl.textContent = err.message;
     } finally {
-      submit.disabled = false;
-      submit.textContent = mode === 'register' ? '注册并登录' : '登录';
+      submitBtn.disabled = false;
+      submitBtn.textContent = mode === 'register' ? '注册并登录' : '登录';
     }
   });
 }
@@ -204,24 +207,23 @@ function initGate() {
 /* ---------------- 启动 ---------------- */
 
 async function boot() {
-  setTheme(firstTheme());
+  setTheme(initialTheme());
   initModal();
-  initGate();
+  initAuthForm();
 
-  document.getElementById('themeBtn')?.addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
-  });
+  document.getElementById('themeToggle')?.addEventListener('click', toggleTheme);
+  document.getElementById('authThemeToggle')?.addEventListener('click', toggleTheme);
   document.getElementById('logoutBtn')?.addEventListener('click', logout);
 
   window.addEventListener('hashchange', route);
-  window.addEventListener('wheat:logout', () => {
+  window.addEventListener('qj:unauthorized', () => {
     currentUser = null;
-    showGate();
+    showAuth();
   });
 
+  // 没有 token 直接展示登录页，避免多余请求
   if (!getToken()) {
-    showGate();
+    showAuth();
     return;
   }
 
@@ -231,7 +233,7 @@ async function boot() {
     await route();
   } catch {
     setToken('');
-    showGate();
+    showAuth();
   }
 }
 

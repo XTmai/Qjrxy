@@ -4,107 +4,58 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f7f3ec">
-<title>小麦校园</title>
-<link rel="stylesheet" href="/assets/app.css">
-<link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+<title>青衿 · 今日校园签到与查寝</title>
+<link rel="stylesheet" href="/assets/app.css?v=39085a1b89e3">
+<link rel="icon" href="/assets/logo.svg?v=39085a1b89e3" type="image/svg+xml">
 </head>
 <body>
-
-<!-- 登录 -->
-<div id="gate" class="gate">
-  <div class="gate-box">
-    <div class="gate-brand">
-      <span class="mark">
-        <svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M12 9c0-2.5 1.5-4.5 3.5-5.5C15.5 6 14 8 12 9z"/><path d="M12 9c0-2.5-1.5-4.5-3.5-5.5C8.5 6 10 8 12 9z"/><path d="M12 14c0-2 1.2-3.6 2.8-4.4C14.8 11.6 13.6 13.2 12 14z"/><path d="M12 14c0-2-1.2-3.6-2.8-4.4C9.2 11.6 10.4 13.2 12 14z"/></svg>
-      </span>
-      <div>
-        <h1>小麦校园</h1>
-        <p>今日校园 · 查寝助手</p>
-      </div>
-    </div>
-
-    <div class="gate-tabs">
-      <button data-mode="login" class="on">登录</button>
-      <button data-mode="register">注册</button>
-    </div>
-
-    <form id="gateForm">
-      <div class="field">
-        <label for="gateUser">用户名</label>
-        <input id="gateUser" name="username" autocomplete="username" placeholder="请输入用户名" required>
-      </div>
-      <div class="field" id="gateNickField" hidden>
-        <label for="gateNick">昵称（可选）</label>
-        <input id="gateNick" name="nickname" autocomplete="nickname" placeholder="显示名称">
-      </div>
-      <div class="field">
-        <label for="gatePass">密码</label>
-        <input id="gatePass" name="password" type="password" autocomplete="current-password"
-               placeholder="至少 6 位" required>
-      </div>
-      <p class="form-err" id="gateErr"></p>
-      <button class="btn main full" type="submit" id="gateSubmit">登录</button>
-    </form>
-
-    <p class="gate-note">首次使用请先注册。所有账号信息仅保存在这台服务器上。</p>
-  </div>
-</div>
-
-<!-- 主应用 -->
-<div id="app" class="shell" hidden>
-  <aside class="side">
+<div id="app" class="app-shell" hidden>
+  <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <span class="brand-logo">
-        <svg viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M12 9c0-2.5 1.5-4.5 3.5-5.5C15.5 6 14 8 12 9z"/><path d="M12 9c0-2.5-1.5-4.5-3.5-5.5C8.5 6 10 8 12 9z"/><path d="M12 14c0-2 1.2-3.6 2.8-4.4C14.8 11.6 13.6 13.2 12 14z"/><path d="M12 14c0-2-1.2-3.6-2.8-4.4C9.2 11.6 10.4 13.2 12 14z"/></svg>
-      </span>
-      <div class="brand-name">
-        <strong>小麦校园</strong>
-        <span>WHEAT CAMPUS</span>
+      <a class="brand-mark" href="#/dashboard" aria-label="青衿">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4c4.2 3.1 7 6.2 7 10.2 0 5-3.7 8.8-7 11.4-3.3-2.6-7-6.4-7-11.4C9 10.2 11.8 7.1 16 4z" fill="currentColor" opacity=".9"/><path d="M16 9.5c2.3 1.9 3.6 3.6 3.6 5.7 0 2.7-1.9 4.9-3.6 6.4-1.7-1.5-3.6-3.7-3.6-6.4 0-2.1 1.3-3.8 3.6-5.7z" fill="#fff" opacity=".85"/></svg>
+      </a>
+      <div class="brand-text">
+        <strong>青衿</strong>
+        <span>校园事务管理</span>
       </div>
     </div>
 
-    <nav class="nav" id="nav">
-      <p class="nav-label">工作台</p>
-      <a class="nav-item" href="#/home" data-route="home">
-        <svg viewBox="0 0 24 24"><path d="M4 11.3 12 4l8 7.3V20a1 1 0 0 1-1 1h-4.6v-6H9.6v6H5a1 1 0 0 1-1-1z"/></svg>
-        <span>概览</span>
+    <nav class="nav" aria-label="主导航">
+      <p class="nav-group">工作空间</p>
+      <a class="nav-item" href="#/dashboard" data-nav="dashboard">
+        <svg viewBox="0 0 24 24"><path d="M4 11.2 12 4l8 7.2V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1z"/></svg>
+        <span>工作台</span>
       </a>
-      <a class="nav-item" href="#/accounts" data-route="accounts">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-6.3 7-6.3s7 2.4 7 6.3"/></svg>
-        <span>校园账号</span>
+      <a class="nav-item" href="#/accounts" data-nav="accounts">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-4 3.4-6.4 7.5-6.4s7.5 2.4 7.5 6.4"/></svg>
+        <span>学生账号</span>
       </a>
-      <a class="nav-item" href="#/tasks" data-route="tasks">
-        <svg viewBox="0 0 24 24"><path d="M4.5 12.5 9 17 19.5 6.5"/></svg>
-        <span>查寝任务</span>
+      <a class="nav-item" href="#/tasks" data-nav="tasks">
+        <svg viewBox="0 0 24 24"><path d="m4 13 4.5 4.5L20 6"/></svg>
+        <span>任务执行</span>
       </a>
-      <a class="nav-item" href="#/plans" data-route="plans">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>
-        <span>自动计划</span>
-      </a>
-
-      <p class="nav-label">记录</p>
-      <a class="nav-item" href="#/logs" data-route="logs">
-        <svg viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h9"/></svg>
+      <a class="nav-item" href="#/logs" data-nav="logs">
+        <svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg>
         <span>执行记录</span>
       </a>
 
-      <p class="nav-label">账户</p>
-      <a class="nav-item" href="#/quota" data-route="quota">
-        <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M3 10.5h18"/></svg>
-        <span>额度</span>
+      <p class="nav-group">账户</p>
+      <a class="nav-item" href="#/quota" data-nav="quota">
+        <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M3 10h18"/></svg>
+        <span>额度与卡密</span>
       </a>
-      <a class="nav-item" href="#/settings" data-route="settings">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 8.9 19a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 8.9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
-        <span>设置</span>
+      <a class="nav-item" href="#/security" data-nav="security">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a7.9 7.9 0 0 0 .1-2l1.8-1.3-1.9-3.3-2.1.8a7.8 7.8 0 0 0-1.7-1L15.3 3h-3.9l-.3 2.2a7.8 7.8 0 0 0-1.7 1l-2.1-.8L5.4 8.7 7.2 10a7.9 7.9 0 0 0 0 2L5.4 13.3l1.9 3.3 2.1-.8c.5.4 1.1.7 1.7 1l.3 2.2h3.9l.3-2.2c.6-.3 1.2-.6 1.7-1l2.1.8 1.9-3.3z"/></svg>
+        <span>账号与安全</span>
       </a>
     </nav>
 
-    <div class="side-foot">
-      <div class="avatar" id="sideAvatar">小</div>
-      <div class="who">
-        <strong id="sideName">—</strong>
-        <span id="sideQuota">—</span>
+    <div class="sidebar-foot">
+      <div class="avatar" id="userAvatar">青</div>
+      <div class="user-meta">
+        <strong id="userName">演示用户</strong>
+        <span id="userQuota">50 次</span>
       </div>
       <button class="icon-btn" id="logoutBtn" title="退出登录" aria-label="退出登录">
         <svg viewBox="0 0 24 24"><path d="M14 5h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-4M10 8l-4 4 4 4M6 12h9"/></svg>
@@ -114,60 +65,91 @@
 
   <div class="main">
     <header class="topbar">
-      <div class="topbar-title">
-        <strong id="topTitle">概览</strong>
-        <span id="topSub"></span>
+      <div class="crumb">
+        <svg viewBox="0 0 24 24" class="crumb-icon"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 4v16"/></svg>
+        <span>青衿</span>
+        <i>/</i>
+        <strong id="crumbCurrent">工作台</strong>
       </div>
-      <div class="topbar-right">
-        <button class="btn plain sm" id="themeBtn">
-          <svg viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M5.6 5.6 7 7M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4 7 17M17 7l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>
-          <span id="themeText">浅色</span>
+      <div class="topbar-actions">
+        <button class="pill" id="themeToggle">
+          <svg viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4 7 17M17 7l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>
+          <span id="themeLabel">外观</span>
         </button>
-        <div class="avatar sm" id="topAvatar">小</div>
+        <div class="user-chip">
+          <span class="avatar sm" id="chipAvatar">演</span>
+          <span id="chipName">演示用户</span>
+          <svg viewBox="0 0 24 24" class="chev"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
       </div>
     </header>
 
-    <main class="page" id="page" tabindex="-1"></main>
+    <main class="content" id="content" tabindex="-1"></main>
   </div>
 
-  <nav class="tabbar" id="tabbar">
-    <a href="#/home" data-route="home">
-      <svg viewBox="0 0 24 24"><path d="M4 11.3 12 4l8 7.3V20h-5.6v-6H9.6v6H4z"/></svg><span>概览</span>
-    </a>
-    <a href="#/accounts" data-route="accounts">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.9 3.1-6.3 7-6.3s7 2.4 7 6.3"/></svg><span>账号</span>
-    </a>
-    <a href="#/tasks" data-route="tasks">
-      <svg viewBox="0 0 24 24"><path d="M4.5 12.5 9 17 19.5 6.5"/></svg><span>任务</span>
-    </a>
-    <a href="#/logs" data-route="logs">
-      <svg viewBox="0 0 24 24"><path d="M5 6.5h14M5 12h14M5 17.5h9"/></svg><span>记录</span>
-    </a>
-    <a href="#/settings" data-route="settings">
-      <svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="3"/><path d="M6 20c.6-3.2 3-5 6-5s5.4 1.8 6 5"/></svg><span>我的</span>
-    </a>
+  <nav class="bottom-nav" aria-label="移动端导航">
+    <a href="#/dashboard" data-nav="dashboard"><svg viewBox="0 0 24 24"><path d="M4 11.2 12 4l8 7.2V20h-5.5v-6h-5v6H4z"/></svg><span>首页</span></a>
+    <a href="#/accounts" data-nav="accounts"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20c0-4 3.4-6.4 7.5-6.4s7.5 2.4 7.5 6.4"/></svg><span>账号</span></a>
+    <a href="#/tasks" data-nav="tasks"><svg viewBox="0 0 24 24"><path d="m4 13 4.5 4.5L20 6"/></svg><span>任务</span></a>
+    <a href="#/logs" data-nav="logs"><svg viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span>记录</span></a>
+    <a href="#/security" data-nav="security"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="9.6" r="2.4"/><path d="M7.5 18c.7-2.4 2.4-3.6 4.5-3.6s3.8 1.2 4.5 3.6"/></svg><span>我的</span></a>
   </nav>
+</div>
+
+<div id="authScreen" class="auth-screen">
+  <button class="auth-theme" id="authThemeToggle" aria-label="切换外观">
+    <svg viewBox="0 0 24 24"><path d="M12 3v2M12 19v2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M3 12h2M19 12h2M5.6 18.4 7 17M17 7l1.4-1.4"/><circle cx="12" cy="12" r="4"/></svg>
+  </button>
+  <div class="auth-card">
+    <div class="auth-brand">
+      <span class="brand-mark lg">
+        <svg viewBox="0 0 32 32"><path d="M16 4c4.2 3.1 7 6.2 7 10.2 0 5-3.7 8.8-7 11.4-3.3-2.6-7-6.4-7-11.4C9 10.2 11.8 7.1 16 4z" fill="currentColor" opacity=".9"/><path d="M16 9.5c2.3 1.9 3.6 3.6 3.6 5.7 0 2.7-1.9 4.9-3.6 6.4-1.7-1.5-3.6-3.7-3.6-6.4 0-2.1 1.3-3.8 3.6-5.7z" fill="#fff" opacity=".85"/></svg>
+      </span>
+      <div>
+        <h1>青衿</h1>
+        <p>今日校园签到与查寝</p>
+      </div>
+    </div>
+    <div class="auth-tabs" role="tablist">
+      <button class="active" data-auth-tab="login" role="tab">登录</button>
+      <button data-auth-tab="register" role="tab">注册</button>
+    </div>
+    <form id="authForm" autocomplete="on">
+      <label class="field">
+        <span>用户名</span>
+        <input name="username" id="authUsername" required minlength="3" placeholder="请输入用户名" autocomplete="username">
+      </label>
+      <label class="field" id="nicknameField" hidden>
+        <span>昵称（可选）</span>
+        <input name="nickname" placeholder="显示名称" autocomplete="nickname">
+      </label>
+      <label class="field">
+        <span>密码</span>
+        <input name="password" id="authPassword" type="password" required minlength="6" placeholder="至少 6 位" autocomplete="current-password">
+      </label>
+      <p class="form-error" id="authError" role="alert"></p>
+      <button class="btn primary block" type="submit" id="authSubmit">登录</button>
+    </form>
+    <p class="auth-note">首次使用请先注册；所有账号信息仅保存在你自己的服务器。</p>
+  </div>
 </div>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <div id="modal" class="modal" hidden>
-  <div class="modal-bg" data-close></div>
-  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-    <div class="modal-top">
-      <div>
-        <h2 id="modalTitle"></h2>
-        <p class="sub" id="modalSub"></p>
-      </div>
-      <button class="icon-btn" data-close aria-label="关闭">
+  <div class="modal-backdrop" data-close="1"></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <header class="modal-head">
+      <h2 id="modalTitle">标题</h2>
+      <button class="icon-btn" data-close="1" aria-label="关闭">
         <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
-    </div>
-    <div class="modal-content" id="modalBody"></div>
-    <div class="modal-acts" id="modalActs"></div>
+    </header>
+    <div class="modal-body" id="modalBody"></div>
+    <footer class="modal-foot" id="modalFoot"></footer>
   </div>
 </div>
 
-<script type="module" src="/assets/app.js"></script>
+<script src="/assets/app.js?v=39085a1b89e3" type="module"></script>
 </body>
 </html>

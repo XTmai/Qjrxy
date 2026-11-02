@@ -109,9 +109,9 @@ func Handler() (http.Handler, error) {
 
 // moduleNames 是前端拆分的模块文件，用于给 import 路径加版本号。
 var moduleNames = []string{
-	"api.js", "ui.js", "app.js",
-	"page-home.js", "page-accounts.js", "page-tasks.js", "page-plans.js",
-	"page-logs.js", "page-quota.js", "page-settings.js",
+	"api.js", "ui.js", "app.js", "map-picker.js",
+	"page-dashboard.js", "page-accounts.js", "page-tasks.js",
+	"page-logs.js", "page-quota.js", "page-security.js",
 }
 
 // serveModule 输出 JS 模块，并把相对 import 改写为带版本号的 URL，

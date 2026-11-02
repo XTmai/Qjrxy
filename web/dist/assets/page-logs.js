@@ -1,160 +1,159 @@
 /* 执行记录页 */
 import { api } from './api.js';
 import {
-  setChildren,
-  el,
-  ico,
-  toast,
-  skeleton,
-  emptyBox,
-  logTag,
-  fmtTime,
-  openModal,
-  closeModal,
-  kvList,
+  h, icon, toast, openModal, closeModal, statusBadge, skeletonCard, emptyState,
+  formatDateTime, kindLabel, shortRange,
 } from './ui.js';
 
-const state = { scope: 'today', status: 'all', page: 1, size: 20 };
+const state = { scope: 'today', status: 'all', kind: 'all', page: 1, pageSize: 20 };
 
-export async function pageLogs(root, ctx) {
-  setChildren(root, skeleton());
+export async function renderLogs(root, ctx) {
+  root.replaceChildren(h('div', { class: 'loading-block' }, skeletonCard(false)));
+
   let data;
   try {
     data = await api.logs({
       scope: state.scope,
       status: state.status,
-      limit: state.size,
-      offset: (state.page - 1) * state.size,
+      kind: state.kind,
+      limit: state.pageSize,
+      offset: (state.page - 1) * state.pageSize,
     });
   } catch (err) {
-    setChildren(root, emptyBox('加载失败', err.message,
-      el('button', { class: 'btn main', onclick: () => pageLogs(root, ctx) }, '重试')));
+    root.replaceChildren(emptyState('加载记录失败', err.message,
+      h('button', { class: 'btn primary', onclick: () => renderLogs(root, ctx) }, '重试')));
     return;
   }
 
   const { logs, total } = data;
-  const pages = Math.max(1, Math.ceil(total / state.size));
+  const totalPages = Math.max(1, Math.ceil(total / state.pageSize));
 
-  const head = el('div', { class: 'head' },
-    el('div', null,
-      el('h1', null, '执行记录'),
-      el('div', { class: 'sub' }, '共 ' + total + ' 条'),
-    ),
-    el('div', { class: 'head-actions' },
-      el('button', { class: 'btn plain', onclick: () => pageLogs(root, ctx) },
-        ico('refresh'), '刷新'),
+  const head = h('div', { class: 'page-head' },
+    h('div', null,
+      h('h1', null, '执行记录'),
+      h('p', { class: 'page-sub' }, `共 ${total} 条记录`),
     ),
   );
 
-  const scopeSel = el('select', {
-    onchange: (e) => { state.scope = e.target.value; state.page = 1; pageLogs(root, ctx); },
+  const scopeSelect = h('select', {
+    onchange: (e) => { state.scope = e.target.value; state.page = 1; renderLogs(root, ctx); },
   },
-    [['today', '今天'], ['week', '近 7 天'], ['all', '全部']].map(([v, l]) =>
-      el('option', { value: v, selected: state.scope === v }, l)));
+    h('option', { value: 'today', selected: state.scope === 'today' }, '今日记录'),
+    h('option', { value: 'week', selected: state.scope === 'week' }, '近 7 天'),
+    h('option', { value: 'all', selected: state.scope === 'all' }, '全部记录'),
+  );
 
-  const tabs = el('div', { class: 'tabs' },
-    [['all', '全部'], ['success', '成功'], ['failed', '失败'], ['pending', '待核对']]
-      .map(([key, label]) => el('button', {
-        class: state.status === key ? 'on' : '',
-        onclick: () => { state.status = key; state.page = 1; pageLogs(root, ctx); },
-      }, label)));
+  const kindSelect = h('select', {
+    onchange: (e) => { state.kind = e.target.value; state.page = 1; renderLogs(root, ctx); },
+  },
+    h('option', { value: 'all', selected: state.kind === 'all' }, '全部类型'),
+    h('option', { value: 'attendance', selected: state.kind === 'attendance' }, '查寝'),
+    h('option', { value: 'sign', selected: state.kind === 'sign' }, '签到'),
+    h('option', { value: 'collect', selected: state.kind === 'collect' }, '信息收集'),
+  );
 
-  const card = el('div', { class: 'card' });
-  if (!logs.length) {
-    card.append(emptyBox('暂无记录', '执行查寝后这里会显示结果'));
+  const filters = h('div', { class: 'log-filters' },
+    h('label', null, '查看范围', scopeSelect),
+    h('label', null, '任务类型', kindSelect),
+    h('button', { class: 'btn ghost sm', onclick: () => renderLogs(root, ctx) }, icon('refresh'), '刷新'),
+  );
+
+  const statusTabs = h('div', { class: 'status-tabs' },
+    [['all', '全部'], ['success', '成功'], ['failed', '失败'], ['pending', '结果待核对'], ['executing', '执行中']]
+      .map(([key, label]) => h('button', {
+        class: state.status === key ? 'active' : '',
+        onclick: () => { state.status = key; state.page = 1; renderLogs(root, ctx); },
+      }, label)),
+  );
+
+  const tableCard = h('div', { class: 'card' });
+  if (logs.length === 0) {
+    tableCard.append(emptyState('暂无记录', '调整筛选条件，或先执行一次任务'));
   } else {
-    const rows = logs.map((l) => el('tr', null,
-      el('td', null,
-        el('div', { class: 'cell-strong' }, l.taskName || '查寝'),
-        el('div', { class: 'cell-sub' }, l.message || '—'),
+    const rows = logs.map((log) => h('tr', null,
+      h('td', null,
+        h('div', { class: 'cell-main' }, log.taskName || kindLabel(log.kind)),
+        h('div', { class: 'cell-sub' }, log.message || '—'),
       ),
-      el('td', null,
-        el('div', null, l.accountAlias || l.accountUsername || '—'),
-        el('div', { class: 'cell-sub' }, l.source === 'auto' ? '自动' : '手动'),
+      h('td', null,
+        h('div', null, log.accountAlias || log.accountUsername || '—'),
+        h('div', { class: 'cell-sub' }, log.source === 'auto' ? '自动执行' : '手动执行'),
       ),
-      el('td', null, logTag(l.status)),
-      el('td', { class: 'cell-sub' }, fmtTime(l.createdAt)),
-      el('td', { class: 'right' },
-        el('button', { class: 'btn plain xs', onclick: () => logDetail(l.id) }, '详情'),
+      h('td', null, statusBadge(log.status)),
+      h('td', null, kindLabel(log.kind)),
+      h('td', null, formatDateTime(log.createdAt)),
+      h('td', { class: 'col-right' },
+        h('button', { class: 'btn ghost xs', onclick: () => showLogDetail(log.id) }, '查看详情'),
       ),
     ));
 
-    card.append(el('div', { class: 'table-wrap' },
-      el('table', { class: 'list' },
-        el('thead', null, el('tr', null,
-          el('th', null, '任务'), el('th', null, '账号'), el('th', null, '状态'),
-          el('th', null, '时间'), el('th', { class: 'right' }, '操作'),
+    tableCard.append(h('div', { class: 'table-wrap' },
+      h('table', { class: 'data' },
+        h('thead', null, h('tr', null,
+          h('th', null, '任务'), h('th', null, '账号'), h('th', null, '状态'),
+          h('th', null, '类型'), h('th', null, '执行时间'), h('th', { class: 'col-right' }, '操作'),
         )),
-        el('tbody', null, rows),
+        h('tbody', null, rows),
       ),
     ));
   }
 
-  const pager = el('div', { class: 'pager' },
-    el('button', {
-      class: 'btn plain xs', disabled: state.page <= 1,
-      onclick: () => { state.page--; pageLogs(root, ctx); },
+  const pager = h('div', { class: 'pager' },
+    h('button', {
+      class: 'link-btn', disabled: state.page <= 1,
+      style: { opacity: state.page <= 1 ? 0.4 : 1 },
+      onclick: () => { if (state.page > 1) { state.page--; renderLogs(root, ctx); } },
     }, '上一页'),
-    el('span', null, state.page + ' / ' + pages),
-    el('button', {
-      class: 'btn plain xs', disabled: state.page >= pages,
-      onclick: () => { state.page++; pageLogs(root, ctx); },
+    h('span', null, `第 ${state.page} 页 / 共 ${totalPages} 页`),
+    h('button', {
+      class: 'link-btn', disabled: state.page >= totalPages,
+      style: { opacity: state.page >= totalPages ? 0.4 : 1 },
+      onclick: () => { if (state.page < totalPages) { state.page++; renderLogs(root, ctx); } },
     }, '下一页'),
   );
 
-  setChildren(root, 
-    head,
-    el('div', { class: 'toolbar' }, el('div', { class: 'search-wrap' }, scopeSel)),
-    tabs,
-    card,
-    logs.length ? pager : null,
-  );
+  root.replaceChildren(head, filters, statusTabs, tableCard, pager);
 }
 
-async function logDetail(id) {
-  let item;
+async function showLogDetail(id) {
+  let log;
   try {
-    ({ log: item } = await api.log(id));
+    ({ log } = await api.log(id));
   } catch (err) {
     toast(err.message, 'err');
     return;
   }
 
   let detail = null;
-  try { detail = item.detail ? JSON.parse(item.detail) : null; } catch { detail = null; }
+  try { detail = log.detail ? JSON.parse(log.detail) : null; } catch { detail = null; }
 
-  const rows = [
-    ['任务', item.taskName || '查寝'],
-    ['账号', item.accountAlias || item.accountUsername || '—'],
-    ['来源', item.source === 'auto' ? '自动计划' : '手动执行'],
-    ['状态', item.status === 'success' ? '成功'
-      : item.status === 'failed' ? '失败'
-      : item.status === 'pending' ? '待核对' : item.status],
-    ['时间', fmtTime(item.createdAt)],
-  ];
-
-  if (detail?.places?.length) {
-    const p = detail.places[0];
-    rows.push(['签到点', p.name]);
-    rows.push(['距离', Math.round(p.distance) + ' 米 / 半径 ' + Math.round(p.radius) + ' 米']);
-    rows.push(['是否在范围', p.inRange ? '是' : '否']);
-  }
+  const body = h('div', null,
+    h('dl', { class: 'kv-list', style: { marginBottom: '16px' } },
+      row('任务', log.taskName || kindLabel(log.kind)),
+      row('账号', `${log.accountAlias || '—'}（${log.schoolName || '—'}）`),
+      row('类型', kindLabel(log.kind)),
+      row('来源', log.source === 'auto' ? '自动计划' : '手动执行'),
+      row('状态', statusBadge(log.status)),
+      row('时间', formatDateTime(log.createdAt)),
+    ),
+    h('div', { class: 'warn-box', style: { marginBottom: '14px' } }, log.message || '无附加信息'),
+    detail ? h('div', null,
+      h('p', { class: 'hint-text', style: { marginBottom: '8px' } }, '执行详情'),
+      h('pre', {
+        class: 'code-box',
+        style: { whiteSpace: 'pre-wrap', maxHeight: '260px', overflow: 'auto' },
+      }, JSON.stringify(detail, null, 2)),
+    ) : null,
+  );
 
   openModal({
     title: '执行详情',
-    body: el('div', null,
-      kvList(rows.map((r) => [r[0], r[1]])),
-      item.message ? el('div', { class: 'note-box warn', style: { marginTop: '12px' } }, item.message) : null,
-      detail ? el('pre', {
-        style: {
-          marginTop: '12px', padding: '11px 13px', background: 'var(--surface-2)',
-          border: '1px solid var(--line)', borderRadius: '10px',
-          fontSize: '11.5px', fontFamily: 'var(--mono)', whiteSpace: 'pre-wrap',
-          maxHeight: '220px', overflow: 'auto', color: 'var(--text-muted)',
-        },
-      }, JSON.stringify(detail, null, 2)) : null,
-    ),
     wide: true,
-    actions: el('button', { class: 'btn main', onclick: closeModal }, '关闭'),
+    body,
+    footer: h('button', { class: 'btn primary', onclick: closeModal }, '关闭'),
   });
+}
+
+function row(label, value) {
+  return h('div', null, h('dt', null, label), h('dd', null, value));
 }

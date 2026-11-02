@@ -1,124 +1,121 @@
 /* =========================================================
-   小麦校园 · 基础工具
+   青衿前端 · 通用工具（DOM、格式化、Toast、Modal）
    ========================================================= */
 
-/** 创建元素：el('div', {class:'x'}, 'text', child) */
-export function el(tag, attrs, ...children) {
-  const node = document.createElement(tag);
+/** 创建元素：h('div', {class:'x'}, 'text' | node | [nodes]) */
+export function h(tag, attrs, ...children) {
+  const el = document.createElement(tag);
   if (attrs && typeof attrs === 'object' && !(attrs instanceof Node)) {
-    for (const [key, val] of Object.entries(attrs)) {
-      if (val === null || val === undefined || val === false) continue;
-      if (key === 'class') node.className = val;
-      else if (key === 'text') node.textContent = val;
-      else if (key === 'html') node.innerHTML = val;
-      else if (key === 'dataset') Object.assign(node.dataset, val);
-      else if (key === 'style' && typeof val === 'object') Object.assign(node.style, val);
-      else if (key.startsWith('on') && typeof val === 'function') {
-        node.addEventListener(key.slice(2).toLowerCase(), val);
-      } else if (val === true) node.setAttribute(key, '');
-      else node.setAttribute(key, val);
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key === 'class') el.className = value;
+      else if (key === 'html') el.innerHTML = value;
+      else if (key === 'text') el.textContent = value;
+      else if (key === 'dataset') Object.assign(el.dataset, value);
+      else if (key.startsWith('on') && typeof value === 'function') {
+        el.addEventListener(key.slice(2).toLowerCase(), value);
+      } else if (key === 'style' && typeof value === 'object') {
+        Object.assign(el.style, value);
+      } else if (value === true) el.setAttribute(key, '');
+      else el.setAttribute(key, value);
     }
   }
   for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
-    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
-  return node;
+  return el;
 }
 
-/* ---------------- 图标 ---------------- */
-
-const PATHS = {
-  refresh: 'M20 12a8 8 0 1 1-2.4-5.7M20 4v4.5h-4.5',
-  play: 'M8 5.3v13.4L19 12z',
+/** 内联图标（Feather 风格 24 网格） */
+const ICONS = {
+  refresh: 'M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5',
+  play: 'M8 5.2v13.6L19 12z',
   plus: 'M12 5v14M5 12h14',
-  check: 'M4.8 12.4 9 16.6 19.2 6.4',
+  check: 'M4.5 12.5 9 17 19.5 6.5',
   x: 'M6 6l12 12M18 6 6 18',
-  clock: 'M12 7.5V12l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
-  shield: 'M12 3.2 19 6v6c0 4.3-3 7.8-7 8.8-4-1-7-4.5-7-8.8V6z',
-  key: 'M15.2 7a3.8 3.8 0 1 1-3.4 5.3L9 15.1H7.2v1.8H5.4V18.7H3.2v-3.2l6.4-6.4A3.8 3.8 0 0 1 15.2 7z',
-  camera: 'M4 8.2h3l1.5-2h7l1.5 2h3v10.6H4zM12 16.6a3.4 3.4 0 1 0 0-6.8 3.4 3.4 0 0 0 0 6.8z',
-  trash: 'M5 7h14M9.5 7V5h5v2M7.5 7l.9 12h7.2l.9-12',
+  clock: 'M12 7v5l3.2 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+  shield: 'M12 3l7 3v6c0 4.4-3 8-7 9-4-1-7-4.6-7-9V6z',
+  key: 'M15 7a4 4 0 1 1-3.5 6L9 15.5H7v2H5v2H3v-3.5l6.5-6.5A4 4 0 0 1 15 7z',
+  camera: 'M4 8h3l1.5-2h7L17 8h3v11H4zM12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z',
+  trash: 'M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13',
   edit: 'M4 20h4L20 8l-4-4L4 16z',
   login: 'M14 5h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-4M10 8l-4 4 4 4M6 12h9',
-  qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14.5 14.5h2v2h-2zM17.5 17.5h2v2h-2z',
-  users: 'M9 11a3.8 3.8 0 1 0 0-7.6 3.8 3.8 0 0 0 0 7.6zM2.5 20.5c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5',
-  pin: 'M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11zM12 12.4a2.4 2.4 0 1 0 0-4.8 2.4 2.4 0 0 0 0 4.8z',
-  alert: 'M12 8.5v5M12 17h.01M12 3.2 21 20H3z',
-  info: 'M12 11v5.5M12 8h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+  qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2v2h-2zM14 18h2v2h-2zM18 18h2v2h-2z',
+  users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21c0-3.9 3.1-7 7-7s7 3.1 7 7M17 4.5a4 4 0 0 1 0 7.7M18 14.2c2.4.8 4 3 4 5.8',
+  list: 'M5 6h14M5 12h14M5 18h9',
+  pin: 'M12 21s7-5.4 7-11a7 7 0 1 0-14 0c0 5.6 7 11 7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
+  link: 'M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1',
+  alert: 'M12 8v5M12 17h.01M12 3l9 17H3z',
+  info: 'M12 11v6M12 8h.01M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+  arrow: 'M5 12h14M13 6l6 6-6 6',
   logout: 'M14 5h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-4M10 8l-4 4 4 4M6 12h9',
-  wheat: 'M12 21V9M12 9c0-2.5 1.5-4.5 3.5-5.5C15.5 6 14 8 12 9zM12 9c0-2.5-1.5-4.5-3.5-5.5C8.5 6 10 8 12 9z',
-  link: 'M10 13.5a4.5 4.5 0 0 0 6.4 0l1.8-1.8a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10.5a4.5 4.5 0 0 0-6.4 0l-1.8 1.8a4.5 4.5 0 0 0 6.4 6.4l1-1',
-  copy: 'M9 9V5.5h9.5V15H15M5.5 9H15v9.5H5.5z',
-  arrow: 'M5 12h13M13 6.5l5.5 5.5-5.5 5.5',
+  book: 'M4 5.5A2.5 2.5 0 0 1 6.5 3H20v18H6.5A2.5 2.5 0 0 1 4 18.5zM4 18.5A2.5 2.5 0 0 1 6.5 16H20',
 };
 
-export function ico(name, cls) {
+export function icon(name, cls) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   if (cls) svg.setAttribute('class', cls);
   svg.setAttribute('aria-hidden', 'true');
-  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  p.setAttribute('d', PATHS[name] || PATHS.info);
-  svg.append(p);
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', ICONS[name] || ICONS.info);
+  svg.append(path);
   return svg;
 }
 
 /* ---------------- Toast ---------------- */
 
 let toastTimer = null;
-export function toast(msg, kind = '') {
-  const node = document.getElementById('toast');
-  if (!node) return;
-  node.textContent = msg;
-  node.className = 'toast show ' + kind;
+export function toast(message, kind = '') {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = message;
+  el.className = 'toast show ' + kind;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { node.className = 'toast ' + kind; }, 3000);
+  toastTimer = setTimeout(() => { el.className = 'toast ' + kind; }, 3200);
 }
 
-/* ---------------- 弹窗 ---------------- */
+/* ---------------- Modal ---------------- */
 
-let modalCloseCb = null;
+const modalEl = () => document.getElementById('modal');
 
-export function openModal({ title, sub, body, actions, wide = false, onClose }) {
-  const modal = document.getElementById('modal');
-  const box = modal.querySelector('.modal-box');
-  box.classList.toggle('wide', wide);
-  document.getElementById('modalTitle').textContent = title || '';
-  const subEl = document.getElementById('modalSub');
-  subEl.textContent = sub || '';
-  subEl.hidden = !sub;
-
-  const bodyEl = document.getElementById('modalBody');
+export function openModal({ title, body, footer, wide = false, onClose }) {
+  const modal = modalEl();
+  const card = modal.querySelector('.modal-card');
+  card.classList.toggle('wide', wide);
+  modal.querySelector('#modalTitle').textContent = title || '';
+  const bodyEl = modal.querySelector('#modalBody');
   bodyEl.replaceChildren();
-  if (body) bodyEl.append(...(Array.isArray(body) ? body : [body]));
-
-  const actsEl = document.getElementById('modalActs');
-  actsEl.replaceChildren();
-  if (actions) actsEl.append(...(Array.isArray(actions) ? actions : [actions]));
+  if (body) bodyEl.append(body instanceof Node ? body : document.createTextNode(body));
+  const footEl = modal.querySelector('#modalFoot');
+  footEl.replaceChildren();
+  if (footer) footEl.append(...(Array.isArray(footer) ? footer : [footer]));
 
   modal.hidden = false;
-  modalCloseCb = onClose || null;
-  const focusTarget = bodyEl.querySelector('input:not([type=file]), select, textarea');
-  if (focusTarget) setTimeout(() => focusTarget.focus(), 80);
+  modal.dataset.onClose = onClose ? '1' : '';
+  modal._onClose = onClose || null;
+  const focusable = card.querySelector('input, select, textarea, button:not([data-close])');
+  if (focusable) setTimeout(() => focusable.focus(), 60);
 }
 
 export function closeModal() {
-  const modal = document.getElementById('modal');
+  const modal = modalEl();
   if (!modal || modal.hidden) return;
-  const cb = modalCloseCb;
+  const cb = modal._onClose;
   modal.hidden = true;
-  modalCloseCb = null;
+  modal._onClose = null;
   if (cb) cb();
 }
 
 export function initModal() {
-  const modal = document.getElementById('modal');
+  const modal = modalEl();
   if (!modal) return;
-  // 用 closest 向上找，避免点在 svg 上时读不到 data-close
+  // 用 closest 向上找带 data-close 的元素：
+  // 点「×」时实际命中的是里面的 svg/path，直接读 e.target.dataset 会失效。
   modal.addEventListener('click', (e) => {
-    const target = e.target instanceof Element ? e.target.closest('[data-close]') : null;
-    if (target) {
+    const trigger = e.target instanceof Element ? e.target.closest('[data-close]') : null;
+    if (trigger) {
       e.preventDefault();
       closeModal();
     }
@@ -128,27 +125,28 @@ export function initModal() {
   });
 }
 
-/** 确认框 */
-export function confirmBox({ title, message, okText = '确定', danger = false }) {
+/** 确认框，返回 Promise<boolean> */
+export function confirmDialog({ title, message, confirmText = '确定', danger = false }) {
   return new Promise((resolve) => {
-    let settled = false;
-    const done = (val) => {
-      if (settled) return;
-      settled = true;
-      resolve(val);
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      resolve(value);
       closeModal();
     };
+    const btn = h('button', {
+      class: 'btn ' + (danger ? 'danger' : 'primary'),
+      onclick: () => finish(true),
+    }, confirmText);
     openModal({
       title,
-      body: el('p', { class: 'confirm-text' }, message),
-      actions: [
-        el('button', { class: 'btn plain', onclick: () => done(false) }, '取消'),
-        el('button', {
-          class: 'btn ' + (danger ? 'danger' : 'main'),
-          onclick: () => done(true),
-        }, okText),
+      body: h('p', { class: 'hint-text' }, message),
+      footer: [
+        h('button', { class: 'btn ghost', onclick: () => finish(false) }, '取消'),
+        btn,
       ],
-      onClose: () => done(false),
+      onClose: () => finish(false),
     });
   });
 }
@@ -156,95 +154,118 @@ export function confirmBox({ title, message, okText = '确定', danger = false }
 /* ---------------- 格式化 ---------------- */
 
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+export const WEEK_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-export function fmtDate(iso) {
+export function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export function fmtTime(iso) {
+export function formatDateTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function todayText(d = new Date()) {
-  return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEK[d.getDay()]}`;
+export function formatClock(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 时间范围：优先用日期+时段，否则用起止时间 */
-export function timeRange(item) {
-  if (item.signDate || item.beginClock) {
-    const date = (item.signDate || '').split(' ')[0] || '';
-    const clock = item.beginClock && item.endClock
-      ? `${item.beginClock} – ${item.endClock}`
-      : (item.beginClock || '');
-    return [date, clock].filter(Boolean).join('  ');
-  }
-  const s = (item.startTime || '').replace('T', ' ').slice(0, 16);
-  const e = (item.endTime || '').replace('T', ' ').slice(0, 16);
+export function relativeTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const diff = Date.now() - d.getTime();
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  if (hour < 24) return `${hour} 小时前`;
+  const day = Math.floor(hour / 24);
+  if (day < 30) return `${day} 天前`;
+  return formatDate(iso);
+}
+
+export function todayLabel(date = new Date()) {
+  const m = date.getMonth() + 1;
+  const d = date.getDate();
+  return `${m}月${d}日${WEEK[date.getDay()]}`;
+}
+
+/** 后端返回的时间可能是 RFC3339 或 "2026-10-26 20:00:00"，统一成短格式 */
+export function shortRange(start, end) {
+  const norm = (v) => {
+    if (!v) return '';
+    const s = String(v).replace('T', ' ').replace(/\.\d+/, '').replace(/(Z|[+-]\d{2}:?\d{2})$/, '');
+    return s.slice(0, 16);
+  };
+  const s = norm(start);
+  const e = norm(end);
   if (!s && !e) return '时间待定';
   if (!e) return s;
-  return `${s} → ${e.slice(-5)}`;
+  return `${s} → ${e}`;
 }
 
-/* ---------------- 状态 ---------------- */
-
-const LOG_STATE = {
-  success: { text: '成功', cls: 'ok' },
-  failed: { text: '失败', cls: 'err' },
-  pending: { text: '待核对', cls: 'warn' },
-  executing: { text: '执行中', cls: 'info' },
-  done: { text: '已处理', cls: 'ok' },
-  leave: { text: '已请假', cls: 'plain' },
+const STATUS_MAP = {
+  success: { label: '成功', cls: 'ok' },
+  failed: { label: '失败', cls: 'err' },
+  pending: { label: '结果待核对', cls: 'warn' },
+  executing: { label: '执行中', cls: 'info' },
+  done: { label: '已处理', cls: 'ok' },
+  leave: { label: '已请假', cls: 'plain' },
 };
 
-export function logTag(status) {
-  const m = LOG_STATE[status] || { text: status || '未知', cls: 'plain' };
-  return el('span', { class: 'tag ' + m.cls }, m.text);
+export function statusBadge(status) {
+  const meta = STATUS_MAP[status] || { label: status || '未知', cls: 'plain' };
+  return h('span', { class: 'badge ' + meta.cls }, meta.label);
 }
 
-const ACCT_STATE = {
-  authorized: { text: '已登录', cls: 'ok' },
-  expired: { text: '需重新登录', cls: 'err' },
-  unknown: { text: '未登录', cls: 'plain' },
+export function statusText(status) {
+  const meta = STATUS_MAP[status];
+  return meta ? meta.label : status;
+}
+
+const LOGIN_MAP = {
+  authorized: { label: '已登录', cls: 'ok' },
+  expired: { label: '需重新登录', cls: 'err' },
+  unknown: { label: '未登录', cls: 'plain' },
+  unauthorized: { label: '未授权', cls: 'warn' },
 };
 
-export function accountTag(status) {
-  const m = ACCT_STATE[status] || ACCT_STATE.unknown;
-  return el('span', { class: 'tag ' + m.cls }, m.text);
+export function loginBadge(status) {
+  const meta = LOGIN_MAP[status] || LOGIN_MAP.unknown;
+  return h('span', { class: 'badge ' + meta.cls }, meta.label);
 }
 
-/** 任务可执行状态（只做查寝） */
-export function taskState(task) {
-  if (task.status === 'done') return { text: '已处理', cls: 'ok', runnable: false };
-  const st = String(task.signStatus || '').trim();
-  if (st === '2') return { text: '未到时间', cls: 'warn', runnable: false };
-  if (st === '3') return { text: '已过期', cls: 'plain', runnable: false };
-  if (st === '4') return { text: '已签到', cls: 'ok', runnable: false };
-  return { text: '可执行', cls: 'info', runnable: true };
+export function kindLabel(kind) {
+  return { attendance: '查寝', sign: '签到', collect: '信息收集' }[kind] || kind || '任务';
 }
 
 /* ---------------- 其它 ---------------- */
 
-export function initial(text) {
-  const s = String(text || '小').trim();
-  return s ? s.slice(0, 1) : '小';
+export function initials(text) {
+  const s = String(text || '?').trim();
+  return s ? s.slice(0, 1) : '?';
 }
 
 export function debounce(fn, wait = 260) {
-  let t = null;
+  let timer = null;
   return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
   };
 }
 
+/** 复制到剪贴板，失败时回退到 execCommand */
 export async function copyText(text) {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -264,43 +285,23 @@ export async function copyText(text) {
   return ok;
 }
 
-export function skeleton() {
-  return el('div', { class: 'card' },
-    el('div', { class: 'skel-group' },
-      el('div', { class: 'skel', style: { width: '32%' } }),
-      el('div', { class: 'skel', style: { width: '100%' } }),
-      el('div', { class: 'skel', style: { width: '78%' } }),
-    ),
-  );
-}
-
-export function emptyBox(title, hint, action) {
-  return el('div', { class: 'empty' },
-    el('div', { class: 'empty-icon' }, ico('wheat')),
-    el('strong', null, title),
-    hint ? el('div', null, hint) : null,
-    action ? el('div', { style: { marginTop: '14px' } }, action) : null,
-  );
-}
-
-/** 安全替换子节点：过滤 null/false，避免变成字符串 "null" */
-export function setChildren(node, ...children) {
-  node.replaceChildren();
-  for (const c of children.flat(Infinity)) {
-    if (c === null || c === undefined || c === false) continue;
-    node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+export function skeletonCard(title = true) {
+  const wrap = h('div', { class: 'card' });
+  if (title) {
+    wrap.append(h('div', { class: 'card-head' }, h('div', { class: 'skeleton', style: { width: '120px' } })));
   }
-  return node;
+  wrap.append(h('div', { class: 'loading-block' },
+    h('div', { class: 'skeleton', style: { width: '100%' } }),
+    h('div', { class: 'skeleton', style: { width: '86%' } }),
+    h('div', { class: 'skeleton', style: { width: '64%' } }),
+  ));
+  return wrap;
 }
 
-/** 只读键值列表 */
-export function kvList(rows) {
-  return el('div', { class: 'kv-list' },
-    rows.filter(Boolean).map(([k, v, mono]) =>
-      el('div', { class: 'kv-row' },
-        el('span', { class: 'kv-key' }, k),
-        el('b', { class: 'kv-val' + (mono ? ' mono' : ''), title: String(v) }, String(v)),
-      ),
-    ),
+export function emptyState(title, hint, action) {
+  return h('div', { class: 'empty' },
+    h('strong', null, title),
+    hint ? h('span', null, hint) : null,
+    action ? h('div', { style: { marginTop: '16px' } }, action) : null,
   );
 }
