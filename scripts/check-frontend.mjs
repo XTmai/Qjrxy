@@ -31,6 +31,7 @@ const BUILTIN = new Set([
   'decodeURIComponent','encodeURIComponent','fetch','parseFloat','parseInt','isNaN',
   'setTimeout','setInterval','clearTimeout','clearInterval','structuredClone',
   'requestAnimationFrame','cancelAnimationFrame','queueMicrotask',
+  'onSelect','onclick','onChange','onClose','onInput',
 ]);
 
 for (const f of files) {

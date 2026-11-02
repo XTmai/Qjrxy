@@ -1,8 +1,11 @@
 /* =========================================================
-   青衿前端 · 通用工具（DOM、格式化、Toast、Modal）
+   青衿 · 组件层
+   元素工厂 + 页面级组件 + 统一状态词汇表
    ========================================================= */
 
-/** 创建元素：h('div', {class:'x'}, 'text' | node | [nodes]) */
+/* ---------------- 元素工厂 ---------------- */
+
+/** h('div', {class:'x'}, 'text' | node | [nodes]) */
 export function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
   if (attrs && typeof attrs === 'object' && !(attrs instanceof Node)) {
@@ -20,6 +23,12 @@ export function h(tag, attrs, ...children) {
       else el.setAttribute(key, value);
     }
   }
+  appendChildren(el, children);
+  return el;
+}
+
+/** 追加子节点，自动过滤 null/undefined/false（避免渲染出 "null" 文本） */
+export function appendChildren(el, children) {
   for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;
     el.append(child instanceof Node ? child : document.createTextNode(String(child)));
@@ -27,7 +36,14 @@ export function h(tag, attrs, ...children) {
   return el;
 }
 
-/** 内联图标（Feather 风格 24 网格） */
+/** 替换子节点，同样过滤空值 */
+export function setChildren(el, ...children) {
+  el.replaceChildren();
+  return appendChildren(el, children);
+}
+
+/* ---------------- 图标 ---------------- */
+
 const ICONS = {
   refresh: 'M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5',
   play: 'M8 5.2v13.6L19 12z',
@@ -67,6 +83,11 @@ export function icon(name, cls) {
 /* ---------------- Toast ---------------- */
 
 let toastTimer = null;
+
+/**
+ * 提示条
+ * kind: '' | 'ok' | 'err' | 'info'
+ */
 export function toast(message, kind = '') {
   const el = document.getElementById('toast');
   if (!el) return;
@@ -80,22 +101,41 @@ export function toast(message, kind = '') {
 
 const modalEl = () => document.getElementById('modal');
 
-export function openModal({ title, body, footer, wide = false, onClose }) {
+/**
+ * 打开弹窗
+ * @param {object} opt
+ * @param {string} opt.title
+ * @param {string} [opt.sub]      标题下的说明
+ * @param {Node|Node[]} [opt.body]
+ * @param {Node|Node[]} [opt.footer]
+ * @param {boolean} [opt.wide]
+ * @param {Function} [opt.onClose]
+ */
+export function openModal({ title, sub, body, footer, wide = false, onClose }) {
   const modal = modalEl();
+  if (!modal) return;
   const card = modal.querySelector('.modal-card');
   card.classList.toggle('wide', wide);
+
   modal.querySelector('#modalTitle').textContent = title || '';
+  const subEl = modal.querySelector('#modalSub');
+  if (subEl) {
+    subEl.textContent = sub || '';
+    subEl.hidden = !sub;
+  }
+
   const bodyEl = modal.querySelector('#modalBody');
   bodyEl.replaceChildren();
-  if (body) bodyEl.append(body instanceof Node ? body : document.createTextNode(body));
+  if (body) appendChildren(bodyEl, Array.isArray(body) ? body : [body]);
+
   const footEl = modal.querySelector('#modalFoot');
   footEl.replaceChildren();
-  if (footer) footEl.append(...(Array.isArray(footer) ? footer : [footer]));
+  if (footer) appendChildren(footEl, Array.isArray(footer) ? footer : [footer]);
 
   modal.hidden = false;
-  modal.dataset.onClose = onClose ? '1' : '';
   modal._onClose = onClose || null;
-  const focusable = card.querySelector('input, select, textarea, button:not([data-close])');
+
+  const focusable = card.querySelector('input:not([type=file]), select, textarea, button:not([data-close])');
   if (focusable) setTimeout(() => focusable.focus(), 60);
 }
 
@@ -111,8 +151,7 @@ export function closeModal() {
 export function initModal() {
   const modal = modalEl();
   if (!modal) return;
-  // 用 closest 向上找带 data-close 的元素：
-  // 点「×」时实际命中的是里面的 svg/path，直接读 e.target.dataset 会失效。
+  // 用 closest 向上找：点「×」时实际命中的是内部 svg/path
   modal.addEventListener('click', (e) => {
     const trigger = e.target instanceof Element ? e.target.closest('[data-close]') : null;
     if (trigger) {
@@ -135,20 +174,296 @@ export function confirmDialog({ title, message, confirmText = '确定', danger =
       resolve(value);
       closeModal();
     };
-    const btn = h('button', {
-      class: 'btn ' + (danger ? 'danger' : 'primary'),
-      onclick: () => finish(true),
-    }, confirmText);
     openModal({
       title,
-      body: h('p', { class: 'hint-text' }, message),
+      body: h('p', { class: 'confirm-text' }, message),
       footer: [
         h('button', { class: 'btn ghost', onclick: () => finish(false) }, '取消'),
-        btn,
+        h('button', {
+          class: 'btn ' + (danger ? 'danger' : 'primary'),
+          onclick: () => finish(true),
+        }, confirmText),
       ],
       onClose: () => finish(false),
     });
   });
+}
+
+/* ---------------- 状态词汇表（单一来源） ---------------- */
+
+/**
+ * 执行记录状态
+ * 后端 status: success / failed / pending / executing
+ */
+const RUN_STATE = {
+  success: { text: '成功', tone: 'ok' },
+  failed: { text: '失败', tone: 'err' },
+  pending: { text: '待核对', tone: 'warn' },
+  executing: { text: '执行中', tone: 'info' },
+};
+
+/**
+ * 任务状态
+ * 后端 task.status: pending / done / leave
+ * 后端 task.signStatus: 0/1 可签到 | 2 未到时间 | 3 已过期 | 4 已签到 | 空 无限制
+ */
+export function taskState(task) {
+  if (!task) return { text: '未知', tone: 'plain', runnable: false };
+  if (task.status === 'done') return { text: '已处理', tone: 'ok', runnable: false };
+  if (task.status === 'leave') return { text: '已请假', tone: 'plain', runnable: false };
+  const st = String(task.signStatus || '').trim();
+  if (st === '2') return { text: '未到时间', tone: 'warn', runnable: false };
+  if (st === '3') return { text: '已过期', tone: 'plain', runnable: false };
+  if (st === '4') return { text: '已签到', tone: 'ok', runnable: false };
+  return { text: '可执行', tone: 'info', runnable: true };
+}
+
+/** 账号登录状态 */
+const LOGIN_STATE = {
+  authorized: { text: '已登录', tone: 'ok' },
+  expired: { text: '需重新登录', tone: 'err' },
+  unknown: { text: '未登录', tone: 'plain' },
+  unauthorized: { text: '未授权', tone: 'warn' },
+};
+
+/** 徽标：badge('run'|'task'|'login', value) */
+export function badge(type, value) {
+  let meta;
+  if (type === 'task') meta = taskState(value).text
+    ? { text: taskState(value).text, tone: taskState(value).tone }
+    : { text: '未知', tone: 'plain' };
+  else if (type === 'login') meta = LOGIN_STATE[value] || LOGIN_STATE.unknown;
+  else meta = RUN_STATE[value] || { text: value || '未知', tone: 'plain' };
+  return h('span', { class: 'badge ' + meta.tone }, meta.text);
+}
+
+/* 兼容旧调用 */
+export function statusBadge(status) { return badge('run', status); }
+export function loginBadge(status) { return badge('login', status); }
+export function statusText(status) {
+  return (RUN_STATE[status] || {}).text || status;
+}
+
+export function kindLabel(kind) {
+  return { attendance: '查寝', sign: '签到', collect: '信息收集' }[kind] || kind || '任务';
+}
+
+/* ---------------- 页面级组件 ---------------- */
+
+/**
+ * 页头
+ * @param {object} opt
+ * @param {string} opt.title
+ * @param {string} [opt.sub]
+ * @param {Node[]} [opt.actions]
+ */
+export function pageHeader({ title, sub, actions }) {
+  return h('div', { class: 'page-head' },
+    h('div', { class: 'page-head-text' },
+      h('h1', null, title),
+      sub ? h('p', { class: 'page-sub' }, sub) : null,
+    ),
+    actions && actions.length ? h('div', { class: 'page-actions' }, actions) : null,
+  );
+}
+
+/**
+ * 卡片
+ * @param {object} opt
+ * @param {string} [opt.title]
+ * @param {string} [opt.note]     标题下的说明
+ * @param {Node}   [opt.action]   头部右侧操作
+ * @param {Node|Node[]} [opt.body]
+ * @param {boolean}[opt.pad]      body 自带内边距（默认 false，用 card-body）
+ * @param {Node[]} [opt.tools]    头部右侧多个操作
+ */
+export function card({ title, note, action, tools, body, pad = false }) {
+  const wrap = h('div', { class: 'card' });
+  if (title) {
+    wrap.append(h('div', { class: 'card-head' },
+      h('div', null,
+        h('h2', null, title),
+        note ? h('p', { class: 'hint' }, note) : null,
+      ),
+      action || (tools && tools.length ? h('div', { class: 'card-tools' }, tools) : null),
+    ));
+  }
+  if (body) {
+    const nodes = Array.isArray(body) ? body : [body];
+    if (pad) wrap.append(h('div', { class: 'card-body' }, nodes));
+    else appendChildren(wrap, nodes);
+  }
+  return wrap;
+}
+
+/**
+ * 统计卡组
+ * @param {Array<{label,value,note,tone}>} items
+ * @param {number} [cols]
+ */
+export function statGrid(items, cols) {
+  const grid = h('div', { class: 'stat-row' });
+  if (cols) grid.style.gridTemplateColumns = 'repeat(' + cols + ', minmax(0, 1fr))';
+  items.forEach((it) => {
+    grid.append(h('div', { class: 'stat' },
+      h('div', { class: 'stat-label' },
+        h('span', null, it.label),
+        h('span', { class: 'stat-dot ' + (it.tone || '') }),
+      ),
+      h('div', { class: 'stat-value' }, String(it.value ?? 0)),
+      it.note ? h('div', { class: 'stat-foot' }, it.note) : null,
+    ));
+  });
+  return grid;
+}
+
+/**
+ * 键值列表
+ * @param {Array<[string, Node|string, boolean?]>} rows  [label, value, mono?]
+ */
+export function kvList(rows) {
+  const list = h('dl', { class: 'kv-list' });
+  rows.filter(Boolean).forEach(([label, value, mono]) => {
+    list.append(h('div', { class: 'kv-row' },
+      h('dt', null, label),
+      h('dd', { class: mono ? 'mono' : '' }, value instanceof Node ? value : String(value)),
+    ));
+  });
+  return list;
+}
+
+/**
+ * 数据表格
+ * @param {object} opt
+ * @param {Array<{key,label,align?,render?}>} opt.columns
+ * @param {Array<object>} opt.rows
+ * @param {Node|string} [opt.empty]
+ * @param {boolean} [opt.stack]  移动端堆叠为卡片（默认 true）
+ */
+export function dataTable({ columns, rows, empty, stack = true }) {
+  if (!rows || rows.length === 0) {
+    return h('div', null, empty || emptyState('暂无数据'));
+  }
+
+  const table = h('table', { class: 'data' + (stack ? ' stack' : '') });
+  table.append(h('thead', null, h('tr', null,
+    columns.map((c) => h('th', { class: c.align === 'right' ? 'col-right' : '' }, c.label)),
+  )));
+
+  const tbody = h('tbody');
+  rows.forEach((row) => {
+    const tr = h('tr');
+    columns.forEach((c) => {
+      const content = c.render ? c.render(row) : row[c.key];
+      tr.append(h('td', {
+        class: c.align === 'right' ? 'col-right' : '',
+        'data-label': c.label,
+      }, content instanceof Node ? content : String(content ?? '—')));
+    });
+    tbody.append(tr);
+  });
+  table.append(tbody);
+
+  return h('div', { class: 'table-wrap' }, table);
+}
+
+/**
+ * 工具栏
+ * @param {Node|Node[]} left
+ * @param {Node|Node[]} [right]
+ */
+export function toolbar(left, right) {
+  return h('div', { class: 'toolbar' },
+    h('div', { class: 'toolbar-left' }, left),
+    right ? h('div', { class: 'toolbar-right' }, right) : null,
+  );
+}
+
+/**
+ * 表单字段
+ * @param {object} opt
+ * @param {string} [opt.label]
+ * @param {Node} opt.input
+ * @param {string} [opt.hint]
+ * @param {boolean} [opt.required]
+ */
+export function formField({ label, input, hint, required }) {
+  let hintNode = null;
+  if (hint) {
+    // hint 可以是字符串，也可以是外部维护的 Node（便于动态更新文案）
+    hintNode = hint instanceof Node ? hint : h('span', { class: 'hint' }, hint);
+  }
+  return h('label', { class: 'field' },
+    label ? h('span', null, label, required ? h('i', { class: 'req' }, '*') : null) : null,
+    input,
+    hintNode,
+  );
+}
+
+/**
+ * 标签页
+ * @param {object} opt
+ * @param {Array<[string,string]>} opt.items  [[key, label]]
+ * @param {string} opt.active
+ * @param {Function} opt.onSelect
+ */
+export function tabs({ items, active, onSelect }) {
+  const bar = h('div', { class: 'tabs' });
+  items.forEach(([key, label]) => {
+    bar.append(h('button', {
+      class: active === key ? 'active' : '',
+      dataset: { tab: key },
+      onclick: () => onSelect(key),
+    }, label));
+  });
+  return bar;
+}
+
+/**
+ * 分段控件
+ * @param {object} opt
+ * @param {Array<[string,string]>} opt.items
+ * @param {string} opt.active
+ * @param {Function} opt.onSelect
+ */
+export function segmented({ items, active, onSelect }) {
+  const wrap = h('div', { class: 'segmented' });
+  items.forEach(([key, label]) => {
+    wrap.append(h('button', {
+      class: active === key ? 'active' : '',
+      dataset: { seg: key },
+      onclick: () => onSelect(key),
+    }, label));
+  });
+  return wrap;
+}
+
+/**
+ * 三态：加载 / 空 / 错误
+ */
+export function loadingState(text) {
+  return h('div', { class: 'state-box' },
+    h('div', { class: 'spinner' }),
+    text ? h('p', null, text) : null,
+  );
+}
+
+export function emptyState(title, hint, action) {
+  return h('div', { class: 'state-box' },
+    h('div', { class: 'state-icon' }, icon('info')),
+    h('strong', null, title),
+    hint ? h('p', null, hint) : null,
+    action ? h('div', { class: 'state-action' }, action) : null,
+  );
+}
+
+export function errorState(title, err, action) {
+  return h('div', { class: 'state-box err' },
+    h('div', { class: 'state-icon' }, icon('alert')),
+    h('strong', null, title),
+    h('p', null, err?.message || String(err || '未知错误')),
+    action ? h('div', { class: 'state-action' }, action) : null,
+  );
 }
 
 /* ---------------- 格式化 ---------------- */
@@ -156,28 +471,27 @@ export function confirmDialog({ title, message, confirmText = '确定', danger =
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 export const WEEK_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
 export function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 export function formatDateTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 export function formatClock(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 export function relativeTime(iso) {
@@ -196,58 +510,37 @@ export function relativeTime(iso) {
 }
 
 export function todayLabel(date = new Date()) {
-  const m = date.getMonth() + 1;
-  const d = date.getDate();
-  return `${m}月${d}日${WEEK[date.getDay()]}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日${WEEK[date.getDay()]}`;
 }
 
-/** 后端返回的时间可能是 RFC3339 或 "2026-10-26 20:00:00"，统一成短格式 */
+/**
+ * 任务时间范围
+ * 优先用「日期 + 时段」（周期性任务），否则用起止时间
+ */
+export function timeRange(item) {
+  if (!item) return '—';
+  if (item.signDate || item.beginClock) {
+    const date = String(item.signDate || '').split(' ')[0];
+    const clock = item.beginClock && item.endClock
+      ? `${item.beginClock} – ${item.endClock}`
+      : (item.beginClock || '');
+    return [date, clock].filter(Boolean).join('  ') || '时间待定';
+  }
+  return shortRange(item.startTime, item.endTime);
+}
+
+/** 兼容旧调用 */
 export function shortRange(start, end) {
   const norm = (v) => {
     if (!v) return '';
-    const s = String(v).replace('T', ' ').replace(/\.\d+/, '').replace(/(Z|[+-]\d{2}:?\d{2})$/, '');
-    return s.slice(0, 16);
+    return String(v).replace('T', ' ').replace(/\.\d+/, '')
+      .replace(/(Z|[+-]\d{2}:?\d{2})$/, '').slice(0, 16);
   };
   const s = norm(start);
   const e = norm(end);
   if (!s && !e) return '时间待定';
   if (!e) return s;
   return `${s} → ${e}`;
-}
-
-const STATUS_MAP = {
-  success: { label: '成功', cls: 'ok' },
-  failed: { label: '失败', cls: 'err' },
-  pending: { label: '结果待核对', cls: 'warn' },
-  executing: { label: '执行中', cls: 'info' },
-  done: { label: '已处理', cls: 'ok' },
-  leave: { label: '已请假', cls: 'plain' },
-};
-
-export function statusBadge(status) {
-  const meta = STATUS_MAP[status] || { label: status || '未知', cls: 'plain' };
-  return h('span', { class: 'badge ' + meta.cls }, meta.label);
-}
-
-export function statusText(status) {
-  const meta = STATUS_MAP[status];
-  return meta ? meta.label : status;
-}
-
-const LOGIN_MAP = {
-  authorized: { label: '已登录', cls: 'ok' },
-  expired: { label: '需重新登录', cls: 'err' },
-  unknown: { label: '未登录', cls: 'plain' },
-  unauthorized: { label: '未授权', cls: 'warn' },
-};
-
-export function loginBadge(status) {
-  const meta = LOGIN_MAP[status] || LOGIN_MAP.unknown;
-  return h('span', { class: 'badge ' + meta.cls }, meta.label);
-}
-
-export function kindLabel(kind) {
-  return { attendance: '查寝', sign: '签到', collect: '信息收集' }[kind] || kind || '任务';
 }
 
 /* ---------------- 其它 ---------------- */
@@ -265,7 +558,6 @@ export function debounce(fn, wait = 260) {
   };
 }
 
-/** 复制到剪贴板，失败时回退到 execCommand */
 export async function copyText(text) {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -285,23 +577,7 @@ export async function copyText(text) {
   return ok;
 }
 
-export function skeletonCard(title = true) {
-  const wrap = h('div', { class: 'card' });
-  if (title) {
-    wrap.append(h('div', { class: 'card-head' }, h('div', { class: 'skeleton', style: { width: '120px' } })));
-  }
-  wrap.append(h('div', { class: 'loading-block' },
-    h('div', { class: 'skeleton', style: { width: '100%' } }),
-    h('div', { class: 'skeleton', style: { width: '86%' } }),
-    h('div', { class: 'skeleton', style: { width: '64%' } }),
-  ));
-  return wrap;
-}
-
-export function emptyState(title, hint, action) {
-  return h('div', { class: 'empty' },
-    h('strong', null, title),
-    hint ? h('span', null, hint) : null,
-    action ? h('div', { style: { marginTop: '16px' } }, action) : null,
-  );
+/** 兼容旧调用 */
+export function skeletonCard() {
+  return loadingState();
 }

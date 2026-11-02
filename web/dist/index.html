@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>青衿 · 今日校园签到与查寝</title>
-<link rel="stylesheet" href="/assets/app.css?v=39085a1b89e3">
-<link rel="icon" href="/assets/logo.svg?v=39085a1b89e3" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
 </head>
 <body>
 <div id="app" class="app-shell" hidden>
@@ -54,8 +54,8 @@
     <div class="sidebar-foot">
       <div class="avatar" id="userAvatar">青</div>
       <div class="user-meta">
-        <strong id="userName">演示用户</strong>
-        <span id="userQuota">50 次</span>
+        <strong id="userName">—</strong>
+        <span id="userQuota">—</span>
       </div>
       <button class="icon-btn" id="logoutBtn" title="退出登录" aria-label="退出登录">
         <svg viewBox="0 0 24 24"><path d="M14 5h4a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-4M10 8l-4 4 4 4M6 12h9"/></svg>
@@ -77,9 +77,8 @@
           <span id="themeLabel">外观</span>
         </button>
         <div class="user-chip">
-          <span class="avatar sm" id="chipAvatar">演</span>
-          <span id="chipName">演示用户</span>
-          <svg viewBox="0 0 24 24" class="chev"><path d="m6 9 6 6 6-6"/></svg>
+          <span class="avatar sm" id="chipAvatar">青</span>
+          <span id="chipName">—</span>
         </div>
       </div>
     </header>
@@ -137,11 +136,14 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <div id="modal" class="modal" hidden>
-  <div class="modal-backdrop" data-close="1"></div>
+  <div class="modal-backdrop" data-close></div>
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <header class="modal-head">
-      <h2 id="modalTitle">标题</h2>
-      <button class="icon-btn" data-close="1" aria-label="关闭">
+      <div class="modal-head-text">
+        <h2 id="modalTitle">标题</h2>
+        <p class="modal-sub" id="modalSub" hidden></p>
+      </div>
+      <button class="icon-btn" data-close aria-label="关闭">
         <svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
       </button>
     </header>
@@ -150,6 +152,6 @@
   </div>
 </div>
 
-<script src="/assets/app.js?v=39085a1b89e3" type="module"></script>
+<script src="/assets/app.js" type="module"></script>
 </body>
 </html>

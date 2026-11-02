@@ -2,7 +2,7 @@
    青衿前端主入口：路由、会话、主题
    ========================================================= */
 import { api, getToken, setToken } from './api.js';
-import { h, toast, initModal, closeModal } from './ui.js';
+import { h, toast, initModal, closeModal, setChildren } from './ui.js';
 
 import { renderDashboard } from './page-dashboard.js';
 import { renderAccounts } from './page-accounts.js';
@@ -137,7 +137,7 @@ async function route() {
   try {
     await render(contentEl, ctx);
   } catch (err) {
-    contentEl.replaceChildren(
+    setChildren(contentEl,
       h('div', { class: 'page-head' }, h('div', null, h('h1', null, title))),
       h('div', { class: 'empty' },
         h('strong', null, '页面渲染出错'),
