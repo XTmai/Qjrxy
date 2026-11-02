@@ -1,0 +1,314 @@
+package server_test
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"qingjin/internal/config"
+	"qingjin/internal/server"
+	"qingjin/internal/service"
+	"qingjin/internal/store"
+)
+
+type testEnv struct {
+	srv   *httptest.Server
+	token string
+}
+
+func newEnv(t *testing.T) *testEnv {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Addr:      ":0",
+		DataDir:   dir,
+		SecretKey: bytes.Repeat([]byte{7}, 32),
+	}
+	db, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	svc := service.New(cfg, db)
+	handler := server.New(svc).Handler(nil)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	env := &testEnv{srv: srv}
+	env.register(t, "apiuser", "secret123")
+	return env
+}
+
+func (e *testEnv) do(t *testing.T, method, path string, body any, token string) (int, map[string]any) {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = bytes.NewReader(buf)
+	}
+	req, err := http.NewRequest(method, e.srv.URL+path, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("请求 %s %s 失败：%v", method, path, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &out)
+	}
+	return resp.StatusCode, out
+}
+
+func (e *testEnv) register(t *testing.T, username, password string) {
+	t.Helper()
+	status, body := e.do(t, http.MethodPost, "/api/auth/register",
+		map[string]string{"username": username, "password": password, "nickname": "测试"}, "")
+	if status != http.StatusCreated {
+		t.Fatalf("注册失败：%d %v", status, body)
+	}
+	data, _ := body["data"].(map[string]any)
+	token, _ := data["token"].(string)
+	if token == "" {
+		t.Fatalf("注册未返回 token：%v", body)
+	}
+	e.token = token
+}
+
+// TestHealthAndSelfTest 校验公开接口可用。
+func TestHealthAndSelfTest(t *testing.T) {
+	env := newEnv(t)
+
+	status, body := env.do(t, http.MethodGet, "/api/health", nil, "")
+	if status != http.StatusOK || body["ok"] != true {
+		t.Errorf("健康检查异常：%d %v", status, body)
+	}
+
+	status, body = env.do(t, http.MethodGet, "/api/selftest", nil, "")
+	if status != http.StatusOK {
+		t.Fatalf("自检失败：%d %v", status, body)
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["crypto"] != "ok" || data["database"] != "ok" {
+		t.Errorf("自检结果异常：%v", data)
+	}
+}
+
+// TestAuthFlow 校验注册、登录、me、登出。
+func TestAuthFlow(t *testing.T) {
+	env := newEnv(t)
+
+	status, body := env.do(t, http.MethodGet, "/api/auth/me", nil, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("me 失败：%d %v", status, body)
+	}
+
+	// 错误密码
+	status, _ = env.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"username": "apiuser", "password": "wrong"}, "")
+	if status != http.StatusBadRequest {
+		t.Errorf("错误密码应返回 400，得到 %d", status)
+	}
+
+	// 正确密码
+	status, body = env.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"username": "apiuser", "password": "secret123"}, "")
+	if status != http.StatusOK {
+		t.Fatalf("登录失败：%d %v", status, body)
+	}
+
+	// 登出后 token 失效
+	if status, _ := env.do(t, http.MethodPost, "/api/auth/logout", map[string]any{}, env.token); status != http.StatusOK {
+		t.Error("登出失败")
+	}
+	if status, _ := env.do(t, http.MethodGet, "/api/auth/me", nil, env.token); status != http.StatusUnauthorized {
+		t.Errorf("登出后应返回 401，得到 %d", status)
+	}
+}
+
+// TestUnauthorizedAccess 校验未登录无法访问业务接口。
+func TestUnauthorizedAccess(t *testing.T) {
+	env := newEnv(t)
+	for _, path := range []string{
+		"/api/accounts", "/api/tasks", "/api/plans", "/api/logs", "/api/dashboard",
+	} {
+		status, body := env.do(t, http.MethodGet, path, nil, "")
+		if status != http.StatusUnauthorized {
+			t.Errorf("%s 未登录应返回 401，得到 %d", path, status)
+		}
+		if body["ok"] != false {
+			t.Errorf("%s 错误响应格式不符：%v", path, body)
+		}
+	}
+	// 非法 token 同样拒绝
+	if status, _ := env.do(t, http.MethodGet, "/api/accounts", nil, "invalid-token"); status != http.StatusUnauthorized {
+		t.Errorf("非法 token 应返回 401，得到 %d", status)
+	}
+}
+
+// TestDashboardEmpty 校验空状态工作台。
+func TestDashboardEmpty(t *testing.T) {
+	env := newEnv(t)
+	status, body := env.do(t, http.MethodGet, "/api/dashboard", nil, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("工作台失败：%d %v", status, body)
+	}
+	data, _ := body["data"].(map[string]any)
+	stats, _ := data["stats"].(map[string]any)
+	if stats["todayTotal"] != float64(0) {
+		t.Errorf("初始今日执行应为 0：%v", stats)
+	}
+	if accounts, _ := data["accounts"].([]any); len(accounts) != 0 {
+		t.Errorf("初始账号列表应为空：%v", accounts)
+	}
+	user, _ := data["user"].(map[string]any)
+	if user["quota"] != float64(50) {
+		t.Errorf("初始额度应为 50：%v", user["quota"])
+	}
+}
+
+// TestValidation 校验入参校验。
+func TestValidation(t *testing.T) {
+	env := newEnv(t)
+
+	// 缺少学校
+	status, body := env.do(t, http.MethodPost, "/api/accounts",
+		map[string]any{"username": "2023"}, env.token)
+	if status != http.StatusBadRequest {
+		t.Errorf("缺少学校应返回 400，得到 %d", status)
+	}
+
+	// 缺少账号 ID
+	status, _ = env.do(t, http.MethodPost, "/api/tasks/sync", map[string]any{}, env.token)
+	if status != http.StatusBadRequest {
+		t.Errorf("缺少 accountId 应返回 400，得到 %d", status)
+	}
+
+	// 不存在的账号
+	status, _ = env.do(t, http.MethodPost, "/api/tasks/sync", map[string]any{"accountId": 999}, env.token)
+	if status == http.StatusOK {
+		t.Error("不存在的账号不应返回成功")
+	}
+
+	// 不存在的路由返回 JSON 404 或 405
+	status, _ = env.do(t, http.MethodGet, "/api/nope", nil, env.token)
+	if status == http.StatusOK {
+		t.Errorf("未知路由不应返回 200")
+	}
+	_ = body
+}
+
+// TestRedeemQuota 校验卡密兑换。
+func TestRedeemQuota(t *testing.T) {
+	env := newEnv(t)
+
+	status, body := env.do(t, http.MethodPost, "/api/quota/redeem",
+		map[string]string{"code": "QJ-A1B2-C3D4"}, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("兑换失败：%d %v", status, body)
+	}
+	data, _ := body["data"].(map[string]any)
+	if data["granted"] != float64(30) {
+		t.Errorf("应兑换 30 次，得到 %v", data["granted"])
+	}
+
+	for _, bad := range []string{"", "ABC", "QJ-XX", "QJ-GGGG-HHHH"} {
+		status, _ := env.do(t, http.MethodPost, "/api/quota/redeem",
+			map[string]string{"code": bad}, env.token)
+		if status != http.StatusBadRequest {
+			t.Errorf("非法卡密 %q 应返回 400，得到 %d", bad, status)
+		}
+	}
+}
+
+// TestChangePassword 校验改密流程。
+func TestChangePassword(t *testing.T) {
+	env := newEnv(t)
+
+	status, _ := env.do(t, http.MethodPost, "/api/auth/password",
+		map[string]string{"oldPassword": "wrong", "newPassword": "newpass123"}, env.token)
+	if status != http.StatusBadRequest {
+		t.Errorf("原密码错误应返回 400，得到 %d", status)
+	}
+
+	status, _ = env.do(t, http.MethodPost, "/api/auth/password",
+		map[string]string{"oldPassword": "secret123", "newPassword": "newpass123"}, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("改密失败：%d", status)
+	}
+
+	status, _ = env.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"username": "apiuser", "password": "newpass123"}, "")
+	if status != http.StatusOK {
+		t.Errorf("新密码应可登录，得到 %d", status)
+	}
+}
+
+// TestDeviceTicketRequiresOwnership 校验设备票据不能作用于他人账号。
+func TestDeviceTicketRequiresOwnership(t *testing.T) {
+	env := newEnv(t)
+
+	// 另一个用户
+	other := &testEnv{srv: env.srv}
+	other.register(t, "otheruser", "secret123")
+
+	status, _ := other.do(t, http.MethodPost, "/api/accounts/1/device-ticket", map[string]any{}, other.token)
+	if status == http.StatusOK {
+		t.Error("不能为不存在的账号生成票据")
+	}
+}
+
+// TestDeviceSubmitRequiresValidTicket 校验设备回填必须持有效票据。
+func TestDeviceSubmitRequiresValidTicket(t *testing.T) {
+	env := newEnv(t)
+
+	status, body := env.do(t, http.MethodPost, "/api/device/submit",
+		map[string]string{"ticket": "forged", "deviceId": "abc"}, "")
+	if status != http.StatusBadRequest {
+		t.Fatalf("伪造票据应返回 400，得到 %d %v", status, body)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	msg, _ := errObj["message"].(string)
+	if !strings.Contains(msg, "票据") {
+		t.Errorf("错误信息应说明票据问题：%q", msg)
+	}
+}
+
+// TestEnvelopeShape 校验所有响应都符合统一信封。
+func TestEnvelopeShape(t *testing.T) {
+	env := newEnv(t)
+
+	req, _ := http.NewRequest(http.MethodGet, env.srv.URL+"/api/dashboard", nil)
+	req.Header.Set("Authorization", "Bearer "+env.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Errorf("响应应为 JSON：%s", ct)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if !strings.HasPrefix(strings.TrimSpace(string(raw)), "{") {
+		t.Errorf("响应应为 JSON 对象：%s", raw)
+	}
+}

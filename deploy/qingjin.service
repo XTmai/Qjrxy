@@ -1,0 +1,36 @@
+[Unit]
+Description=Qingjin - Campus check-in service
+Documentation=https://github.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=qingjin
+Group=qingjin
+WorkingDirectory=/var/lib/qingjin
+ExecStart=/usr/local/bin/qingjin -addr :8090 -data /var/lib/qingjin/data
+Restart=on-failure
+RestartSec=5s
+
+# 首次启动时设置管理员，避免公网被抢先注册；创建用户后会忽略这两个变量
+Environment=QINGJIN_ADMIN_USER=admin
+Environment=QINGJIN_ADMIN_PASS=CHANGE_ME_BEFORE_START
+Environment=TZ=Asia/Shanghai
+# 端口也可通过环境变量覆盖（命令行 -addr 优先级更高）
+Environment=QINGJIN_ADDR=:8090
+
+# 静态二进制，无需额外能力
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/qingjin
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
