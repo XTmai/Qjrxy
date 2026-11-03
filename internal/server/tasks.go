@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"qingjin/internal/service"
-	"qingjin/internal/store"
+	"qjrxy/internal/service"
+	"qjrxy/internal/store"
 )
 
 func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
@@ -98,8 +98,13 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, badRequest("请选择账号"))
 		return
 	}
-	if !s.consumeQuota(w, r, user) {
-		return
+	// 额度关闭（个人自部署默认）：不预检、不扣减，直接放行。
+	// 托管运营场景（QINGJIN_QUOTA_ENABLED=true）才启用额度体系。
+	if s.svc.Config().QuotaEnabled {
+		// 先预检额度：额度不足时直接拦下，不发起任何提交。
+		if !s.hasQuota(w, r, user) {
+			return
+		}
 	}
 	outcome, err := s.svc.RunTask(r.Context(), service.RunOptions{
 		UserID:    user.ID,
@@ -109,10 +114,33 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		Source:    "manual",
 	})
 	if err != nil {
+		// 前置拦截（未到时间、未绑设备、没有任务等）没有向学校发起请求，
+		// 不应扣额度——额度在真正提交后才计费。
 		writeError(w, err)
 		return
 	}
+	if s.svc.Config().QuotaEnabled {
+		// 真正发起过提交才扣一次。此时不会再因余额不足失败（已预检），
+		// 即便并发导致扣减未命中，也不影响本次已成功的结果。
+		_, _ = s.svc.DB().ConsumeQuota(r.Context(), user.ID)
+	}
 	writeData(w, http.StatusOK, outcome)
+}
+
+// hasQuota 预检额度是否足够；不足时写出 402 并返回 false。
+func (s *Server) hasQuota(w http.ResponseWriter, r *http.Request, user *store.User) bool {
+	fresh, err := s.svc.DB().UserByID(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, err)
+		return false
+	}
+	remaining := fresh.Quota - fresh.QuotaUsed
+	if remaining <= 0 {
+		writeError(w, &APIError{Status: 402, Code: "quota_exhausted",
+			Message: "额度已用完，请兑换卡密后重试"})
+		return false
+	}
+	return true
 }
 
 // ---------- 计划 ----------
@@ -237,6 +265,25 @@ func (s *Server) handleTogglePlan(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 }
 
+// handleResetPlanRun 清除计划当天已执行状态，让它当天能重新尝试。
+func (s *Server) handleResetPlanRun(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.svc.DB().ResetPlanRun(r.Context(), user.ID, id); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"message": "已重置，计划将在下个周期重新检查"})
+}
+
 func (s *Server) planFromRequest(r *http.Request, userID, existingID int64, req planRequest) (*store.Plan, error) {
 	kind := strings.TrimSpace(req.Kind)
 	if kind == "" {
@@ -265,7 +312,11 @@ func (s *Server) planFromRequest(r *http.Request, userID, existingID int64, req 
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	} else if existingID > 0 {
-		enabled = true
+		// 编辑时未显式传 enabled：沿用数据库里的当前值，
+		// 不能默认 true，否则暂停中的计划一编辑就会被重新启用。
+		if current, err := s.svc.DB().PlanByID(r.Context(), userID, existingID); err == nil {
+			enabled = current.Enabled
+		}
 	}
 	plan := &store.Plan{
 		ID:          existingID,
@@ -334,6 +385,25 @@ func (s *Server) handleListLogs(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"logs": logs, "total": total})
 }
 
+// handleLogTrend 返回最近 N 天的执行趋势（默认 14 天）。
+func (s *Server) handleLogTrend(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days <= 0 || days > 90 {
+		days = 14
+	}
+	trend, err := s.svc.DB().LogTrend(r.Context(), user.ID, days)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"days": days, "trend": trend})
+}
+
 func (s *Server) handleGetLog(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r.Context())
 	if err != nil {
@@ -399,20 +469,6 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"user":        user,
 		"today":       service.TodayLabel(time.Now()),
 	})
-}
-
-// consumeQuota 扣减额度；额度不足时写出错误并返回 false。
-func (s *Server) consumeQuota(w http.ResponseWriter, r *http.Request, user *store.User) bool {
-	ok, err := s.svc.DB().ConsumeQuota(r.Context(), user.ID)
-	if err != nil {
-		writeError(w, err)
-		return false
-	}
-	if !ok {
-		writeError(w, &APIError{Status: 402, Code: "quota_exhausted", Message: "额度已用完，请兑换卡密后重试"})
-		return false
-	}
-	return true
 }
 
 func storeKindLabel(kind string) string {

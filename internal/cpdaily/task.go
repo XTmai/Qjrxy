@@ -20,22 +20,22 @@ import (
 
 // DeviceProfile 是提交请求里声明的设备信息，必须与账号绑定的设备一致才会通过设备校验。
 type DeviceProfile struct {
-	DeviceID      string  `json:"deviceId"`
-	DeviceModel   string  `json:"deviceModel"`
-	SystemVersion string  `json:"systemVersion"`
-	BuildID       string  `json:"buildId"`
-	SystemName    string  `json:"systemName"`
-	AppVersion    string  `json:"appVersion"`
+	DeviceID      string `json:"deviceId"`
+	DeviceModel   string `json:"deviceModel"`
+	SystemVersion string `json:"systemVersion"`
+	BuildID       string `json:"buildId"`
+	SystemName    string `json:"systemName"`
+	AppVersion    string `json:"appVersion"`
 	// Platform 为空或 "android" 走 Android 协议；"ios" 走 iOS 协议。
-	Platform      string  `json:"platform"`
+	Platform string `json:"platform"`
 	// WisDeviceID 是 iOS 端的设备指纹请求头，仅 iOS 协议发送。
-	WisDeviceID   string  `json:"wisDeviceId"`
+	WisDeviceID string `json:"wisDeviceId"`
 	// RawUserAgent 是扫码时 App WebView 的真实 UA。
 	// 非空时原样使用，保证请求特征与真机一致（优先级高于拼接）。
-	RawUserAgent  string  `json:"userAgent"`
-	UserID        string  `json:"-"`
-	Lon           float64 `json:"lon"`
-	Lat           float64 `json:"lat"`
+	RawUserAgent string  `json:"userAgent"`
+	UserID       string  `json:"-"`
+	Lon          float64 `json:"lon"`
+	Lat          float64 `json:"lat"`
 }
 
 // IsIOS 判断是否使用 iOS 协议。
@@ -91,18 +91,18 @@ type Task struct {
 	TaskName        string   `json:"taskName"`
 	Sender          string   `json:"sender"`
 	// StartTime/EndTime 用于展示：优先用单次任务时间，其次用周期性时段
-	StartTime       string   `json:"startTime"`
-	EndTime         string   `json:"endTime"`
-	Status          string   `json:"status"`
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
+	Status    string `json:"status"`
 
 	// 周期性任务的时间信息
-	SignDate        string `json:"signDate"`        // 如 "2026-11-03 (周二)"
-	BeginClock      string `json:"beginClock"`      // 如 "14:00"
-	EndClock        string `json:"endClock"`        // 如 "14:20"
+	SignDate   string `json:"signDate"`   // 如 "2026-11-03 (周二)"
+	BeginClock string `json:"beginClock"` // 如 "14:00"
+	EndClock   string `json:"endClock"`   // 如 "14:20"
 	// SignStatus：0/1 未签到，2 未到时间，3 已过期，4 已签到
-	SignStatus      string `json:"signStatus"`
-	SignStatusText  string `json:"signStatusText"`
-	TaskType        string `json:"taskType"`
+	SignStatus     string `json:"signStatus"`
+	SignStatusText string `json:"signStatusText"`
+	TaskType       string `json:"taskType"`
 }
 
 // TaskDetail 是任务详情（仅取提交所需字段）。
@@ -385,7 +385,7 @@ func (d *TaskDetail) CheckRange(lon, lat float64) RangeCheck {
 			result.InRange = true
 		}
 		result.Places = append(result.Places, PlaceResult{
-			Name: firstNonEmpty(place.Address, place.PlaceName, "签到点"),
+			Name:     firstNonEmpty(place.Address, place.PlaceName, "签到点"),
 			Distance: dist, Radius: place.Radius.Float(), InRange: in,
 			Latitude: place.Latitude.Float(), Longitude: place.Longitude.Float(),
 		})
@@ -724,7 +724,7 @@ func (c *Client) submit(ctx context.Context, host, tenantID string, device Devic
 		headers["Accept"] = "*/*"
 		headers["Accept-Language"] = "zh-CN,zh-Hans;q=0.9"
 		headers["CacheTimeValue"] = "0"
-		headers["Accept-Encoding"] = "gzip, deflate, br"
+		headers["Accept-Encoding"] = "gzip, deflate"
 		headers["Connection"] = "keep-alive"
 		if device.WisDeviceID != "" {
 			headers["wisDeviceId"] = device.WisDeviceID

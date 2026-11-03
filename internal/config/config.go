@@ -20,17 +20,22 @@ type Config struct {
 	OpenAPI     bool   // 是否开放 /api 给匿名（默认关闭，仅登录后可用）
 	AdminUser   string // 首次启动创建的管理员账号（空则不创建）
 	AdminPass   string
+	// QuotaEnabled 开启额度/卡密体系。
+	// 面向「托管运营」场景（多用户 + 卡密充值）；个人自部署保持默认关闭，
+	// 关闭时执行不扣额度、兑换接口不可用、前端隐藏额度相关 UI。
+	QuotaEnabled bool
 }
 
 // Load 从环境变量读取配置，未设置的项使用默认值。
 //
 // 支持的环境变量：
 //
-//	QINGJIN_ADDR       监听地址（默认 :8090）
-//	QINGJIN_DATA_DIR   数据目录（默认 ./data）
-//	QINGJIN_SECRET     32 字节密钥（base64），不填则自动生成到 <data>/secret.key
-//	QINGJIN_ADMIN_USER 管理员用户名（默认空，即首次访问时注册）
-//	QINGJIN_ADMIN_PASS 管理员密码
+//	QINGJIN_ADDR            监听地址（默认 :8090）
+//	QINGJIN_DATA_DIR        数据目录（默认 ./data）
+//	QINGJIN_SECRET          32 字节密钥（base64），不填则自动生成到 <data>/secret.key
+//	QINGJIN_ADMIN_USER      管理员用户名（默认空，即首次访问时注册）
+//	QINGJIN_ADMIN_PASS      管理员密码
+//	QINGJIN_QUOTA_ENABLED   额度/卡密体系开关（默认 false；托管运营场景设为 true）
 func Load() (*Config, error) {
 	addr := envOr("QINGJIN_ADDR", ":8090")
 	dataDir := envOr("QINGJIN_DATA_DIR", "./data")
@@ -49,12 +54,25 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Addr:      addr,
-		DataDir:   absDir,
-		SecretKey: key,
-		AdminUser: strings.TrimSpace(os.Getenv("QINGJIN_ADMIN_USER")),
-		AdminPass: os.Getenv("QINGJIN_ADMIN_PASS"),
+		Addr:         addr,
+		DataDir:      absDir,
+		SecretKey:    key,
+		AdminUser:    strings.TrimSpace(os.Getenv("QINGJIN_ADMIN_USER")),
+		AdminPass:    os.Getenv("QINGJIN_ADMIN_PASS"),
+		QuotaEnabled: envBool("QINGJIN_QUOTA_ENABLED", false),
 	}, nil
+}
+
+// envBool 读取布尔型环境变量（接受 1/true/yes/on，大小写不敏感）。
+func envBool(key string, fallback bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off", "":
+		return fallback
+	}
+	return fallback
 }
 
 // loadSecretKey 读取或生成持久化密钥。

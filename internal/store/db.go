@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS accounts (
 	cookies        TEXT NOT NULL DEFAULT '',
 	login_status   TEXT NOT NULL DEFAULT 'unknown',
 	last_login_at  TEXT NOT NULL DEFAULT '',
+	last_probe_at  TEXT NOT NULL DEFAULT '',
+	last_probe_msg TEXT NOT NULL DEFAULT '',
 	device_id      TEXT NOT NULL DEFAULT '',
 	device_model   TEXT NOT NULL DEFAULT '23127PN0CC',
 	system_version TEXT NOT NULL DEFAULT '14',
@@ -171,6 +173,8 @@ func (db *DB) migrate() error {
 		`ALTER TABLE account_tasks ADD COLUMN sign_status_text TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE accounts ADD COLUMN last_probe_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE accounts ADD COLUMN last_probe_msg TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)
 	}

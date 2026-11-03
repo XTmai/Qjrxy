@@ -87,13 +87,19 @@ func (db *DB) UpdatePlan(ctx context.Context, p *Plan) error {
 		enabled = 1
 	}
 	p.UpdatedAt = now()
-	_, err := db.ExecContext(ctx, `
+	res, err := db.ExecContext(ctx, `
 		UPDATE plans SET account_id = ?, name = ?, kind = ?, mode = ?, window_start = ?, window_end = ?,
 			days = ?, enabled = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
 		p.AccountID, p.Name, p.Kind, p.Mode, p.WindowStart, p.WindowEnd, encodeDays(p.Days),
 		enabled, p.UpdatedAt, p.ID, p.UserID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound // 计划不存在或不属于该用户，不能静默返回成功
+	}
+	return nil
 }
 
 // TogglePlan 启停计划。
@@ -102,16 +108,28 @@ func (db *DB) TogglePlan(ctx context.Context, userID, id int64, enabled bool) er
 	if enabled {
 		flag = 1
 	}
-	_, err := db.ExecContext(ctx,
+	res, err := db.ExecContext(ctx,
 		`UPDATE plans SET enabled = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
 		flag, now(), id, userID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeletePlan 删除计划。
 func (db *DB) DeletePlan(ctx context.Context, userID, id int64) error {
-	_, err := db.ExecContext(ctx, `DELETE FROM plans WHERE id = ? AND user_id = ?`, id, userID)
-	return err
+	res, err := db.ExecContext(ctx, `DELETE FROM plans WHERE id = ? AND user_id = ?`, id, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ListPlans 返回用户的计划（附带账号信息）。
@@ -169,4 +187,43 @@ func (db *DB) RecordPlanRun(ctx context.Context, id int64, result string) error 
 		`UPDATE plans SET last_run_at = ?, last_result = ?, updated_at = ? WHERE id = ?`,
 		now(), result, now(), id)
 	return err
+}
+
+// ResetPlanRun 清除计划当天已执行的状态，让它重新参与当天的调度。
+//
+// 用于失败记录把 last_run_at 占掉、或用户调整后希望当天重新尝试的场景。
+func (db *DB) ResetPlanRun(ctx context.Context, userID, id int64) error {
+	res, err := db.ExecContext(ctx,
+		`UPDATE plans SET last_run_at = '', last_result = '', updated_at = ?
+		 WHERE id = ? AND user_id = ?`, now(), id, userID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// PlanByID 按 ID 查询单个计划（含所属账号信息）。
+func (db *DB) PlanByID(ctx context.Context, userID, id int64) (*Plan, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT `+planColumns+`, COALESCE(a.alias,''), COALESCE(a.school_name,''), COALESCE(a.username,'')
+		FROM plans p JOIN accounts a ON a.id = p.account_id
+		WHERE p.id = ? AND p.user_id = ?`, id, userID)
+	var p Plan
+	var days string
+	var enabled int
+	err := row.Scan(&p.ID, &p.UserID, &p.AccountID, &p.Name, &p.Kind, &p.Mode, &p.WindowStart,
+		&p.WindowEnd, &days, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt,
+		&p.AccountAlias, &p.SchoolName, &p.Username)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	p.Enabled = enabled == 1
+	_ = json.Unmarshal([]byte(days), &p.Days)
+	return &p, nil
 }

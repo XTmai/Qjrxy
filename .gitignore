@@ -1,26 +1,19 @@
-# 构建产物
-/bin/
-/dist/
-qingjin
-qingjin.exe
+# Go
+bin/
+*.exe
 
-# 运行时数据（数据库、密钥、照片）
-/data/
-/tmpdata/
-/data_test/
+# 前端依赖与构建缓存
+web/frontend/node_modules/
+web/frontend/.vite/
+
+# 运行数据
+data/
+data_*/
 *.db
 *.db-shm
 *.db-wal
 secret.key
 
-# 编辑器
-.vscode/
-.idea/
-*.swp
+# 系统
 .DS_Store
 Thumbs.db
-
-# 临时文件
-*.log
-*.bak
-*.orig

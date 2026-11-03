@@ -4,15 +4,15 @@ import (
 	"net/http"
 	"time"
 
-	"qingjin/internal/cpdaily"
-	"qingjin/internal/secure"
+	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/secure"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"time":   time.Now().Format(time.RFC3339),
-		"name":   "青衿 · 今日校园签到与查寝",
+		"name":   "XIAOMAI · 今日校园签到与查寝",
 	})
 }
 
@@ -108,15 +108,20 @@ func (s *Server) handleSchools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
+	features := []string{
+		"manual-sign", "auto-plan", "multi-account", "photo",
+		"password-login", "device-id",
+	}
+	if s.svc.Config().QuotaEnabled {
+		features = append(features, "quota")
+	}
 	writeData(w, http.StatusOK, map[string]any{
-		"appVersion":  cpdaily.AppVersion,
-		"apiVersion":  "v1",
-		"serverTime":  time.Now().Format(time.RFC3339),
-		"tokenTTLDay": s.tokenTTL,
-		"features": []string{
-			"manual-sign", "auto-plan", "multi-account", "photo",
-			"cookie-import", "password-login", "device-id",
-		},
+		"appVersion":   cpdaily.AppVersion,
+		"apiVersion":   "v1",
+		"serverTime":   time.Now().Format(time.RFC3339),
+		"tokenTTLDay":  s.tokenTTL,
+		"quotaEnabled": s.svc.Config().QuotaEnabled,
+		"features":     features,
 	})
 }
 

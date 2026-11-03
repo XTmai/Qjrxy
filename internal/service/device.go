@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"qingjin/internal/secure"
-	"qingjin/internal/store"
+	"qjrxy/internal/secure"
+	"qjrxy/internal/store"
 )
 
 // DeviceInfo 是扫码页采集到的完整设备信息。

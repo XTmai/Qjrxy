@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#eef0f7">
+<title>获取设备 ID · XIAOMAI</title>
+<style>
+  :root {
+    --bg: #eef0f7;
+    --surface: #ffffff;
+    --surface-2: #f4f6fc;
+    --border: #e5e9f2;
+    --text: #0f172a;
+    --text-soft: #475569;
+    --muted: #7b8798;
+    --primary: #006ee6;
+    --success: #10b981;
+    --warn-bg: #fef3c7;
+    --warn-fg: #b45309;
+    --info-bg: #e6f1fd;
+    --info-fg: #1d4ed8;
+    --danger: #d43b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #181818;
+      --surface: #202024;
+      --surface-2: #1b1b1f;
+      --border: #2f2f36;
+      --text: #f2f4f8;
+      --text-soft: #c7ccd6;
+      --muted: #8f97a5;
+      --info-bg: #16274a;
+      --info-fg: #9ec8ff;
+      --warn-bg: #3a2a10;
+      --warn-fg: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(900px 420px at 50% -10%, rgba(0,110,230,.14), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system,
+      BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 22px 16px calc(22px + env(safe-area-inset-bottom));
+  }
+  .screen { width: min(460px, 100%); }
+  /* 加载态卡片至少占满可用宽度，避免只有一个小方块 */
+  .card.loading { padding: 56px 24px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 28px;
+    padding: 32px 24px 28px;
+    box-shadow: 0 26px 50px -20px rgba(15,23,42,.28);
+    text-align: center;
+  }
+  /* 内容区统一左右内边距，避免文字贴边 */
+  .card > * + * { margin-top: 0; }
+  .card .body { padding: 0 2px; }
+  .icon {
+    width: 76px; height: 76px;
+    margin: 0 auto 18px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 16px 28px -14px rgba(0,110,230,.8);
+  }
+  .icon.ok { background: var(--success); box-shadow: 0 16px 28px -14px rgba(16,185,129,.7); }
+  .icon.warn { background: #f97316; box-shadow: 0 16px 28px -14px rgba(249,115,22,.6); }
+  .icon svg { width: 40px; height: 40px; stroke: #fff; stroke-width: 2.4; fill: none;
+              stroke-linecap: round; stroke-linejoin: round; }
+  h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -0.01em; }
+  .sub { margin: 0 0 20px; font-size: 13.5px; color: var(--muted); line-height: 1.65; }
+  .loader {
+    width: 54px; height: 54px; margin: 6px auto 20px;
+    border: 4px solid var(--border);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .75s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .id-box {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 14px 16px 16px;
+    text-align: left;
+    margin-bottom: 18px;
+  }
+  .id-label {
+    display: inline-block;
+    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--text-soft);
+    background: var(--border);
+    padding: 3px 10px; border-radius: 999px;
+    margin-bottom: 10px;
+  }
+  .id-value {
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 13.5px;
+    line-height: 1.5;
+    /* UUID 用连字符分段：优先在连字符处折行，避免把字符拆散 */
+    word-break: normal;
+    overflow-wrap: anywhere;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 11px 13px;
+    color: var(--text);
+    letter-spacing: .2px;
+  }
+  .btn {
+    width: 100%;
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    padding: 14px 18px;
+    border: none;
+    border-radius: 999px;
+    font-size: 15px; font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: filter .16s ease, transform .12s ease;
+  }
+  .btn:active { transform: scale(.985); }
+  .btn.primary { background: var(--primary); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.ghost {
+    background: var(--surface-2); color: var(--text);
+    border: 1px solid var(--border);
+    margin-top: 10px;
+  }
+  .btn + .btn { margin-top: 10px; }
+  .btn:disabled { opacity: .6; cursor: default; }
+  .btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2;
+             stroke-linecap: round; stroke-linejoin: round; }
+
+  .tip {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    line-height: 1.7;
+    text-align: left;
+  }
+  .tip.blue { background: var(--info-bg); color: var(--info-fg); }
+  .tip.warn { background: var(--warn-bg); color: var(--warn-fg); }
+  .steps { text-align: left; font-size: 14px; line-height: 2.0; color: var(--text-soft); padding: 4px 2px; }
+  .steps b { color: var(--text); }
+  .id-value.secondary {
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    border-style: dashed;
+  }
+  .field-note { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .kv {
+    display: flex; flex-direction: column;
+    margin-top: 10px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .kv-row {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
+    padding: 9px 12px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .kv-row:last-child { border-bottom: none; }
+  .kv-row span { color: var(--muted); text-align: left; }
+  .kv-row b {
+    color: var(--text); font-weight: 600; text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .copy-hint { font-size: 12.5px; color: var(--success); min-height: 17px; margin-top: 10px; font-weight: 600; }
+  details { margin-top: 18px; text-align: left; font-size: 12px; color: var(--muted); }
+  details summary { cursor: pointer; }
+  details pre {
+    white-space: pre-wrap; word-break: break-all;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 12px; padding: 10px; margin-top: 8px; font-size: 11px;
+  }
+  @media (max-width: 380px) {
+    .card { padding: 26px 18px 22px; border-radius: 24px; }
+    .kv-row { grid-template-columns: 72px minmax(0, 1fr); }
+    h1 { font-size: 20px; }
+  }
+
+  .foot { margin-top: 18px; font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div class="screen"><div class="card loading" id="card">
+  <div class="loader"></div>
+  <p class="sub" style="margin-bottom:0">正在获取设备信息…</p>
+</div></div>
+
+<script>
+/* =========================================================
+ * 设备 ID 获取页
+ *
+ * 原理：今日校园 App 的 WebView 注入了 Cordova 运行时，
+ * 页面加载官方公开的桥接脚本后调用原生插件
+ * MAMPDevice.getDeviceInfo 即可拿到设备唯一标识。
+ *
+ * 参数 t=<ticket> 来自平台的"扫码绑定设备"弹窗，
+ * 拿到 ID 后回填到对应账号（一次性票据，15 分钟有效）。
+ * ========================================================= */
+(function () {
+  'use strict';
+
+  var params = new URLSearchParams(location.search);
+  var TICKET = params.get('t') || '';
+  var SUBMIT_URL = '/api/device/submit';
+
+  var finished = false;
+
+  function isWeChat() { return /MicroMessenger/i.test(navigator.userAgent); }
+  function isiOS() { return /\(i[^;]+;( U;)? CPU.+Mac OS X/.test(navigator.userAgent); }
+  function isCpdaily() {
+    return /cpdaily|wisedu|campushoy|campusphere/i.test(navigator.userAgent);
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
+  function iconPath(name) {
+    return {
+      check: '<polyline points="20 6 9 17 4 12"></polyline>',
+      alert: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
+      phone: '<rect x="7" y="2" width="10" height="20" rx="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>'
+    }[name] || '';
+  }
+
+  // extraRows 渲染机型/版本等附加信息，只展示取到的项
+  function extraRows(info) {
+    var rows = [];
+    if (info.deviceModel) rows.push(['机型', info.deviceModel]);
+    if (info.systemVersion) rows.push(['系统版本', info.systemVersion]);
+    if (info.buildId) rows.push(['构建号', info.buildId]);
+    if (info.appVersion) rows.push(['App 版本', info.appVersion]);
+    if (info.wisDeviceId) rows.push(['wisDeviceId', '已获取']);
+    if (!rows.length) return '';
+    var html = '<span class="id-label" style="margin-top:14px">设备信息</span>' +
+               '<div class="kv">';
+    for (var i = 0; i < rows.length; i++) {
+      html += '<div class="kv-row"><span>' + escapeHtml(rows[i][0]) + '</span><b>' +
+              escapeHtml(rows[i][1]) + '</b></div>';
+    }
+    return html + '</div>';
+  }
+
+  /* ---------- 成功：展示设备信息并回填平台 ---------- */
+  function showSuccess(info) {
+    if (finished) return;
+    finished = true;
+
+    var deviceId = info.deviceId || '';
+    var uuid = info.uuid || '';
+    var payload = info.raw || {};
+    var hasBoth = uuid && deviceId && uuid !== deviceId;
+
+    var card = document.getElementById('card');
+    card.className = 'card';
+    card.innerHTML =
+      '<div class="icon ok"><svg viewBox="0 0 24 24">' + iconPath('check') + '</svg></div>' +
+      '<h1>设备信息已获取</h1>' +
+      '<p class="sub">' + (hasBoth
+        ? '检测到两个标识，请确认绑定今日校园使用的设备 ID'
+        : '复制下方标识，或直接回填到 XIAOMAI 账号') + '</p>' +
+      '<div class="id-box">' +
+        '<span class="id-label">Device ID · 签到使用</span>' +
+        '<div class="id-value" id="idValue">' + escapeHtml(deviceId) + '</div>' +
+        (hasBoth
+          ? '<div class="field-note">今日校园 App 生成，提交签到时使用这个值</div>'
+            + '<span class="id-label" style="margin-top:14px">UUID · 系统标识</span>'
+            + '<div class="id-value secondary">' + escapeHtml(uuid) + '</div>'
+            + '<div class="field-note">系统层设备标识，签到不使用；仅供参考</div>'
+          : '') +
+        extraRows(info) +
+      '</div>' +
+      (TICKET
+        ? '<button class="btn primary" id="submitBtn">' +
+            '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' +
+            '绑定到 XIAOMAI 账号</button>'
+        : '') +
+      '<button class="btn ghost" id="copyBtn">复制设备 ID</button>' +
+      '<div class="copy-hint" id="copyHint"></div>' +
+      '<div class="tip blue">📌 设备 ID 与设备一一对应。换手机或重装今日校园后 ID 会变化，需要重新获取；' +
+        '频繁更换会被学校风控识别为「更换手机」。</div>' +
+      '<div class="tip" style="background:var(--info-bg);color:var(--info-fg)">' +
+        '授权只是绑定设备指纹，<b>不会替你登录学校账号</b>。返回电脑端后仍需输入学号与密码完成登录。</div>' +
+      '<div class="foot">' + (TICKET ? '票据 15 分钟内有效，仅可使用一次' : '没有绑定票据，仅本地展示') + '</div>';
+
+    var hint = document.getElementById('copyHint');
+
+    function legacyCopy(t) {
+      var ta = document.createElement('textarea');
+      ta.value = t;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (e) { /* 忽略 */ }
+      document.body.removeChild(ta);
+    }
+
+    document.getElementById('copyBtn').addEventListener('click', function () {
+      var text = document.getElementById('idValue').innerText.trim();
+      function done() {
+        hint.style.color = '#10b981';
+        hint.textContent = '已复制 ✓';
+        setTimeout(function () { hint.textContent = ''; }, 1800);
+      }
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text); done(); });
+      } else { legacyCopy(text); done(); }
+    });
+
+    var submitBtn = document.getElementById('submitBtn');
+    if (submitBtn) {
+      submitBtn.addEventListener('click', function () {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '绑定中…';
+        fetch(SUBMIT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ticket: TICKET,
+            deviceId: info.deviceId || '',
+            uuid: info.uuid || '',
+            deviceModel: info.deviceModel || '',
+            systemVersion: info.systemVersion || '',
+            buildId: info.buildId || '',
+            appVersion: info.appVersion || fromAppVersion() || '',
+            wisDeviceId: info.wisDeviceId || '',
+            // 原样回传 App WebView 的 UA，电脑端提交时直接使用
+            userAgent: navigator.userAgent,
+            systemName: info.systemName || (/iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'ios' : 'android')
+          })
+        }).then(function (resp) {
+          return resp.json().then(function (json) { return { ok: resp.ok, json: json }; });
+        }).then(function (res) {
+          if (res.ok && res.json && res.json.ok) {
+            submitBtn.textContent = '已发送 ✓ 可以关闭本页';
+            hint.textContent = '';
+            card.insertAdjacentHTML('beforeend',
+              '<div class="tip blue" style="margin-top:12px">设备信息已发送到电脑端，' +
+              '那边会自动填好，不需要手动输入。</div>');
+          } else {
+            var msg = (res.json && res.json.error && res.json.error.message) || '绑定失败';
+            submitBtn.disabled = false;
+            submitBtn.textContent = '重新尝试绑定';
+            hint.style.color = '#d43b3b';
+            hint.textContent = msg;
+          }
+        }).catch(function () {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '重新尝试绑定';
+          hint.style.color = '#d43b3b';
+          hint.textContent = '网络请求失败，请检查网络后重试';
+        });
+      });
+    }
+  }
+
+  /* ---------- 失败：引导用今日校园打开 ---------- */
+  function showGuide(reason) {
+    var card = document.getElementById('card');
+    card.className = 'card';
+    var wechatTip = isWeChat()
+      ? '<div class="tip warn">⚠️ 你正在微信内打开。微信会屏蔽 App 跳转，也无法读取设备 ID。请退出微信，改用「今日校园」App 的扫一扫。</div>'
+      : '';
+    card.innerHTML =
+      '<div class="icon warn"><svg viewBox="0 0 24 24">' + iconPath('alert') + '</svg></div>' +
+      '<h1>请在今日校园中打开</h1>' +
+      '<p class="sub">设备 ID 只能在「今日校园」App 内读取——普通浏览器、微信、系统相机都没有权限</p>' +
+      wechatTip +
+      '<div class="id-box" style="text-align:left">' +
+        '<span class="id-label">正确操作</span>' +
+        '<div class="steps">' +
+          '1️⃣ 打开「今日校园」App<br>' +
+          '2️⃣ 点击右上角「＋」→ <b>扫一扫</b><br>' +
+          '3️⃣ 扫描电脑端显示的二维码' +
+        '</div>' +
+      '</div>' +
+      '<button class="btn primary" id="openApp">尝试打开今日校园</button>' +
+      '<button class="btn ghost" id="retry">重新尝试获取</button>' +
+      '<details><summary>环境调试信息</summary><pre id="dbg"></pre></details>';
+
+    document.getElementById('dbg').textContent =
+      'URL: ' + location.href + '\n' +
+      'UA: ' + navigator.userAgent + '\n' +
+      'cordova: ' + (window.cordova ? '存在' : '不存在') + '\n' +
+      'BH_MOBILE: ' + (typeof BH_MOBILE !== 'undefined' ? '存在' : '不存在') + '\n' +
+      '原因: ' + (reason || '未检测到今日校园运行环境');
+
+    document.getElementById('retry').addEventListener('click', function () { location.reload(); });
+    document.getElementById('openApp').addEventListener('click', tryOpenApp);
+  }
+
+  function tryOpenApp() {
+    if (isWeChat()) return;
+    if (!isiOS()) {
+      location.href = 'intent://campus/#Intent;scheme=wisedu;package=com.wisedu.cpdaily;' +
+        'S.browser_fallback_url=' + encodeURIComponent('https://www.wisedu.com/') + ';end';
+      return;
+    }
+    var schemes = ['wisedu://', 'cpdaily://', 'campushoy://'];
+    var i = 0;
+    (function next() {
+      if (i >= schemes.length) return;
+      location.href = schemes[i++];
+      setTimeout(next, 900);
+    })();
+  }
+
+  /* ---------- 取设备信息的三条途径 ---------- */
+  //
+  // MAMPDevice.getDeviceInfo 会同时返回 uuid 与 deviceId：
+  //   uuid     = 系统级设备标识（换系统/清刷机可能变化）
+  //   deviceId = 今日校园 App 自己生成并持久化的 UUID（CpUUID），
+  //              提交签到时 CpdailyInfo 里用的就是它
+  // 两者含义不同，不能混用；下面同时收集，由用户确认绑定哪一个。
+  // 从 App 的 WebView UA 里解析机型、Android 版本、构建号。
+  // 插件不保证返回这些字段，而 UA 一定带，且与真机完全一致。
+  function parseUA(ua) {
+    var out = { systemVersion: '', model: '', buildId: '' };
+    if (!ua) return out;
+    var v = ua.match(/Android\s+([\d.]+)/i);
+    if (v) out.systemVersion = v[1];
+    var m = ua.match(/Android\s+[\d.]+\s*;\s*([^;)]+?)\s+Build\//i);
+    if (m) out.model = m[1].replace(/^wv$/i, '').trim();
+    var b = ua.match(/Build\/([^;\s)]+)/i);
+    if (b) out.buildId = b[1];
+    return out;
+  }
+
+  // 不同 App 版本/插件返回结构差异很大：可能是字符串、JSON 字符串、
+  // 或嵌在 data / deviceInfo / value 里的对象，这里统一归一化。
+  function flatten(input) {
+    function obj(value, depth) {
+      if (depth > 3 || value == null) return {};
+      if (typeof value === 'string') {
+        try { return obj(JSON.parse(value), depth + 1); } catch (e) { return { deviceId: value }; }
+      }
+      return typeof value === 'object' && !Array.isArray(value) ? value : {};
+    }
+    var root = obj(input, 0);
+    var nested = [
+      obj(root.data, 0), obj(root.deviceInfo, 0), obj(root.value, 0),
+      obj(obj(root.data, 0).value, 0),
+    ];
+    var records = [root].concat(nested);
+    function idOf(v) {
+      return v.device_id || v.deviceId || v.uuid || v.id || '';
+    }
+    var rec = {};
+    for (var i = 0; i < records.length; i++) {
+      if (idOf(records[i])) { rec = records[i]; break; }
+    }
+    var id = String(idOf(rec) || '').trim();
+    if (id.length < 8) return null;
+    return {
+      deviceId: id,
+      uuid: String(rec.uuid || ''),
+      model: String(rec.model || rec.deviceModel || ''),
+      systemName: String(rec.systemName || rec.platform || ''),
+      systemVersion: String(rec.systemVersion || rec.osVersion || ''),
+      buildId: String(rec.buildId || ''),
+      appVersion: String(rec.appVersion || rec.cpdailyVersion || ''),
+      wisDeviceId: String(rec.wisDeviceId || rec.wis_device_id || ''),
+    };
+  }
+
+  // 从 UA 里取今日校园 App 版本（cpdaily/x.x.x）
+  function fromAppVersion() {
+    var m = navigator.userAgent.match(/cpdaily\/([\d.]+)/i);
+    return m ? m[1] : '';
+  }
+
+  function handleResult(res) {
+    if (finished) return;
+    var norm = flatten(res);
+    if (!norm) return;
+    var payload = norm;
+    var uuid = norm.uuid;
+    var deviceId = norm.deviceId;
+
+    // 机型/版本优先取插件返回值，缺失时从 UA 兜底
+    var fromUA = parseUA(navigator.userAgent);
+    var model = payload.model || fromUA.model;
+    var systemVersion = payload.systemVersion || fromUA.systemVersion;
+    var buildId = payload.buildId || fromUA.buildId;
+    // 插件可能返回形如 "23127PN0CC/14" 的组合值，拆开
+    if (model && model.indexOf('/') > 0) {
+      var parts = model.split('/');
+      model = parts[0];
+      if (!systemVersion) systemVersion = parts[1];
+    }
+
+    showSuccess({
+      deviceId: deviceId,
+      uuid: uuid,
+      deviceModel: String(model || ''),
+      systemVersion: String(systemVersion || ''),
+      buildId: String(buildId || ''),
+      appVersion: String(payload.appVersion || fromAppVersion() || ''),
+      wisDeviceId: String(payload.wisDeviceId || ''),
+      systemName: String(norm.systemName || ''),
+      raw: payload
+    });
+  }
+
+  function viaCordova() {
+    if (!window.cordova || !window.cordova.exec) return;
+    // 两个插件在不同 App 版本里存在：新版用 MAMPDevice，部分环境是 Device
+    var plugins = [['MAMPDevice', 'getDeviceInfo'], ['Device', 'getDeviceInfo']];
+    for (var i = 0; i < plugins.length; i++) {
+      try {
+        window.cordova.exec(
+          function (res) { handleResult(res); },
+          function () { /* 静默失败，走其他途径 */ },
+          plugins[i][0], plugins[i][1], []
+        );
+      } catch (e) { /* 忽略 */ }
+    }
+  }
+
+  function viaBHMobile() {
+    try {
+      if (typeof BH_MOBILE !== 'undefined' && BH_MOBILE.device &&
+          typeof BH_MOBILE.device.getDeviceId === 'function') {
+        BH_MOBILE.device.getDeviceId(function (res) { handleResult(res); });
+      }
+    } catch (e) { /* 忽略 */ }
+  }
+
+  function viaWindowDevice() {
+    if (window.device && window.device.uuid) {
+      handleResult({ deviceId: window.device.uuid, uuid: window.device.uuid });
+    }
+  }
+
+  function bootstrap() {
+    // 按平台加载今日校园官方公开的 Cordova 桥接脚本
+    var script = document.createElement('script');
+    script.src = isiOS()
+      ? 'https://static.campushoy.com/innerjs/cordova_ios.js'
+      : 'https://static.campushoy.com/innerjs/cordova_android.js';
+    script.onerror = function () { /* 离线环境忽略 */ };
+    document.head.appendChild(script);
+
+    document.addEventListener('deviceready', pollDevice, false);
+
+    // 持续轮询：桥接注入时机不确定，只在固定几次内尝试容易漏掉。
+    // 10 秒后仍未取到再展示引导页。
+    var attempts = 0;
+    function pollDevice() {
+      if (finished) return;
+      attempts++;
+      viaCordova();
+      viaBHMobile();
+      if (attempts >= 2) viaWindowDevice();
+
+      if (attempts >= 7) {
+        if (!finished) {
+          showGuide(isCpdaily()
+            ? '已检测到今日校园 UA，但原生桥未响应，可能是 App 版本不支持扫码授权'
+            : '当前不在今日校园 App 内');
+        }
+        return;
+      }
+      setTimeout(pollDevice, 1500);
+    }
+
+    setTimeout(pollDevice, 300);
+  }
+
+  bootstrap();
+})();
+</script>
+</body>
+</html>

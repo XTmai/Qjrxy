@@ -5,11 +5,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
-	"qingjin/internal/cpdaily"
-	"qingjin/internal/secure"
-	"qingjin/internal/store"
+	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/secure"
+	"qjrxy/internal/store"
 )
 
 // LoginTicket 是一次"待输入验证码"的登录。
@@ -35,7 +36,7 @@ func (s *Service) BeginLogin(ctx context.Context, userID, accountID int64) (*Log
 		return nil, errors.New("账号密码解析失败，请重新填写密码")
 	}
 	if password == "" {
-		return nil, errors.New("该账号未保存密码，请改用 Cookie 导入")
+		return nil, errors.New("该账号未保存密码，请先在账号里填写密码")
 	}
 
 	tenant := &cpdaily.Tenant{
@@ -117,7 +118,7 @@ func (s *Service) finishSession(ctx context.Context, account *store.Account, cli
 	cookies := client.Cookies()
 	encoded := encodeCookies(cookies)
 	if len(cookies) == 0 {
-		return nil, errors.New("登录未返回会话，请改用 Cookie 导入")
+		return nil, errors.New("登录未返回会话，请稍后重试")
 	}
 	status := "authorized"
 	// 用一次任务查询验证会话是否真正可用。
@@ -139,7 +140,7 @@ func (s *Service) VerifySession(ctx context.Context, userID, accountID int64) (s
 		return "", err
 	}
 	if !account.HasCookie() {
-		return "unknown", errors.New("尚未登录，请先登录或导入 Cookie")
+		return "unknown", errors.New("账号尚未登录，请先完成账密登录")
 	}
 	client := s.clientFor(account)
 	if _, err := client.ListAllTasks(ctx, account.Host, []cpdaily.TaskKind{cpdaily.KindSign}); err != nil {
@@ -153,30 +154,155 @@ func (s *Service) VerifySession(ctx context.Context, userID, accountID int64) (s
 	return "authorized", nil
 }
 
-// ImportCookies 直接导入浏览器 Cookie。
-func (s *Service) ImportCookies(ctx context.Context, userID, accountID int64, raw string) (string, error) {
-	account, err := s.db.AccountByID(ctx, userID, accountID)
-	if err != nil {
-		return "", err
+// describeAttendanceWindow 用一句话描述该账号当前的查寝任务状态。
+//
+// 比「同步到 N 个任务」有用得多：用户真正想知道的是「现在要不要管它」。
+func describeAttendanceWindow(s *Service, ctx context.Context, accountID int64) string {
+	w, ok := s.NextTaskWindow(ctx, accountID, string(cpdaily.KindAttendance))
+	if !ok {
+		return "今日暂无查寝任务"
 	}
-	cookies := cpdaily.ImportCookieString(raw)
-	if len(cookies) == 0 {
-		return "", errors.New("Cookie 格式不正确，应为 a=1; b=2 形式")
+	if w.Ready {
+		return "有查寝任务可执行"
 	}
-	client := cpdaily.NewClient(s.opts, cookies)
-	status := "authorized"
-	if _, err := client.ListAllTasks(ctx, account.Host, []cpdaily.TaskKind{cpdaily.KindSign}); err != nil {
-		if cpdaily.IsAuthExpired(err) {
-			status = "expired"
+	now := time.Now()
+	// 同一天只显示时刻，跨天补上日期
+	if w.Start.Format("2006-01-02") == now.Format("2006-01-02") {
+		return fmt.Sprintf("查寝 %s 开始", w.Start.Format("15:04"))
+	}
+	return fmt.Sprintf("查寝 %s 开始", w.Start.Format("01-02 15:04"))
+}
+
+// ProbeResult 是一次账号登录态探测的结果。
+type ProbeResult struct {
+	AccountID   int64  `json:"accountId"`
+	AccountName string `json:"accountName"`
+	// Status 取值：authorized（正常）/ relogged（已自动重登恢复）/ expired（需要人工登录）
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	TaskCount int    `json:"taskCount"`
+	Relogged  bool   `json:"relogged"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ProbeAccount 探测单个账号的登录态，并在会话失效时自动重新登录、同步任务。
+//
+// 这是「自动拉取任务」的核心：
+//  1. 用现有会话拉一次任务列表，成功即同步任务并更新登录态
+//  2. 会话失效 → 用保存的密码自动重登 → 重试拉取 → 写回新会话
+//  3. 没有密码或重登失败 → 标记 expired，等用户手动处理
+//
+// 全程不会因为某一步失败而中断其他账号的探测。
+func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) ProbeResult {
+	res := ProbeResult{AccountID: account.ID, AccountName: account.Alias}
+
+	// 情况一：从未登录过 / 已标记失效 → 直接尝试自动登录
+	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
+		if !hasCredentials(account) {
+			res.Status = "expired"
+			res.Message = "尚未登录，且未保存密码，请手动完成账密登录"
+			_ = s.db.RecordProbe(ctx, account.ID, "expired", res.Message)
+			return res
+		}
+		updated, err := s.AutoRelogin(ctx, account)
+		if err != nil {
+			res.Status = "expired"
+			res.Message = "自动登录失败，请手动登录"
+			res.Error = err.Error()
+			_ = s.db.RecordProbe(ctx, account.ID, "expired", res.Message)
+			return res
+		}
+		account = updated
+		res.Relogged = true
+	}
+
+	// 用当前会话拉任务；失效则重登后重试一次
+	tasks, err := s.SyncTasks(ctx, account.UserID, account.ID)
+	if err != nil && cpdaily.IsAuthExpired(err) && hasCredentials(account) && !res.Relogged {
+		if updated, reErr := s.AutoRelogin(ctx, account); reErr == nil {
+			account = updated
+			res.Relogged = true
+			tasks, err = s.SyncTasks(ctx, account.UserID, account.ID)
 		}
 	}
-	if err := s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(cookies), status); err != nil {
-		return "", err
+
+	if err != nil {
+		status, msg := "expired", "登录态失效，需要重新登录"
+		if !cpdaily.IsAuthExpired(err) {
+			// 非会话问题（网络、服务端异常）不该把账号标记成需要登录
+			status = account.LoginStatus
+			if status == "" || status == "unknown" {
+				status = "authorized"
+			}
+			msg = "探测失败：" + err.Error()
+		}
+		res.Status = status
+		res.Message = msg
+		res.Error = err.Error()
+		_ = s.db.RecordProbe(ctx, account.ID, status, res.Message)
+		return res
 	}
-	if status == "expired" {
-		return status, errors.New("Cookie 已失效，请重新复制")
+
+	// 只统计查寝任务：本项目只处理查寝，把签到/信息收集也算进来会让用户
+	// 误以为有一堆待打卡任务（实际那两类根本不会执行）。
+	attendance := 0
+	for i := range tasks {
+		if tasks[i].Kind == string(cpdaily.KindAttendance) {
+			attendance++
+		}
 	}
-	return status, nil
+	res.TaskCount = attendance
+	detail := describeAttendanceWindow(s, ctx, account.ID)
+	prefix := "登录态正常"
+	if res.Relogged {
+		res.Status = "relogged"
+		prefix = "会话已自动恢复"
+	} else {
+		res.Status = "authorized"
+	}
+	res.Message = prefix + "，" + detail
+	_ = s.db.RecordProbe(ctx, account.ID, "authorized", res.Message)
+	return res
+}
+
+// ProbeAllAccounts 探测所有账号（后台定时任务使用）。
+func (s *Service) ProbeAllAccounts(ctx context.Context) []ProbeResult {
+	accounts, err := s.db.ListAllAccounts(ctx)
+	if err != nil {
+		return nil
+	}
+	results := make([]ProbeResult, 0, len(accounts))
+	for i := range accounts {
+		// 单个账号失败不影响其他账号
+		if ctx.Err() != nil {
+			break
+		}
+		results = append(results, s.ProbeAccount(ctx, &accounts[i]))
+	}
+	return results
+}
+
+// hasCredentials 判断账号是否保存了可自动登录的密码。
+func hasCredentials(a *store.Account) bool {
+	return strings.TrimSpace(a.PasswordEnc) != ""
+}
+
+// AutoRelogin 用账号保存的密码自动重新登录，用于会话过期后的无感恢复。
+//
+// 成功返回刷新后的账号；学校要求图形验证码时返回错误，
+// 这种情况需要用户到账号页手动完成一次登录。
+func (s *Service) AutoRelogin(ctx context.Context, account *store.Account) (*store.Account, error) {
+	if !hasCredentials(account) {
+		return nil, errors.New("账号未保存密码，无法自动重新登录")
+	}
+	ticket, err := s.BeginLogin(ctx, account.UserID, account.ID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket.ID != "" {
+		return nil, errors.New("本次登录需要图形验证码，请到账号页手动登录一次")
+	}
+	return s.db.AccountByID(ctx, account.UserID, account.ID)
 }
 
 // CaptchaDataURL 把验证码图片转成 data URL。
@@ -188,22 +314,50 @@ func CaptchaDataURL(data []byte) string {
 }
 
 // SyncTasks 拉取账号三类任务的待办列表并写入缓存。
+//
+// 会话失效时自动用保存的密码重新登录一次再重试，用户无需手动操作。
 func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]store.Task, error) {
 	account, err := s.db.AccountByID(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if !account.HasCookie() {
-		return nil, errors.New("账号尚未登录，请先登录或导入 Cookie")
+	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
+		if !hasCredentials(account) {
+			return nil, errors.New("账号尚未登录，请先完成账密登录")
+		}
+		if account, err = s.AutoRelogin(ctx, account); err != nil {
+			return nil, fmt.Errorf("自动登录失败：%w", err)
+		}
 	}
 	client := s.clientFor(account)
 	kinds := []cpdaily.TaskKind{cpdaily.KindAttendance, cpdaily.KindSign, cpdaily.KindCollect}
 	tasks, err := client.ListAllTasks(ctx, account.Host, kinds)
+	if err != nil && cpdaily.IsAuthExpired(err) && hasCredentials(account) {
+		// 提交时才发现会话过期：重登一次再试。
+		if updated, reErr := s.AutoRelogin(ctx, account); reErr == nil {
+			account = updated
+			client = s.clientFor(account)
+			tasks, err = client.ListAllTasks(ctx, account.Host, kinds)
+		}
+	}
 	if err != nil {
 		if cpdaily.IsAuthExpired(err) {
 			_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
+			return nil, fmt.Errorf("拉取任务失败：%w", err)
 		}
-		return nil, fmt.Errorf("拉取任务失败：%w", err)
+		// 部分成功：某一类任务失败（如学校未开通信息收集），但其余已拿到。
+		// 本项目只用查寝，只要查寝那一类没整体失败就继续写缓存，
+		// 否则会因无关类型的错误把可用任务整批丢掉。
+		hasAttendance := false
+		for _, t := range tasks {
+			if t.Kind == cpdaily.KindAttendance {
+				hasAttendance = true
+				break
+			}
+		}
+		if !hasAttendance && !strings.Contains(err.Error(), "查寝") {
+			return nil, fmt.Errorf("拉取任务失败：%w", err)
+		}
 	}
 
 	cached := make([]store.Task, 0, len(tasks))

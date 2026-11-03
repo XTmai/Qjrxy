@@ -1,4 +1,7 @@
 // Package web 内嵌前端静态资源，保证单文件二进制即可部署。
+//
+// dist 目录由 web/frontend 的 Vite 构建产出（make build）：
+// 带 hash 的 assets/* 长缓存，index.html 与 device.html 不缓存。
 package web
 
 import (
@@ -8,6 +11,7 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 )
 
 //go:embed all:dist
@@ -18,12 +22,11 @@ func FS() (fs.FS, error) {
 	return fs.Sub(embedded, "dist")
 }
 
-// assetVersion 是资源指纹，用于给静态文件加版本查询串。
-// 二进制内嵌内容不变则指纹不变，前端改动后重新编译会自动变化。
-var assetVersion = computeVersion()
+// Version 返回当前静态资源指纹（诊断用）。
+func Version() string { return computeVersion() }
 
 func computeVersion() string {
-	sub, err := fs.Sub(embedded, "dist")
+	sub, err := FS()
 	if err != nil {
 		return "0"
 	}
@@ -43,10 +46,8 @@ func computeVersion() string {
 	return hex.EncodeToString(hash.Sum(nil))[:12]
 }
 
-// Version 返回当前静态资源指纹。
-func Version() string { return assetVersion }
-
-// Handler 返回静态资源处理器；未知路径回退到 index.html（单页应用）。
+// Handler 返回静态资源处理器；未知路径回退到 index.html（单页应用），
+// /device 前缀回退到 device.html（今日校园 App 内的扫码授权页）。
 func Handler() (http.Handler, error) {
 	sub, err := FS()
 	if err != nil {
@@ -60,46 +61,39 @@ func Handler() (http.Handler, error) {
 			path = "index.html"
 		}
 
-		// HTML 入口不做缓存，保证资源指纹总是最新
+		// HTML 入口不做缓存，保证引用的资源指纹总是最新
 		if path == "index.html" || path == "device.html" {
 			w.Header().Set("Cache-Control", "no-cache")
-			serveHTML(w, r, sub, path)
+			http.ServeContent(w, r, path, time.Time{}, strings.NewReader(mustRead(sub, path)))
 			return
 		}
 
 		if _, err := fs.Stat(sub, path); err != nil {
+			// SPA / device 页回退
+			fallback := "index.html"
 			if strings.HasPrefix(r.URL.Path, "/device") {
-				w.Header().Set("Cache-Control", "no-cache")
-				serveHTML(w, r, sub, "device.html")
-				return
+				fallback = "device.html"
 			}
 			w.Header().Set("Cache-Control", "no-cache")
-			serveHTML(w, r, sub, "index.html")
+			http.ServeContent(w, r, fallback, time.Time{}, strings.NewReader(mustRead(sub, fallback)))
 			return
 		}
 
-		// JS 模块：把相对 import 的路径改写为带版本号，避免浏览器磁盘缓存
-		// 留存的旧模块（旧副本没有 ETag，无法协商，只能一直被复用）。
-		// 第三方库（vendor/）不做改写，按普通静态文件处理。
-		if strings.HasSuffix(path, ".js") && !strings.HasPrefix(path, "vendor/") {
-			serveModule(w, r, sub, path)
+		// Vite 产物：文件名带内容 hash，直接长缓存
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			fileServer.ServeHTTP(w, r)
 			return
 		}
 
-		// 统一走协商缓存：ES 模块之间互相 import，无法给每个子模块加指纹。
-		//
-		// 注意：embed.FS 的 ModTime 是零值，http.FileServer 不会设置 Last-Modified，
-		// 浏览器拿不到验证器就会一直复用旧副本。这里按内容计算 ETag 补上，
-		// 配合 Cache-Control: no-cache 实现「内容变了立刻生效」。
-		if strings.HasPrefix(r.URL.Path, "/assets/") || strings.HasPrefix(r.URL.Path, "/vendor/") {
-			etag := assetETag(sub, path)
-			if etag != "" {
-				w.Header().Set("ETag", etag)
-				if match := r.Header.Get("If-None-Match"); match != "" && etagInMatch(match, etag) {
-					w.Header().Set("Cache-Control", "no-cache")
-					w.WriteHeader(http.StatusNotModified)
-					return
-				}
+		// 其余静态文件（favicon.svg 等）：按内容 ETag 协商。
+		// embed.FS 的 ModTime 是零值，http.FileServer 不会设置 Last-Modified。
+		if etag := assetETag(sub, path); etag != "" {
+			w.Header().Set("ETag", etag)
+			if match := r.Header.Get("If-None-Match"); match != "" && etagInMatch(match, etag) {
+				w.Header().Set("Cache-Control", "no-cache")
+				w.WriteHeader(http.StatusNotModified)
+				return
 			}
 			w.Header().Set("Cache-Control", "no-cache")
 		}
@@ -107,36 +101,12 @@ func Handler() (http.Handler, error) {
 	}), nil
 }
 
-// moduleNames 是前端拆分的模块文件，用于给 import 路径加版本号。
-var moduleNames = []string{
-	"api.js", "ui.js", "app.js",
-	"page-dashboard.js", "page-accounts.js", "page-tasks.js",
-	"page-logs.js", "page-quota.js", "page-security.js",
-}
-
-// serveModule 输出 JS 模块，并把相对 import 改写为带版本号的 URL，
-// 使每次重新编译后旧模块立即失效。
-func serveModule(w http.ResponseWriter, r *http.Request, sub fs.FS, name string) {
+func mustRead(sub fs.FS, name string) string {
 	data, err := fs.ReadFile(sub, name)
 	if err != nil {
-		http.NotFound(w, r)
-		return
+		return ""
 	}
-	content := string(data)
-	for _, mod := range moduleNames {
-		content = strings.ReplaceAll(content,
-			"'./"+mod+"'", "'./"+mod+"?v="+assetVersion+"'")
-	}
-
-	etag := `"` + assetVersion + `"`
-	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "no-cache")
-	if etagInMatch(r.Header.Get("If-None-Match"), etag) {
-		w.WriteHeader(http.StatusNotModified)
-		return
-	}
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	_, _ = w.Write([]byte(content))
+	return string(data)
 }
 
 // assetETag 按文件内容计算强 ETag，形如 "3f2a1b..."。
@@ -162,19 +132,4 @@ func etagInMatch(header, etag string) bool {
 		}
 	}
 	return false
-}
-
-func serveHTML(w http.ResponseWriter, r *http.Request, sub fs.FS, name string) {
-	data, err := fs.ReadFile(sub, name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	// 给资源引用注入版本号
-	content := strings.ReplaceAll(string(data), "/assets/app.css", "/assets/app.css?v="+assetVersion)
-	content = strings.ReplaceAll(content, "/assets/app.js", "/assets/app.js?v="+assetVersion)
-	content = strings.ReplaceAll(content, "/assets/logo.svg", "/assets/logo.svg?v="+assetVersion)
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(content))
 }

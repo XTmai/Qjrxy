@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -362,9 +363,9 @@ func TestExtractScriptURLs(t *testing.T) {
 // TestSchemeHost 校验从绝对地址取 scheme://host。
 func TestSchemeHost(t *testing.T) {
 	cases := map[string]string{
-		"https://host.com/iap":        "https://host.com",
-		"http://localhost:8080/a/b":   "http://localhost:8080",
-		"not a url":                   "",
+		"https://host.com/iap":      "https://host.com",
+		"http://localhost:8080/a/b": "http://localhost:8080",
+		"not a url":                 "",
 	}
 	for in, want := range cases {
 		if got := schemeHost(in); got != want {
@@ -378,10 +379,10 @@ func TestSchemeHost(t *testing.T) {
 // 旧实现只在 302 分支处理，导致误报「登录失败（HTTP 200）」。
 func TestIAPRedirectIsSuccess(t *testing.T) {
 	cases := []struct {
-		code  string
-		fail  bool
+		code string
+		fail bool
 	}{
-		{"REDIRECT", false},   // 成功
+		{"REDIRECT", false}, // 成功
 		{"FAIL_UPNOTMATCH", true},
 		{"CAPTCHA_NOTMATCH", true},
 	}
@@ -506,9 +507,9 @@ func TestDeviceProfileIOS(t *testing.T) {
 // TestIOSCookieHeader 校验 iOS 手动 Cookie 拼接。
 func TestIOSCookieHeader(t *testing.T) {
 	c := NewClient(ClientOptions{}, map[string]string{
-		"sessionToken":  "TOKEN",
-		"MOD_AUTH_CAS":  "CAS",
-		"CASTGC":        "UNUSED",
+		"sessionToken": "TOKEN",
+		"MOD_AUTH_CAS": "CAS",
+		"CASTGC":       "UNUSED",
 	})
 	got := c.iosCookieHeader("TENANT")
 	for _, want := range []string{
@@ -660,9 +661,10 @@ func TestFlexIntUnmarshal(t *testing.T) {
 
 // TestEndpointPaths 锁定各任务类型的接口路径。
 // 回归：以下路径曾被写错，实测 404：
-//   签到详情 detailSignTaskInst → 应为 detailSignInstance
-//   签到提交 completeSignIn     → 应为 submitSign
-//   签到上传 sign/getUploadPolicy → 应为 stu/obs/getUploadPolicy
+//
+//	签到详情 detailSignTaskInst → 应为 detailSignInstance
+//	签到提交 completeSignIn     → 应为 submitSign
+//	签到上传 sign/getUploadPolicy → 应为 stu/obs/getUploadPolicy
 func TestEndpointPaths(t *testing.T) {
 	sign := EndpointsFor(KindSign)
 	cases := []struct{ name, got, want string }{
@@ -744,6 +746,61 @@ func TestAttendanceSuccessResponse(t *testing.T) {
 			strings.Contains(parsed.Message, "成功")
 		if ok != c.want {
 			t.Errorf("%s：判定为 %v，期望 %v", c.name, ok, c.want)
+		}
+	}
+}
+
+// TestLooksLikeLoginPage 校验会话失效时返回的登录页能被识别。
+//
+// 回归：接口在会话过期时返回 IAP 登录页 HTML，曾被当成
+// 「响应不是有效 JSON」的普通错误，导致 IsAuthExpired 无法识别、
+// 自动重登录不触发。
+func TestLooksLikeLoginPage(t *testing.T) {
+	pages := []string{
+		`<!DOCTYPE html><html lang=en><head><meta charset=utf-8><link rel=icon href=/iap/login/mod.ico>`,
+		`<html><head><title>统一身份认证平台</title></head></html>`,
+		`<html><form id="casLoginForm"></form></html>`,
+		`<html><script>location.href="/authserver/login"</script></html>`,
+	}
+	for _, p := range pages {
+		if !looksLikeLoginPage([]byte(p)) {
+			t.Errorf("应识别为登录页：%s", p[:40])
+		}
+	}
+
+	notPages := []string{
+		``,
+		`{"code":"0","datas":{}}`,
+		`<xml>not a login page</xml>`,
+	}
+	for _, p := range notPages {
+		if looksLikeLoginPage([]byte(p)) {
+			t.Errorf("不应识别为登录页：%s", p)
+		}
+	}
+}
+
+// TestIsAuthExpiredDetectsLoginPage 校验登录页错误会被判定为会话失效。
+func TestIsAuthExpiredDetectsLoginPage(t *testing.T) {
+	cases := []error{
+		&APIError{Code: "401", Message: "登录状态已失效，需要重新登录"},
+		&APIError{Code: "500", Message: "请重新登录"},
+		errors.New("登录状态已失效，需要重新登录"),
+	}
+	for _, err := range cases {
+		if !IsAuthExpired(err) {
+			t.Errorf("应判定为会话失效：%v", err)
+		}
+	}
+
+	notExpired := []error{
+		nil,
+		errors.New("网络请求失败"),
+		&APIError{Code: "0", Message: "查寝未开始"},
+	}
+	for _, err := range notExpired {
+		if IsAuthExpired(err) {
+			t.Errorf("不应判定为会话失效：%v", err)
 		}
 	}
 }

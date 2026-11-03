@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"qingjin/internal/config"
-	"qingjin/internal/server"
-	"qingjin/internal/service"
-	"qingjin/internal/store"
+	"qjrxy/internal/config"
+	"qjrxy/internal/server"
+	"qjrxy/internal/service"
+	"qjrxy/internal/store"
 )
 
 type testEnv struct {
@@ -25,9 +25,10 @@ func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := &config.Config{
-		Addr:      ":0",
-		DataDir:   dir,
-		SecretKey: bytes.Repeat([]byte{7}, 32),
+		Addr:         ":0",
+		DataDir:      dir,
+		SecretKey:    bytes.Repeat([]byte{7}, 32),
+		QuotaEnabled: true, // 兑换等用例依赖额度体系
 	}
 	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {

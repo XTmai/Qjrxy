@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"qingjin/internal/service"
+	"qjrxy/internal/service"
 )
 
 // Server 持有 HTTP 服务依赖。
@@ -44,8 +44,8 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.withUser(s.handleDeleteAccount))
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.withUser(s.handleAccountLogin))
 	mux.HandleFunc("POST /api/accounts/{id}/captcha", s.withUser(s.handleAccountCaptcha))
-	mux.HandleFunc("POST /api/accounts/{id}/cookies", s.withUser(s.handleImportCookies))
 	mux.HandleFunc("POST /api/accounts/{id}/verify", s.withUser(s.handleVerifySession))
+	mux.HandleFunc("POST /api/accounts/probe", s.withUser(s.handleProbeAccounts))
 	mux.HandleFunc("POST /api/accounts/{id}/photo", s.withUser(s.handleUploadPhoto))
 	mux.HandleFunc("GET /api/accounts/{id}/photo", s.withUser(s.handleGetPhoto))
 	mux.HandleFunc("POST /api/accounts/{id}/device-ticket", s.withUser(s.handleDeviceTicket))
@@ -64,9 +64,11 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("PATCH /api/plans/{id}", s.withUser(s.handleUpdatePlan))
 	mux.HandleFunc("DELETE /api/plans/{id}", s.withUser(s.handleDeletePlan))
 	mux.HandleFunc("POST /api/plans/{id}/toggle", s.withUser(s.handleTogglePlan))
+	mux.HandleFunc("POST /api/plans/{id}/reset", s.withUser(s.handleResetPlanRun))
 
 	// ---- 记录 ----
 	mux.HandleFunc("GET /api/logs", s.withUser(s.handleListLogs))
+	mux.HandleFunc("GET /api/logs/trend", s.withUser(s.handleLogTrend))
 	mux.HandleFunc("GET /api/logs/{id}", s.withUser(s.handleGetLog))
 
 	// ---- 工作台 ----

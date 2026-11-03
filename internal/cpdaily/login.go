@@ -563,12 +563,18 @@ func schemeHost(rawURL string) string {
 }
 
 func submitCloud(ctx context.Context, client *Client, tenant *Tenant, state *LoginState) error {
+	return submitCloudEndpoint(ctx, client, tenant, "/doLogin", state.Params)
+}
+
+// submitCloudEndpoint 提交 IAP 登录（账密 /doLogin 或短信 /doLoginMobile）。
+// 两者的响应语义一致：REDIRECT 成功，其余 resultCode 按映射转成中文错误。
+func submitCloudEndpoint(ctx context.Context, client *Client, tenant *Tenant, endpoint string, params map[string]string) error {
 	base := serviceBase(tenant.IDSURL, "iap")
 	form := url.Values{}
-	for k, v := range state.Params {
+	for k, v := range params {
 		form.Set(k, v)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/doLogin?r="+fmt.Sprintf("%d", time.Now().UnixMilli()),
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+endpoint+"?r="+fmt.Sprintf("%d", time.Now().UnixMilli()),
 		strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -600,13 +606,21 @@ func submitCloud(ctx context.Context, client *Client, tenant *Tenant, state *Log
 	}
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if len(body) > 0 && strings.Contains(string(body), "resultCode") {
+	if len(body) > 0 && (strings.Contains(string(body), "resultCode") || strings.Contains(string(body), "\"code\"")) {
 		var payload struct {
 			ResultCode string `json:"resultCode"`
+			Code       int    `json:"code"`
 			Message    string `json:"message"`
 			URL        string `json:"url"`
 		}
 		if jsonUnmarshal(body, &payload) == nil {
+			// 部分接口用 {code, message} 风格（如短信相关），没有 resultCode
+			if payload.ResultCode == "" && payload.Code != 0 && payload.Code != 200 {
+				if payload.Message != "" {
+					return errors.New(payload.Message)
+				}
+				return fmt.Errorf("登录失败（code=%d）", payload.Code)
+			}
 			switch payload.ResultCode {
 			case "REDIRECT":
 				// 登录成功：IAP 返回 HTTP 200 + {"resultCode":"REDIRECT","url":"/portal/login"}，
@@ -620,13 +634,56 @@ func submitCloud(ctx context.Context, client *Client, tenant *Tenant, state *Log
 				return errors.New("验证码错误或已过期，请重新登录获取新验证码")
 			case "FAIL_UPNOTMATCH":
 				return errors.New("用户名或密码错误（账号不存在，或密码不正确）")
+			case "FAIL_UPNULL":
+				return errors.New("账号或密码为空，请检查填写内容")
 			case "CAPTCHA_ISNULL":
 				return errors.New("学校要求输入验证码，请重新登录后输入")
+			case "LT_NULL", "LT_NOTMATCH":
+				return errors.New("登录会话已失效，请重试")
+			case "MOBILE_CAPTCHA_NOTMATCH":
+				return errors.New("短信验证码错误或已过期，请重新获取")
+			case "MOBILE_BINDING_ERROR":
+				return errors.New("该手机号没有绑定此账号，请确认手机号")
+			case "USER_FREEZED":
+				return errors.New("账号已被冻结，请联系学校管理员")
+			case "USER_STOPPED":
+				return errors.New("账号已停用，请联系学校管理员")
+			case "UNDER_REVIEW":
+				return errors.New("账号正在审核中，审核通过后才能登录")
+			case "NO_AUTH":
+				return errors.New("该账号没有登录权限，请联系学校管理员")
+			case "FORCE_MOD_PASS":
+				// 学校统一身份要求先改密码（常见于初始密码、密码过期）。
+				// 必须先在学校侧完成一次改密，工具端无法绕过。
+				return errors.New("学校要求该账号先修改密码才能登录：" +
+					"请先在今日校园 App 或学校统一身份认证网页完成一次改密，" +
+					"再把新密码填到本工具后重新登录")
+			case "FORCE_PASS_FAIL":
+				return errors.New("强制修改密码失败，请到学校统一身份认证网页完成改密后再试")
+			case "NEW_PASS_NOTRULE":
+				return errors.New("新密码不符合学校规则，请到学校网页改密后再试")
+			case "NEW_ORIGINAL_PASS_SAME":
+				return errors.New("新密码不能与上次相同，请到学校网页改密后再试")
+			case "ORIGINAL_PASS_FAIL":
+				return errors.New("原密码校验失败，请到学校网页确认当前密码")
+			case "UNIQUE_CONFLICT":
+				return errors.New("账号与考生号冲突，请联系学校管理员")
+			case "TOKEN_NULL", "TOKEN_EXPIRE":
+				return errors.New("登录令牌已失效，请重试")
+			case "CAMPUS_UNKOWNHOST":
+				return errors.New("学校认证服务地址无法解析，请稍后重试")
+			case "CAMPUS_TIMEOUT":
+				return errors.New("学校认证服务响应超时，请稍后重试")
+			case "SOCIAL_LOGIN_FAIL", "SOCIAL_LOGIN_EXIST":
+				return errors.New("社交账号绑定异常，请先在今日校园 App 内处理账号绑定")
 			default:
 				if payload.Message != "" {
 					return fmt.Errorf("登录失败：%s", payload.Message)
 				}
-				return fmt.Errorf("登录失败：%s", payload.ResultCode)
+				// 保留原始错误码便于排查，同时提示可能的方向
+				return fmt.Errorf("登录失败（学校返回 %s）："+
+					"请确认账号状态正常；若刚改过密码或首次登录，"+
+					"建议先在今日校园 App 里登录一次再回到本工具", payload.ResultCode)
 			}
 		}
 	}

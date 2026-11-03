@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"qingjin/internal/config"
-	"qingjin/internal/cpdaily"
-	"qingjin/internal/secure"
-	"qingjin/internal/store"
+	"qjrxy/internal/config"
+	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/secure"
+	"qjrxy/internal/store"
 )
 
 // Service 聚合业务逻辑，供 HTTP 层与调度器共用。
@@ -142,7 +142,6 @@ type AccountInput struct {
 	Lon           float64 `json:"lon"`
 	Lat           float64 `json:"lat"`
 	Abnormal      string  `json:"abnormalReason"`
-	Cookies       string  `json:"cookies"`
 }
 
 // CreateAccount 解析学校并保存账号（不执行登录）。
@@ -184,10 +183,6 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 		Lat:           in.Lat,
 		Abnormal:      defaultIfEmpty(in.Abnormal, "在校"),
 		LoginStatus:   "unknown",
-	}
-	if cookies := strings.TrimSpace(in.Cookies); cookies != "" {
-		account.Cookies = encodeCookies(cpdaily.ImportCookieString(cookies))
-		account.LoginStatus = "authorized"
 	}
 	return s.db.CreateAccount(ctx, account)
 }
@@ -256,10 +251,6 @@ func (s *Service) UpdateAccount(ctx context.Context, userID, id int64, in Accoun
 	}
 	if in.Abnormal != "" {
 		account.Abnormal = in.Abnormal
-	}
-	if cookies := strings.TrimSpace(in.Cookies); cookies != "" {
-		account.Cookies = encodeCookies(cpdaily.ImportCookieString(cookies))
-		account.LoginStatus = "authorized"
 	}
 	if err := s.db.UpdateAccount(ctx, account); err != nil {
 		return nil, err

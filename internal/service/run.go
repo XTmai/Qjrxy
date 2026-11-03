@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"qingjin/internal/cpdaily"
-	"qingjin/internal/store"
+	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/store"
 )
 
 // RunOptions 控制一次任务执行。
@@ -39,13 +39,20 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	if err != nil {
 		return nil, err
 	}
-	if !account.HasCookie() {
-		return nil, errors.New("账号尚未登录，请先登录或导入 Cookie")
+	// 会话缺失或已过期时，先用保存的密码自动重新登录，
+	// 避免「隔了几天再执行就报会话过期」需要手动处理。
+	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
+		if !hasCredentials(account) {
+			return nil, errors.New("账号尚未登录，请先在账号页完成账密登录")
+		}
+		if account, err = s.AutoRelogin(ctx, account); err != nil {
+			return nil, fmt.Errorf("自动登录失败：%w", err)
+		}
 	}
 	// 设备 ID 为空时直接拒绝：拿空值提交等于用一台陌生设备去撞服务端，
 	// 会被判定为「更换手机」并累加风控计数，必须先在账号里绑定真实设备。
 	if strings.TrimSpace(account.DeviceID) == "" {
-		return nil, errors.New("尚未绑定设备信息：请点「扫码自动获取」，用你平时打卡的那台手机扫二维码")
+		return nil, errors.New("尚未绑定设备信息：请到账号页扫码获取，用你平时打卡的那台手机扫二维码")
 	}
 	// 本项目只处理查寝（宿舍考勤）任务。
 	// 二维码签到类任务涉及范围/时效差异较大，且容易产生无效提交，故不执行。
@@ -104,6 +111,14 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	}
 
 	result, detail, err := client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
+	// 提交时才发现会话失效：自动重登一次并重试，用户无感知。
+	if err == nil && !result.Success && hasCredentials(account) && cpdaily.IsAuthExpired(errors.New(result.Message)) {
+		if updated, reErr := s.AutoRelogin(ctx, account); reErr == nil {
+			account = updated
+			client = s.clientFor(account)
+			result, detail, err = client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
+		}
+	}
 	if err != nil {
 		detailJSON := marshalDetail(map[string]any{"error": err.Error()})
 		_ = s.db.UpdateLog(ctx, logID, store.StatusPending, err.Error(), detailJSON)
@@ -147,6 +162,88 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		Hint: result.Hint, Task: task.TaskName}, nil
 }
 
+// TaskWindow 是一个任务的签到时间窗口。
+type TaskWindow struct {
+	TaskName string    `json:"taskName"`
+	Start    time.Time `json:"start"`
+	End      time.Time `json:"end"`
+	// Ready 表示此刻已进入可提交时段。
+	Ready bool `json:"ready"`
+}
+
+// NextTaskWindow 从本地任务缓存算出「下一个值得关注的签到窗口」。
+//
+// 自动计划的核心语义是「已知窗口 → 窗口内尽快执行」，而不是反复同步接口
+// 试探任务什么时候开始。窗口信息在同步任务时就已经落在本地缓存里，
+// 调度器据此算出精确的触发时刻，到点前发一次请求即可。
+//
+// 返回值 rules：
+//   - 已进入窗口 → Ready=true，应立即执行
+//   - 还没到窗口 → Ready=false，Start 是应当唤醒的时间
+//   - 没有可用窗口（无任务 / 已过期 / 已完成 / 无时间字段）→ ok=false
+func (s *Service) NextTaskWindow(ctx context.Context, accountID int64, kind string) (TaskWindow, bool) {
+	cached, err := s.db.TasksByAccount(ctx, accountID)
+	if err != nil {
+		return TaskWindow{}, false
+	}
+	now := time.Now()
+	want := strings.TrimSpace(kind)
+
+	var best TaskWindow
+	var found bool
+	for i := range cached {
+		t := &cached[i]
+		if t.Status == "done" || t.Status == "leave" {
+			continue
+		}
+		if want != "" && t.Kind != want {
+			continue
+		}
+		st := strings.TrimSpace(t.SignStatus)
+		if st == "3" || st == "4" {
+			continue // 已过期 / 已签到
+		}
+
+		w := parseTaskWindow(t)
+		if !w.ok {
+			// 没有时间字段，无法算出窗口：
+			//   - signStatus=2（学校明确说未到时间）→ 不可执行，且没有可唤醒的时刻
+			//   - 其它（如自由签到）→ 交给服务端判定
+			if st == "2" {
+				continue
+			}
+			return TaskWindow{TaskName: t.TaskName, Ready: true}, true
+		}
+		if now.After(w.end) {
+			continue // 该窗口已关闭
+		}
+		candidate := TaskWindow{
+			TaskName: t.TaskName,
+			Start:    w.start,
+			End:      w.end,
+			Ready:    !now.Before(w.start),
+		}
+		// 优先返回已就绪的；否则返回最早开启的那个
+		if candidate.Ready {
+			return candidate, true
+		}
+		if !found || candidate.Start.Before(best.Start) {
+			best = candidate
+			found = true
+		}
+	}
+	return best, found
+}
+
+// HasRunnableTask 判断账号当前是否存在可提交的指定类型任务。
+//
+// 供调度器在真正提交前做前置判断：任务还没到签到时间时直接等下一轮，
+// 不要发起一次必然被拒的请求（既浪费额度也会污染执行记录）。
+func (s *Service) HasRunnableTask(ctx context.Context, accountID int64, kind string) bool {
+	w, ok := s.NextTaskWindow(ctx, accountID, kind)
+	return ok && w.Ready
+}
+
 // pickTask 选择要执行的任务。
 func (s *Service) pickTask(ctx context.Context, account *store.Account, opts RunOptions) (*store.Task, error) {
 	if opts.TaskID > 0 {
@@ -174,7 +271,9 @@ func (s *Service) pickTask(ctx context.Context, account *store.Account, opts Run
 	}
 	for i := range cached {
 		t := cached[i]
-		if t.Status == "done" {
+		// 已处理、已请假的任务都不能再提交：
+		// 给请假任务打卡会产生错误的考勤记录。
+		if t.Status == "done" || t.Status == "leave" {
 			continue
 		}
 		// 只挑查寝任务
@@ -184,9 +283,44 @@ func (s *Service) pickTask(ctx context.Context, account *store.Account, opts Run
 		if opts.Kind != "" && t.Kind != opts.Kind {
 			continue
 		}
+		// 只在可签到时段内挑选。「未到时间」的任务必须跳过，
+		// 否则会把一个还不允许提交的任务硬发出去，被服务端拒绝为「查寝未开始」。
+		if err := checkTaskWindow(&t); err != nil {
+			continue
+		}
 		return &t, nil
 	}
-	return nil, errors.New("当前没有待处理的查寝任务")
+	return nil, errors.New(noRunnableTaskMessage(cached))
+}
+
+// noRunnableTaskMessage 在没有可执行任务时给出可区分的提示。
+//
+// 「未到时间」和「没有任务」是两种完全不同的情况：前者应等待，
+// 后者说明任务还没下发或已处理完。混淆会让计划执行记录失去意义。
+func noRunnableTaskMessage(cached []store.Task) string {
+	var notYet, expired, done int
+	for _, t := range cached {
+		if t.Kind != string(cpdaily.KindAttendance) {
+			continue
+		}
+		switch strings.TrimSpace(t.SignStatus) {
+		case "2":
+			notYet++
+		case "3":
+			expired++
+		case "4":
+			done++
+		}
+	}
+	switch {
+	case notYet > 0:
+		return "查寝任务还未到签到时间，等待下一个时间窗口"
+	case expired > 0:
+		return "查寝任务已过签到时间"
+	case done > 0:
+		return "今日查寝任务已完成"
+	}
+	return "当前没有待处理的查寝任务"
 }
 
 // confirmSigned 回查任务列表，确认任务是否真的完成了。
@@ -258,11 +392,14 @@ func isVerification(code, message string) bool {
 
 // checkTaskWindow 校验任务是否处于可签到时段。
 //
-// 依据列表接口返回的 signStatus：
+// 优先依据列表接口返回的 signStatus：
 //   - "2" 未到签到时间
 //   - "3" 已过期
 //   - "4" 已签到
-// 空值表示该任务不带状态（如自由查寝），交给服务端判定。
+//
+// signStatus 为空时（部分学校/任务不下发该字段，例如按 signDate + beginClock
+// 定义的周期性查寝），用任务自带的时间字段自行判断，否则会把「21:00 才开始」
+// 的任务在 16:00 就显示成可执行，提交后被服务端拒绝为「查寝未开始」。
 func checkTaskWindow(task *store.Task) error {
 	switch strings.TrimSpace(task.SignStatus) {
 	case "2":
@@ -279,6 +416,66 @@ func checkTaskWindow(task *store.Task) error {
 		return fmt.Errorf("「%s」已过签到时间，无法补签", task.TaskName)
 	case "4":
 		return fmt.Errorf("「%s」已签到，无需重复执行", task.TaskName)
+	}
+
+	// signStatus 为空：用任务自带的时间字段自行判断窗口。
+	return checkTaskWindowByClock(task, time.Now())
+}
+
+// clockWindow 描述任务由 signDate + beginClock~endClock 定义的签到时段。
+type clockWindow struct {
+	start time.Time
+	end   time.Time
+	ok    bool
+}
+
+// parseTaskWindow 解析任务的日期与时段。
+//
+// signDate 形如 "2026-11-03" 或 "2026-11-03 (周二)"，beginClock/endClock 形如 "21:00"。
+// 时段可能跨天（如 23:30-00:30），此时把结束时间推到次日。
+func parseTaskWindow(task *store.Task) clockWindow {
+	if task == nil {
+		return clockWindow{}
+	}
+	dateRaw := strings.TrimSpace(task.SignDate)
+	if i := strings.IndexAny(dateRaw, " (（"); i > 0 {
+		dateRaw = dateRaw[:i]
+	}
+	if dateRaw == "" || task.BeginClock == "" || task.EndClock == "" {
+		return clockWindow{}
+	}
+	day, err := time.ParseInLocation("2006-01-02", dateRaw, time.Local)
+	if err != nil {
+		return clockWindow{}
+	}
+	start, err1 := time.ParseInLocation("2006-01-02 15:04", dateRaw+" "+task.BeginClock, time.Local)
+	end, err2 := time.ParseInLocation("2006-01-02 15:04", dateRaw+" "+task.EndClock, time.Local)
+	if err1 != nil || err2 != nil {
+		return clockWindow{}
+	}
+	if !end.After(start) {
+		end = end.AddDate(0, 0, 1) // 跨天时段
+	}
+	_ = day
+	return clockWindow{start: start, end: end, ok: true}
+}
+
+// checkTaskWindowByClock 在没有 signStatus 时按时段判断任务能否提交。
+//
+// 返回的「还没到签到时间」文案与 signStatus=2 一致，
+// 调度器据此识别为「等待窗口」而不消耗当天的执行机会。
+func checkTaskWindowByClock(task *store.Task, now time.Time) error {
+	w := parseTaskWindow(task)
+	if !w.ok {
+		return nil // 没有可解析的时间信息，交给服务端判定
+	}
+	if now.Before(w.start) {
+		return fmt.Errorf("「%s」还没到签到时间（%s-%s），请到时间后再执行",
+			task.TaskName, task.BeginClock, task.EndClock)
+	}
+	if now.After(w.end) {
+		return fmt.Errorf("「%s」已过签到时间（%s-%s），无法补签",
+			task.TaskName, task.BeginClock, task.EndClock)
 	}
 	return nil
 }

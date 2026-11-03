@@ -1,4 +1,4 @@
-module qingjin
+module qjrxy
 
 go 1.26.0
 

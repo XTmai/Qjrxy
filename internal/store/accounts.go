@@ -9,37 +9,40 @@ import (
 
 // Account 是绑定的今日校园账号。
 type Account struct {
-	ID            int64   `json:"id"`
-	UserID        int64   `json:"userId"`
-	Alias         string  `json:"alias"`
-	SchoolName    string  `json:"schoolName"`
-	Username      string  `json:"username"`
-	PasswordEnc   string  `json:"-"`
-	TenantID      string  `json:"tenantId"`
-	Host          string  `json:"host"`
-	IDSURL        string  `json:"idsUrl"`
-	JoinType      string  `json:"joinType"`
-	Cookies       string  `json:"-"`
-	LoginStatus   string  `json:"loginStatus"`
-	LastLoginAt   string  `json:"lastLoginAt"`
-	DeviceID      string  `json:"deviceId"`
-	DeviceModel   string  `json:"deviceModel"`
-	SystemVersion string  `json:"systemVersion"`
-	Platform      string  `json:"platform"`      // android / ios
-	WisDeviceID   string  `json:"wisDeviceId"`   // iOS 设备指纹头
+	ID          int64  `json:"id"`
+	UserID      int64  `json:"userId"`
+	Alias       string `json:"alias"`
+	SchoolName  string `json:"schoolName"`
+	Username    string `json:"username"`
+	PasswordEnc string `json:"-"`
+	TenantID    string `json:"tenantId"`
+	Host        string `json:"host"`
+	IDSURL      string `json:"idsUrl"`
+	JoinType    string `json:"joinType"`
+	Cookies     string `json:"-"`
+	LoginStatus string `json:"loginStatus"`
+	LastLoginAt string `json:"lastLoginAt"`
+	// LastProbeAt / LastProbeMsg 记录最近一次登录态探测的结果，供前端展示。
+	LastProbeAt   string `json:"lastProbeAt"`
+	LastProbeMsg  string `json:"lastProbeMsg"`
+	DeviceID      string `json:"deviceId"`
+	DeviceModel   string `json:"deviceModel"`
+	SystemVersion string `json:"systemVersion"`
+	Platform      string `json:"platform"`    // android / ios
+	WisDeviceID   string `json:"wisDeviceId"` // iOS 设备指纹头
 	// UserAgent 是扫码时 App WebView 的原始 UA，提交时会原样使用，
 	// 保证请求特征与真实 App 一致。
-	UserAgent     string  `json:"userAgent"`
+	UserAgent string `json:"userAgent"`
 	// AppVersion 扫码时上报的今日校园客户端版本，用于 UA 与设备信息
-	AppVersion    string  `json:"appVersion"`
-	BuildID       string  `json:"buildId"`
-	Address       string  `json:"address"`
-	Lon           float64 `json:"lon"`
-	Lat           float64 `json:"lat"`
-	Abnormal      string  `json:"abnormalReason"`
-	PhotoPath     string  `json:"photoPath"`
-	CreatedAt     string  `json:"createdAt"`
-	UpdatedAt     string  `json:"updatedAt"`
+	AppVersion string  `json:"appVersion"`
+	BuildID    string  `json:"buildId"`
+	Address    string  `json:"address"`
+	Lon        float64 `json:"lon"`
+	Lat        float64 `json:"lat"`
+	Abnormal   string  `json:"abnormalReason"`
+	PhotoPath  string  `json:"photoPath"`
+	CreatedAt  string  `json:"createdAt"`
+	UpdatedAt  string  `json:"updatedAt"`
 }
 
 // HasCookie 表示账号是否保存了登录态。
@@ -48,7 +51,8 @@ func (a Account) HasCookie() bool {
 }
 
 const accountColumns = `id, user_id, alias, school_name, username, password_enc, tenant_id, host, ids_url,
-	join_type, cookies, login_status, last_login_at, device_id, device_model, system_version, platform,
+	join_type, cookies, login_status, last_login_at, last_probe_at, last_probe_msg,
+	device_id, device_model, system_version, platform,
 	wis_device_id, user_agent, app_version, build_id, address, lon, lat, abnormal, photo_path,
 	created_at, updated_at`
 
@@ -56,6 +60,7 @@ func scanAccount(scanner interface{ Scan(...any) error }) (*Account, error) {
 	var a Account
 	err := scanner.Scan(&a.ID, &a.UserID, &a.Alias, &a.SchoolName, &a.Username, &a.PasswordEnc,
 		&a.TenantID, &a.Host, &a.IDSURL, &a.JoinType, &a.Cookies, &a.LoginStatus, &a.LastLoginAt,
+		&a.LastProbeAt, &a.LastProbeMsg,
 		&a.DeviceID, &a.DeviceModel, &a.SystemVersion, &a.Platform, &a.WisDeviceID, &a.UserAgent,
 		&a.AppVersion, &a.BuildID, &a.Address, &a.Lon, &a.Lat, &a.Abnormal, &a.PhotoPath,
 		&a.CreatedAt, &a.UpdatedAt)
@@ -166,6 +171,33 @@ func (db *DB) UpdateAccountSession(ctx context.Context, id int64, cookies, statu
 		`UPDATE accounts SET cookies = ?, login_status = ?, last_login_at = ?, updated_at = ? WHERE id = ?`,
 		cookies, status, now(), now(), id)
 	return err
+}
+
+// RecordProbe 记录一次登录态探测的结果。
+func (db *DB) RecordProbe(ctx context.Context, id int64, status, message string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE accounts SET login_status = ?, last_probe_at = ?, last_probe_msg = ?, updated_at = ?
+		 WHERE id = ?`, status, now(), message, now(), id)
+	return err
+}
+
+// ListAllAccounts 列出所有用户的账号（供后台批量探测使用）。
+func (db *DB) ListAllAccounts(ctx context.Context) ([]Account, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT `+accountColumns+` FROM accounts ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Account
+	for rows.Next() {
+		a, err := scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
 }
 
 // DeleteAccount 删除账号（级联删除任务/计划/日志）。

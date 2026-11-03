@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"qingjin/internal/store"
+	"qjrxy/internal/store"
 )
 
 type ctxKey string
@@ -27,8 +27,10 @@ type APIError struct {
 func (e *APIError) Error() string { return e.Message }
 
 func badRequest(msg string) error { return &APIError{Status: 400, Code: "bad_request", Message: msg} }
-func unauthorized(msg string) error { return &APIError{Status: 401, Code: "unauthorized", Message: msg} }
-func notFound(msg string) error  { return &APIError{Status: 404, Code: "not_found", Message: msg} }
+func unauthorized(msg string) error {
+	return &APIError{Status: 401, Code: "unauthorized", Message: msg}
+}
+func notFound(msg string) error { return &APIError{Status: 404, Code: "not_found", Message: msg} }
 
 // respondJSON 写出统一结构：{ ok, data } / { ok:false, error }。
 func respondJSON(w http.ResponseWriter, status int, payload any) {
@@ -38,8 +40,8 @@ func respondJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 type envelope struct {
-	OK    bool   `json:"ok"`
-	Data  any    `json:"data,omitempty"`
+	OK    bool    `json:"ok"`
+	Data  any     `json:"data,omitempty"`
 	Error *errObj `json:"error,omitempty"`
 }
 

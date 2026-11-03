@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"qingjin/internal/service"
-	"qingjin/internal/store"
+	"qjrxy/internal/service"
+	"qjrxy/internal/store"
 )
 
 // accountView 是返回给前端的账号结构（不含密码/cookie）。
@@ -194,32 +194,40 @@ func (s *Server) handleAccountCaptcha(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"done": true, "message": "登录成功"})
 }
 
-type cookieRequest struct {
-	Cookies string `json:"cookies"`
-}
-
-func (s *Server) handleImportCookies(w http.ResponseWriter, r *http.Request) {
+// handleProbeAccounts 手动触发登录态探测（单个或全部账号）。
+//
+// 探测会顺带同步任务：会话有效则更新任务缓存，失效则自动用保存的密码重登。
+func (s *Server) handleProbeAccounts(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	id, err := pathID(r)
-	if err != nil {
-		writeError(w, err)
-		return
+	var req struct {
+		AccountID int64 `json:"accountId"` // 0 表示全部账号
 	}
-	var req cookieRequest
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, err)
-		return
+	_ = decodeJSON(r, &req)
+
+	ctx := r.Context()
+	var results []service.ProbeResult
+	if req.AccountID > 0 {
+		account, err := s.svc.DB().AccountByID(ctx, user.ID, req.AccountID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		results = append(results, s.svc.ProbeAccount(ctx, account))
+	} else {
+		accounts, err := s.svc.DB().ListAccounts(ctx, user.ID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for i := range accounts {
+			results = append(results, s.svc.ProbeAccount(ctx, &accounts[i]))
+		}
 	}
-	status, err := s.svc.ImportCookies(r.Context(), user.ID, id, req.Cookies)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, map[string]any{"loginStatus": status, "message": "Cookie 已保存"})
+	writeData(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func (s *Server) handleVerifySession(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +333,11 @@ func (s *Server) handleRedeemQuota(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r.Context())
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	// 额度体系关闭（个人自部署默认）时兑换无意义，明确拒绝。
+	if !s.svc.Config().QuotaEnabled {
+		writeError(w, badRequest("额度功能未启用（个人自部署无需兑换）"))
 		return
 	}
 	var req struct {

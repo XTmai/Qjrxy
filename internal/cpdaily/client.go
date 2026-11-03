@@ -1,6 +1,8 @@
 package cpdaily
 
 import (
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -172,7 +175,36 @@ func (c *Client) do(ctx context.Context, method, rawURL string, headers map[stri
 		return nil, err
 	}
 	c.absorb(resp)
+	resp.Body = decompressBody(resp)
 	return resp, nil
+}
+
+// decompressBody 透明解压 gzip/deflate 响应。
+//
+// 请求头里手动设置 Accept-Encoding 时，Go 的 http.Client 不会自动解压
+// （透明解压只对它自己加的头生效），而今日校园多数接口要求带这个头，
+// 会返回压缩响应，直接读取会得到二进制乱码。
+func decompressBody(resp *http.Response) io.ReadCloser {
+	if resp.Body == nil {
+		return resp.Body
+	}
+	switch strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding"))) {
+	case "gzip":
+		gr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return resp.Body
+		}
+		return ReadCloser{Reader: gr, Closer: resp.Body}
+	case "deflate":
+		return ReadCloser{Reader: flate.NewReader(resp.Body), Closer: resp.Body}
+	}
+	return resp.Body
+}
+
+// ReadCloser 组合不同的 Reader 与 Closer。
+type ReadCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // apiResponse 是今日校园通用返回结构。
@@ -220,10 +252,17 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, headers map[string
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("接口返回 %d：%s", resp.StatusCode, truncate(string(raw), 200))
+		return nil, &APIError{Code: strconv.Itoa(resp.StatusCode),
+			Message: truncate(string(raw), 200)}
 	}
 	var out apiResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
+		// 会话失效时服务端直接返回 IAP 登录页 HTML，而不是 JSON。
+		// 这里必须构造 APIError 并带上 401 语义，否则 IsAuthExpired 无法识别，
+		// 自动重登录就不会触发，用户只能看到「响应不是有效 JSON」。
+		if looksLikeLoginPage(raw) {
+			return nil, &APIError{Code: "401", Message: "登录状态已失效，需要重新登录"}
+		}
 		return nil, fmt.Errorf("响应不是有效 JSON：%s", truncate(string(raw), 200))
 	}
 	out.Raw = raw
@@ -260,6 +299,11 @@ func (e *APIError) Error() string {
 }
 
 // IsAuthExpired 判断是否为登录失效。
+// IsAuthExpired 判断错误是否属于「会话失效，需要重新登录」。
+//
+// 今日校园不同接口表达会话失效的方式并不统一：有的返回 401/403，
+// 有的返回登录页 HTML，有的在业务 message 里带「登录」字样。
+// 三种都要识别，否则自动重登录会在部分接口上静默失效。
 func IsAuthExpired(err error) bool {
 	if err == nil {
 		return false
@@ -274,6 +318,35 @@ func IsAuthExpired(err error) bool {
 			if strings.Contains(msg, kw) {
 				return true
 			}
+		}
+	}
+	// 兜底：错误链里直接带着登录页特征或会话提示的情况
+	msg := err.Error()
+	for _, kw := range []string{"登录状态已失效", "需要重新登录", "登录页", "未授权"} {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeLoginPage 判断响应体是否是统一身份认证的登录页。
+//
+// 今日校园业务接口在会话失效时不返回 401，而是重定向/返回 IAP 登录页 HTML。
+// 识别这个特征才能把它当成「需要重新登录」，进而触发自动重登录。
+func looksLikeLoginPage(raw []byte) bool {
+	s := string(raw)
+	if len(s) == 0 || s[0] != '<' {
+		return false
+	}
+	// 登录页的典型特征（统一身份认证 / 重定向脚本 / 表单登录）
+	markers := []string{
+		"统一身份认证", "iap/login", "/iap/", "authserver",
+		"<title>登录", "casLoginForm", "loginFromId",
+	}
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			return true
 		}
 	}
 	return false

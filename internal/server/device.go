@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"qingjin/internal/service"
+	"qjrxy/internal/service"
 
 	qrcode "github.com/skip2/go-qrcode"
 )

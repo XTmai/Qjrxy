@@ -57,13 +57,13 @@ func (db *DB) UpdateLog(ctx context.Context, id int64, status, message, detail s
 
 // LogFilter 是执行记录查询条件。
 type LogFilter struct {
-	UserID  int64
-	Status  string
-	Scope   string // today / week / all
-	Limit   int
-	Offset  int
-	LogID   int64
-	Kind    string
+	UserID int64
+	Status string
+	Scope  string // today / week / all
+	Limit  int
+	Offset int
+	LogID  int64
+	Kind   string
 }
 
 // ListLogs 分页查询执行记录。
@@ -73,12 +73,14 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]Log, int, error) {
 
 	switch f.Scope {
 	case "today":
-		start := time.Now().Truncate(24 * time.Hour)
+		// 按本地日期零点截断。原先用 Truncate(24h) 以 UTC 零点为基准，
+		// 东八区下等于当天 08:00，与 TodayStats 的本地日期口径不一致，
+		// 会造成工作台显示 0 条、记录页却能查到。
+		start := startOfToday()
 		where = append(where, "l.created_at >= ?")
 		args = append(args, start.Format(time.RFC3339))
 	case "week":
-		now := time.Now()
-		start := now.AddDate(0, 0, -7)
+		start := startOfToday().AddDate(0, 0, -6)
 		where = append(where, "l.created_at >= ?")
 		args = append(args, start.Format(time.RFC3339))
 	}
@@ -169,6 +171,76 @@ func (db *DB) TodayStats(ctx context.Context, userID int64) (LogStats, error) {
 		}
 	}
 	return stats, rows.Err()
+}
+
+// DayStat 是单天的执行统计（趋势图用）。
+type DayStat struct {
+	Date    string `json:"date"` // YYYY-MM-DD
+	Success int    `json:"success"`
+	Failed  int    `json:"failed"`
+	Pending int    `json:"pending"`
+}
+
+// LogTrend 统计最近 days 天（按本地日期）每天的成功/失败/待核对数量，
+// 缺失的日期补零，保证前端可以直接按天画图。
+func (db *DB) LogTrend(ctx context.Context, userID int64, days int) ([]DayStat, error) {
+	if days <= 0 || days > 90 {
+		days = 14
+	}
+	start := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
+	rows, err := db.QueryContext(ctx, `
+		SELECT substr(created_at, 1, 10) AS d, status, COUNT(*)
+		FROM logs
+		WHERE user_id = ? AND substr(created_at, 1, 10) >= ?
+		GROUP BY d, status`, userID, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	byDate := map[string]map[string]int{}
+	for rows.Next() {
+		var date, status string
+		var n int
+		if err := rows.Scan(&date, &status, &n); err != nil {
+			return nil, err
+		}
+		if byDate[date] == nil {
+			byDate[date] = map[string]int{}
+		}
+		byDate[date][status] = n
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	base, _ := time.Parse("2006-01-02", start)
+	out := make([]DayStat, 0, days)
+	for i := 0; i < days; i++ {
+		date := base.AddDate(0, 0, i).Format("2006-01-02")
+		day := DayStat{Date: date}
+		for status, n := range byDate[date] {
+			switch status {
+			case StatusSuccess:
+				day.Success = n
+			case StatusFailed:
+				day.Failed = n
+			default:
+				day.Pending += n
+			}
+		}
+		out = append(out, day)
+	}
+	return out, nil
+}
+
+// startOfToday 返回本地时区今天的零点。
+//
+// 统一「今天」的口径：TodayStats、ListLogs(today/week)、LogTrend 都用它，
+// 避免各处理解不同（UTC 零点 vs 本地零点）导致数字对不上。
+func startOfToday() time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 }
 
 // LogByID 查询单条记录。

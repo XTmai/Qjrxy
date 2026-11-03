@@ -1,124 +1,91 @@
-# 青衿 UI 深度重构方案
+# Qjrxy 前端魔改：以 openilink-hub 前端为底座（路线 A）
 
 ## Context
 
-当前前端存在结构性问题：`ui.js` 只有「元素工厂 + Toast/Modal」三层原语，页面级组件（页头、卡片、表格容器、统计卡、表单字段、浏览器工具条）全部在 6 个页面里手工重复拼装。这是所有视觉不一致的根因——改一处卡片头样式要改 12 个调用点。
+用户确定走开源路线（仓库名 Qjrxy），喜欢 openilink-hub（MIT，1605 星）的界面风格。侦查确认其设计来源为 **shadcn/ui（radix-nova 风格）+ Radix UI + Tailwind v4 oklch 令牌 + Geist 字体 + lucide 图标 + 翠绿主色**。
 
-具体表现：统计卡 3 套实现、kv 行 3 份完全等价代码、标签页控件 5 套并存、状态徽标 3 套词汇表（同一状态在不同页显示为「已处理/已完成/成功」）、按钮层级 4 种表达（primary/soft/ghost/link-btn 混用）、错误态 5 页丢掉页头、空态 3 种挂载方式。CSS 1575 行里约 35% 是页面专属样式，尾部追加区块直接覆盖前文（`.task-time` 双定义），另有 188 行 `.pk-*` 地图弹层 + 296 行 `map-picker.js` + 165KB Leaflet 是确认的死代码（全库零引用）。
+关键结论：openilink 前端与我们暂停的 React 脚手架（`web/frontend/`，node_modules 已装）**架构完全同构**（Go + Vite + React 19 + TS + Tailwind v4 + react-router v7），但它的 `web/src` 是一套**现成可跑的 shadcn 骨架**（27 个 ui 组件含 sidebar 全家桶与 confirm-dialog、绿色主题令牌、侧边栏布局壳、登录卡片、TanStack Query + query-keys 分层、zustand stores）——以它为底座移植，比继续用 Appica 组件层省掉整个设计系统搭建。
 
-后端数据能力被浪费：`Log.detail` 里的签到点距离/半径/是否在范围内、设备 ID、提交坐标等结构化数据，目前只以原始 JSON dump 展示。账号的 `tenantId/host/joinType/lastLoginAt/createdAt` 等字段已序列化但从未展示。
+后端契约已验证：39 条路由、`system/info` 含 `quotaEnabled`（额度开关已实现，默认关）、`devicePoll` 直接返回完整 account、`RunOutcome {logId,status,message,hint,taskName}`。
 
-目标：建立组件抽象层，统一视觉规范，清理死代码，把已具备但被浪费的数据用起来。视觉沿用现有蓝色（`#006ee6`），用户能认出还是同一个产品，但组件更规范、对齐更精确、移动端更可用。
+**可复用资产**（与框架无关，直接保留）：
+- `web/frontend/src/lib/task.ts` — taskState / parseTaskWindow / 时间格式化（核心业务逻辑）
+- `web/frontend/src/lib/types.ts` — 与 Go store 层一一对应的 15 个类型
+- `web/frontend/src/api/client.ts` — Bearer token 客户端（openilink 用 cookie session，保留我们的 token 方案，改动面小）
+- `web/frontend/src/api/index.ts` — 34 条端点方法
+- `web/frontend/public/{device.html,favicon.svg}` — 原样保留
 
-## 约束
+## 目录与依赖
 
-- 无构建步骤（`go:embed` 直接打包 `web/dist/`），改动后需 `go build` 才生效
-- 保持现有后端 API 契约不变，本次不改后端逻辑
-- 保持 `device.html` 独立入口（扫码页在 App WebView 内运行，不能依赖主站 JS）
-- 深色模式必须与浅色同步
-- 移动端底部导航现有 5 项保持不变
+```
+web/frontend/
+├── package.json        # 增: radix-ui/shadcn/tw-animate-css/@fontsource-variable/geist/lucide-react/
+│                       #   @tanstack/react-query/zustand/class-variance-authority/clsx/tailwind-merge/qrcode
+│                       # 删: @appica/ui-react
+├── components.json     # shadcn 配置（radix-nova，从 openilink 复制）
+├── vite.config.ts      # 标准 vite（不用 vite-plus）；别名 @→src；outDir ../dist；proxy /api→:8090
+├── tsconfig.json       # 加 paths @/* → src/*
+├── public/             # device.html + favicon.svg（已存在）
+└── src/
+    ├── index.css           # openilink 的 oklch 令牌照抄（绿色主题）+ Geist
+    ├── components/
+    │   ├── ui/             # ← openilink 的 27 个 shadcn 组件整体移植（含 sidebar/confirm-dialog）
+    │   ├── layout.tsx      # ← 其布局壳改造：3 个导航项（首页/账号/设置）、Qjrxy 文字 logo、
+    │   │                   #   用户菜单（退出登录）、主题切换、认证门禁改用我们的 token api
+    │   ├── captcha-dialog.tsx / device-scan-dialog.tsx / plans.tsx / account-detail.tsx
+    │   │                   # ← 已有逻辑用 shadcn Dialog/Tabs 重写
+    │   └── login-form.tsx  # ← 其登录卡片模式，去微信扫码/Passkey/OAuth，保留账号密码+注册
+    ├── hooks/
+    │   ├── use-auth.ts     # ← 其模式（TanStack Query useUser），底层用我们的 token client
+    │   ├── use-accounts.ts / use-tasks.ts / use-plans.ts / use-dashboard.ts  # 按其 hook 模式新写
+    │   └── use-mobile.ts   # ← 移植
+    ├── lib/
+    │   ├── utils.ts (cn) / theme.tsx / query-client.ts / query-keys.ts  # ← 移植+改造
+    │   ├── task.ts / types.ts  # 保留（TS 化业务逻辑）
+    │   └── api/index.ts    # 保留（改造成 query hooks 的底层）
+    ├── stores/             # ← auth-store（适配 token 登出+queryClient.clear）/ ui-store
+    ├── pages/              # login / home(参考 dashboard-overview 模式) / accounts / settings(URL-tab 模式)
+    └── main.tsx            # StrictMode > BrowserRouter > QueryClientProvider > ThemeProvider
+                            #   > TooltipProvider > Toaster > Routes
+```
 
 ## 实施步骤
 
-### 1. 扩充组件层 `web/dist/assets/ui.js`
+### 阶段 0：底座移植（先打通构建）
+1. `git clone --depth 1 openilink/openilink-hub` 到临时目录，复制其 `web/src/components/ui/`、`web/src/lib/{utils,theme,query-client}.tsx|.ts`、`web/src/stores/`、`web/src/components/{layout.tsx,login-form.tsx}`、`web/index.css`、`web/components.json` 进 `web/frontend/src/`（对应位置）
+2. `package.json` 依赖合并（去 Appica、去 vite-plus 别名用标准 vite、去 posthog）；`npm install`
+3. `vite.config.ts` 换标准 defineConfig + `@` 别名；`tsconfig.json` 加 paths；`index.css` 用其令牌 + Geist + 绿色主色
+4. **`web/web.go` 重写为 Vite 适配版**（回退前写过一版：删 moduleNames/serveModule/serveHTML，hash 资源 immutable，index/device no-cache，/device 回退）——与上一次实现相同
+5. 验证：占位页 `npm run build` + `go build` 通过
 
-在现有 `h/icon/toast/openModal/closeModal/confirmDialog/emptyState` 基础上补充页面级组件。所有组件统一签名，接受对象参数：
+### 阶段 1：外壳与认证
+6. `main.tsx` Provider 链 + 路由（`/login` 公开；`/`、`/accounts`、`/settings` 挂 Layout 门禁）
+7. `layout.tsx` 适配：导航改 3 项、logo 改 Qjrxy 文字块、auth 门禁与用户菜单接我们的 token 登出（`api.logout` + `queryClient.clear()`）
+8. `login-form.tsx` 精简为账号密码 + 注册切换（去微信/Passkey/OAuth/六边形背景保留与否视效果）
+9. 认证适配：`request()` 401 由硬跳转改为「清 token + 跳 /login」；zustand auth-store 接 Bearer 登录
 
-```js
-pageHeader({ title, sub, actions })        // 统一页头，actions 为按钮数组
-card({ title, note, action, body, pad })  // card + card-head + card-body 三件套
-statGrid(items)                            // items: [{label, value, note, tone}]
-kvList(rows)                               // rows: [[key, value, mono?]]
-dataTable({ columns, rows, empty })        // columns: [{key, label, align, render}]
-toolbar(left, right)                       // 工具栏容器
-formField({ label, input, hint })          // 表单字段
-emptyState / errorState / loadingState     // 三态统一
-tabs({ items, active, onSelect })          // 替代 5 套标签页实现
-badge(状态)                                 // 统一状态词汇表
-```
+### 阶段 2：三页业务
+10. **首页**（dashboard-overview 模式）：今日统计卡网格（执行/成功/失败/待核对）→ 每账号查寝状态行（`taskState` 徽章 + 窗口时间，可执行高亮）→ 最近动态
+11. **账号页**：账号卡片（状态徽章 + 探测行 + 待扫码警告）+ 单卡片创建（学校 Combobox 自动匹配 + 学号 + 密码 → **保存即登录**[含验证码弹窗] → 自动 sign-range）+ 「检测登录态」批量探测
+12. **账号详情 Dialog**（Tabs：任务/计划/记录/设备）：任务同步与执行（RunOutcome toast）、计划 CRUD + 启停 + 重置今日、记录列表 + 详情（坐标/在范围/设备 ID）、设备扫码 + 照片上传 + 自动获取位置 + 删除确认（confirm-dialog）
+13. **设置页**（URL-tab 模式）：外观 / 安全（改密）/ 额度（`quotaEnabled` 门禁显隐）/ 关于+免责声明
+14. 数据层：按其模式写 `use-dashboard/use-accounts/use-tasks/use-plans/use-info` hooks（query + mutation + invalidate query-keys）
 
-同时修正现有缺陷：`modal.dataset.onClose` 只写不读（死代码）、`skeletonCard(title=true)` 分支从未使用、`formatClock/relativeTime` 零调用。
+### 阶段 3：收尾
+15. 视觉走查修正（深浅色、移动端 390px、空态/加载骨架）
+16. 清理：删 Appica 旧文件（AppShell/ui-bits/Toaster 等）、`README.md` 补界面说明（含 openilink 致谢、MIT 归属声明——复制了其 ui/ 组件）
+17. 全量验证 + 构建交付
 
-### 2. 统一状态词汇表
-
-合并 3 套映射为单一来源，放在 `ui.js`：
-
-- 执行状态：`success/failed/pending/executing` → 成功/失败/待核对/执行中
-- 任务状态：`signStatus 0-1/2/3/4` → 可执行/未到时间/已过期/已签到
-- 登录状态：`authorized/expired/unknown` → 已登录/需重新登录/未登录
-
-所有页面统一调用 `badge(type, value)`，禁止页面内硬编码徽标文案。
-
-### 3. 重排 `app.css`（按组件分层，非页面名）
-
-新结构：
-
-```
-1. 令牌（:root + [data-theme=dark]，补全硬编码色：switch 开态、暗色按钮前景、backdrop）
-2. Reset
-3. 布局骨架（shell / sidebar / topbar / content / 移动底栏）
-4. 基础组件（按钮 4 级、输入、标签页、徽标、工具栏、卡片、表格、统计卡、kv 行）
-5. 三态（loading / empty / error）
-6. 浮层（modal / toast / 下拉）
-7. 登录屏
-8. 响应式（900 / 720 / 480 三档，表格卡片化改为按 data-label 而非 nth-child）
-```
-
-消除重复：`.task-time` 双定义合并、`.hint` 补齐 `.card-body .hint` 作用域、`.col-center`/`.sr-only`/`.dot-status`/`.tab-line`/`.form-advanced`/`.device-scan-row` 等零引用规则删除。
-
-### 4. 重写六个页面（保留全部功能逻辑）
-
-| 页面 | 主要改动 |
-|---|---|
-| `page-dashboard.js` | 统计卡改用 `statGrid`；账号/最近执行改用 `dataTable`；右侧栏三个卡片统一用 `card`；去掉内联样式 |
-| `page-accounts.js` | 列表行统一卡片式；详情弹窗改用 `kvList` 分组（账号/设备/位置/登录）；表单分区保留但改用 `formField` |
-| `page-tasks.js` | 任务用卡片（信息密度低，卡片更清晰）；计划用卡片；筛选/分段控件改用 `tabs` |
-| `page-logs.js` | 桌面用 `dataTable`，移动端整行卡片化；**详情弹窗把 `detail` 结构化展示**（签到点距离/半径/是否在范围、设备 ID、提交坐标），不再 raw JSON dump |
-| `page-quota.js` | 统计卡改用 `statGrid`；规则列表改用统一样式 |
-| `page-security.js` | 五个卡片统一 `card` 组件；表单字段统一 `formField` |
-
-功能逻辑（API 调用、状态管理、扫码轮询、表单提交）不变，只重写渲染层。
-
-### 5. 清理死代码
-
-- 删除 `web/dist/assets/map-picker.js`（296 行，零引用）
-- 删除 `web/dist/vendor/leaflet.js` + `leaflet.css`（165KB）
-- 删除 `app.css` 里 `.pk-*` 区块（188 行）
-- 删除 `ui.js` 里未使用的图标（27 个只用 9 个，可保留但标注）
-- 删除各页面未使用的 import（`page-tasks.js` 的 `statusBadge/loginBadge/statusText`、`page-quota.js` 的 `icon`）
-- 更新 `web/web.go` 的 `moduleNames` 去掉 map-picker
-
-### 6. 修复已知缺陷
-
-- `index.html` 里硬编码的 `?v=39085a1b89e3`（从线上抓回的残留）删除，改由 `web.go` 的 `serveHTML` 动态注入
-- `GET /api/logs` 的 `scope=today` 用 `Truncate(24h)` 按 UTC 截断，与 `TodayStats` 的本地日期逻辑不一致——本次不改后端，但前端「今天」筛选结果可能与工作台统计不符，在 UI 上标注为「近 24 小时」
-
-## 关键文件
-
-- `web/dist/index.html` — 骨架微调（去掉硬编码版本号）
-- `web/dist/assets/ui.js` — 扩充至 ~450 行，组件层核心
-- `web/dist/assets/app.css` — 重排为 8 个分层区块
-- `web/dist/assets/page-*.js` — 六页全部重写渲染层（共约 1600 行 → 预计 1300 行，去掉重复）
-- `web/dist/assets/app.js` — 微调（路由不变）
-- `web/web.go` — 更新 `moduleNames`
-- `web/dist/device.html` — 令牌对齐主站（保留独立样式，但色值统一）
+## 关键决策（已定）
+- **TanStack Query 采纳**：基于 openilink 代码的 hook 模式天然依赖它，且提升加载/缓存体验；我们的 `api/index.ts` 作为其底层 fetch
+- **认证保持 Bearer token**（localStorage）而非 openilink 的 cookie session——后端已按此实现，改动面最小
+- **Geist 字体 + 翠绿主色照抄**；暗色默认跟随系统
+- `vite-plus` 别名不引入，用标准 vite 7
 
 ## 验证
-
-1. **静态检查**：`node scripts/check-frontend.mjs` — 语法、未定义函数、前后端字段匹配
-2. **后端测试**：`go vet ./... && go test ./...`（6 个包）
-3. **本地起服务**：`go build -o bin/qingjin.exe ./cmd/qingjin && ./bin/qingjin.exe -addr :18080 -data ./data_test`
-4. **浏览器遍历**：逐页访问 dashboard/accounts/tasks/logs/quota/security，确认无渲染错误、无 `null` 文本、无控制台报错
-5. **交互回归**：
-   - 账号：新增 → 列表出现 → 详情 → 编辑（改学号，确认列表更新）→ 删除（确认消失）
-   - 任务：拉取 → 状态徽标正确（未到时间禁用按钮）→ 执行确认框
-   - 记录：筛选切换 → 分页 → 详情弹窗结构化展示
-   - 主题：浅色/深色切换，刷新后保持
-   - 响应式：1280 / 768 / 390 三档宽度检查布局
-6. **对比检查**：与重构前截图对比，确认视觉一致性和改进点
-
-## 风险
-
-- 六页全重写范围大，但每页功能逻辑独立且已有测试覆盖后端，风险主要在渲染层
-- 无构建步骤意味着错误只能在浏览器运行时发现，因此每步都运行 `check-frontend.mjs`
-- 建议分两次提交：先组件层+CSS+两页（dashboard/accounts）验证通过，再完成剩余四页
+1. 每阶段：`npm --prefix web/frontend run build` + `go build` + `go test ./...` 全绿
+2. 浏览器端到端（本地 :18080）：注册登录 → 首页状态板 → 创建账号（学校匹配/验证码路径）→ 任务执行（未到时间禁用）→ 计划 CRUD + 重置今日 → 记录详情 → 设置改密/主题 → 深浅色 + 390px 移动端
+3. 额度开关：默认关 → 设置页无额度卡、执行不扣；`QINGJIN_QUOTA_ENABLED=true` → 显示余额与兑换
+4. device.html：`/device.html` 可访问
+5. 无 node 构建：`go build` 直接可用（dist 随仓库提交）
+6. 用户部署：新二进制 + systemd 加 `Environment=QINGJIN_QUOTA_ENABLED=true`

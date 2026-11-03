@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Build frontend
+        run: |
+          npm --prefix web/frontend ci --no-fund --no-audit
+          npm --prefix web/frontend run build
+
+      - name: Build binaries
+        run: |
+          LDFLAGS="-s -w"
+          for target in \
+            "linux amd64" "linux arm64" \
+            "windows amd64" "darwin arm64"; do
+            set -- $target
+            GOOS=$1 GOARCH=$2 CGO_ENABLED=0 go build -trimpath -ldflags "$LDFLAGS" \
+              -o "dist/qjrxy-$1-$2${1:+$([ "$1" = windows ] && echo .exe)}" ./cmd/qingjin
+          done
+          mkdir -p release
+          for f in dist/qjrxy-*; do
+            (cd dist && zip -q "../release/$(basename $f .exe 2>/dev/null || basename $f).zip" "$(basename $f)" 2>/dev/null || true)
+          done
+          # windows 特殊处理：.exe 后缀
+          ls dist/
+
+      - name: Upload artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          generate_release_notes: true

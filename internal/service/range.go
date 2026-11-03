@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"qingjin/internal/cpdaily"
-	"qingjin/internal/store"
+	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/store"
 )
 
 // SignRange 是服务端下发的签到范围。
@@ -63,7 +63,7 @@ func (s *Service) FetchSignRange(ctx context.Context, userID, accountID int64) (
 		}
 	}
 	if picked == nil || pickedDetail == nil {
-		return nil, errors.New("该任务是自由签到（无固定签到点），请手动在地图上选点")
+		return nil, errors.New("该任务没有固定签到点，无法自动获取位置")
 	}
 
 	place := pickedDetail.SignPlaces[0]

@@ -69,9 +69,9 @@ var endpointTable = map[TaskKind]Endpoints{
 		Preview: "/wec-counselor-sign-apps/stu/sign/previewAttachment",
 	},
 	KindAttendance: {
-		List:    "/wec-counselor-attendance-apps/student/attendance/getStuAttendacesInOneDay",
-		Detail:  "/wec-counselor-attendance-apps/student/attendance/detailSignInstance",
-		Submit:  "/wec-counselor-attendance-apps/student/attendance/submitSign",
+		List:   "/wec-counselor-attendance-apps/student/attendance/getStuAttendacesInOneDay",
+		Detail: "/wec-counselor-attendance-apps/student/attendance/detailSignInstance",
+		Submit: "/wec-counselor-attendance-apps/student/attendance/submitSign",
 		// 华为 OBS 上传策略（getStsAccess 已废弃，返回 404）
 		STS:     "/wec-counselor-attendance-apps/student/attendance/getUploadPolicy",
 		OSS:     "/wec-counselor-sign-apps/stu/obs/getUploadPolicy",
