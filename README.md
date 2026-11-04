@@ -8,6 +8,16 @@
 
 ![首页](docs/screenshots/home.png)
 
+## 界面
+
+以下截图使用虚构的演示数据（示例大学 / 演示账号），不含任何真实账号信息。
+
+| 账号管理 | 执行详情 |
+| --- | --- |
+| ![账号](docs/screenshots/accounts.png) | ![详情](docs/screenshots/detail.png) |
+
+![设置](docs/screenshots/settings.png)
+
 ## 功能
 
 - **自动查寝** — 按计划的星期与时段执行；任务未到时间自动等待，不产生无效提交
@@ -18,14 +28,6 @@
 - **自动定位** — 从学校下发的任务读取签到点与半径，无需手动选点
 - **执行记录** — 成功 / 失败 / 待核对分级，7 日趋势，签到点距离可回溯
 - **深色模式** · 移动端适配 · 单二进制部署
-
-## 界面
-
-| 账号管理 | 执行详情 |
-| --- | --- |
-| ![账号](docs/screenshots/accounts.png) | ![详情](docs/screenshots/detail.png) |
-
-![设置](docs/screenshots/settings.png)
 
 ## 快速开始
 
