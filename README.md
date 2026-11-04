@@ -10,74 +10,109 @@
 
 ## 界面
 
+四个页面：**监控总览 / 账号管理 / 执行审计 / 调度计划**。
+
 以下截图使用虚构的演示数据（示例大学 / 演示账号），不含任何真实账号信息。
 
-| 账号管理 | 执行详情 |
+| 账号管理 | 调度计划 |
 | --- | --- |
-| ![账号](docs/screenshots/accounts.png) | ![详情](docs/screenshots/detail.png) |
+| ![账号](docs/screenshots/accounts.png) | ![调度](docs/screenshots/schedules.png) |
+
+| 执行详情 | 执行审计 |
+| --- | --- |
+| ![详情](docs/screenshots/detail.png) | ![审计](docs/screenshots/audit.png) |
 
 ![设置](docs/screenshots/settings.png)
 
 ## 功能
 
+- **两种运行形态**
+  - **单用户模式（默认）**：本地双击 exe 即用——自动打开浏览器、跳过登录、注册口关闭；API 仅建议在家庭网络使用
+  - **多用户模式**：`QINGJIN_MULTI_USER=true` 恢复账号体系（登录 / 注册门 / 会话限流），服务器多人部署用
 - **自动查寝** — 按计划的星期与时段执行；任务未到时间自动等待，不产生无效提交
 - **窗口驱动调度** — 同步一次任务后在本地计算唤醒时刻，不做高频轮询（每账号每天约 2 次请求）
 - **会话自愈** — 登录态定期探测，失效时用保存的密码自动重登并同步任务
 - **多账号** — 每个账号独立设备指纹，扫码获取真实设备信息，提交特征与 App 一致
 - **自动登录** — 账密 AES-256-GCM 加密存储，图形验证码在界面内输入
 - **自动定位** — 从学校下发的任务读取签到点与半径，无需手动选点
+- **执行审计** — 每次执行带流水号（traceId）、耗时与围栏偏移，支持毫秒级时间线回放、CSV 导出与实时刷新
 - **执行记录** — 成功 / 失败 / 待核对分级，7 日趋势，签到点距离可回溯
 - **深色模式** · 移动端适配 · 单二进制部署
 
 ## 快速开始
 
-### 方式一：下载二进制
+### 本地使用（Windows / macOS / Linux）
 
-从 [Releases](../../releases) 下载对应平台产物，直接运行：
+从 [Releases](../../releases) 下载对应平台产物，**双击运行即可**：
+
+- 自动打开浏览器（优先局域网地址，方便手机扫码）
+- 无需注册登录，直接添加账号
+
+想只允许本机访问：
 
 ```bash
-./qjrxy -addr :8090 -data ./data
+QINGJIN_ADDR=127.0.0.1:8090 ./qjrxy
 ```
 
-### 方式二：Docker
+> 单用户模式没有鉴权，请只在可信网络（家庭 Wi-Fi）下使用；服务器公网部署请看下一节。
+
+### 服务器部署（多用户）
+
+```bash
+# 环境变量 QINGJIN_MULTI_USER=true 是关键，否则会以单用户模式运行
+QINGJIN_MULTI_USER=true QINGJIN_ADMIN_USER=admin QINGJIN_ADMIN_PASS='强密码' \
+  ./qjrxy -addr :8090 -data /var/lib/qjrxy/data
+```
+
+systemd / Docker / Nginx 反代的完整步骤见 [deploy/README.md](deploy/README.md)。
+
+### Docker
 
 ```bash
 docker build -f deploy/Dockerfile -t qjrxy .
-docker run -d -p 8090:8090 -v ./data:/app/data qjrxy
+docker run -d -p 8090:8090 -v ./data:/data qjrxy   # 镜像已内置 QINGJIN_MULTI_USER=true
 ```
 
-### 方式三：源码构建
+### 源码构建
 
 需要 Go ≥ 1.26、Node ≥ 20：
 
 ```bash
 make build          # 前端构建 + Go 编译 → bin/qjrxy
-./bin/qjrxy -addr :8090 -data ./data
+make linux          # 交叉编译 Linux amd64/arm64 → bin/qjrxy-linux-*
 ```
 
 > 仓库已提交构建好的 `web/dist`，只改后端时直接 `go build` 即可，无需 node。
 
 ## 使用流程
 
-1. 首次访问注册管理员账号（数据全部在你自己的服务器上）
-2. **账号页 → 添加账号**：学校（自动匹配）+ 学号 + 密码 → 保存即登录，自动获取签到点
-3. 点账号卡片 → **设备 → 扫码绑定设备**（用平时打卡的手机扫，App 右上角「＋」→ 扫一扫）
-4. 点账号卡片 → **设备 → 上传照片**（查寝要求照片时必填）
-5. 点账号卡片 → **计划 → 新建计划**：选星期与执行方式（跟随学校时间 / 自定义时段）
-6. 完成。之后每天到点自动查寝，首页可看状态
+**本地单用户**：双击 exe → 浏览器自动打开 → 从第 1 步开始。
+**服务器多用户**：浏览器打开 `http://服务器IP:8090` → 登录 → 从第 1 步开始。
+
+1. **账号页 → 添加账号**：学校（自动匹配）+ 学号 + 密码 → 保存即登录，自动获取签到点
+2. 点账号卡片 → **扫码绑定设备**（用平时打卡的手机扫，App 右上角「＋」→ 扫一扫；手机与电脑需在同一网络，服务器部署则任意网络均可）
+3. 点账号卡片 → **上传照片**（查寝要求照片时必填）
+4. **调度计划页 → 新建计划**：选执行账号、星期与执行方式（跟随学校时间 / 自定义时段）
+5. 完成。之后每天到点自动查寝，监控总览可看就绪率与执行流水，执行审计可回溯每次提交
 
 ## 配置
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `QINGJIN_ADDR` | `:8090` | 监听地址 |
+| `QINGJIN_MULTI_USER` | `false` | **多用户模式开关**。默认单用户直开（无鉴权）；服务器多人部署必须设 `true` |
+| `QINGJIN_ADDR` | `:8090` | 监听地址。配合 Nginx 反代建议设 `127.0.0.1:8090` |
 | `QINGJIN_DATA_DIR` | `./data` | 数据目录（SQLite、照片、密钥） |
+| `QINGJIN_NO_OPEN` | `false` | 设 `1` 关闭单用户模式启动后自动打开浏览器 |
 | `QINGJIN_SECRET` | 自动生成 | 32 字节密码加密密钥（base64） |
-| `QINGJIN_ADMIN_USER` | 空 | 首次启动创建的管理员账号 |
+| `QINGJIN_ADMIN_USER` | 空 | 首次启动创建的管理员账号（多用户模式） |
 | `QINGJIN_ADMIN_PASS` | 空 | 管理员密码 |
 | `QINGJIN_QUOTA_ENABLED` | `false` | 额度/卡密体系开关（托管多用户运营场景才需要） |
 | `QINGJIN_REGISTER_OPEN` | `false` | 是否允许自助注册。默认只在库中还没有任何用户时允许（首次初始化），之后注册口自动关闭 |
 | `QINGJIN_TLS_INSECURE_HOSTS` | 空 | 允许跳过证书校验的主机后缀，逗号分隔（如 `campusphere.net`）。仅个别学校证书链残缺时才用，默认对全部主机做严格校验 |
+
+> **关于单用户模式**：所有接口自动落到唯一的本地用户（老数据库会复用第一个用户，数据无缝迁移），
+> 无登录无注册，API 无鉴权——这是「双击就能用」的代价。请仅在可信网络使用；
+> 绑定非回环地址时启动日志会打印警告。
 
 > **关于证书校验**：服务器到学校这一跳承载学号与密码，默认做完整证书链校验。
 > 若某校入口证书链不完整导致无法登录，用 `QINGJIN_TLS_INSECURE_HOSTS` **精确列出该校域名**，
@@ -99,7 +134,7 @@ Go 后端（单二进制，go:embed 内嵌前端）
 ├── internal/cpdaily    今日校园协议层（登录 / 任务 / 提交 / 照片上传）
 ├── internal/scheduler  双循环调度器（计划执行 30s + 登录态探测按需）
 ├── internal/service    业务层（会话自愈、任务窗口计算、设备绑定）
-├── internal/server     HTTP API
+├── internal/server     HTTP API（含执行审计 /stats/7d、局域网地址探测）
 └── internal/store      SQLite（modernc.org/sqlite，无 CGO）
 前端
 └── web/frontend        React 19 + TypeScript + Tailwind v4 + shadcn/ui（Vite 构建）
@@ -125,7 +160,7 @@ make linux           # 交叉编译 Linux amd64/arm64
 
 ### 界面
 
-- **[OpeniLink Hub](https://github.com/openilink/openilink-hub)**（MIT）— 前端骨架来源。`web/frontend/src/components/ui/` 的 shadcn/ui 组件、侧边栏布局、登录页六边形背景、主题令牌均移植自该项目，并按本项目需求改造（导航收敛为三页、移除微信扫码/Passkey/OAuth 认证通道、补充业务组件）。
+- **[OpeniLink Hub](https://github.com/openilink/openilink-hub)**（MIT）— 前端骨架来源。`web/frontend/src/components/ui/` 的 shadcn/ui 组件、侧边栏布局、登录页六边形背景、主题令牌均移植自该项目，并按本项目需求改造（导航收敛为监控总览 / 账号管理 / 执行审计 / 调度计划四页、移除微信扫码/Passkey/OAuth 认证通道、补充业务组件）。
 - **[shadcn/ui](https://ui.shadcn.com)**（MIT）— 组件体系与 `radix-nova` 风格预设
 - **[Radix UI](https://www.radix-ui.com)**（MIT）— 无样式可访问性原语
 - **[Geist](https://vercel.com/font)** — 字体（SIL Open Font License）

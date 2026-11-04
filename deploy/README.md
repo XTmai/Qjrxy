@@ -1,5 +1,9 @@
 # 部署步骤
 
+> **模式说明**：默认运行在**单用户模式**（无登录、无鉴权，为本地 exe 设计）。
+> 服务器公网部署**必须**设置环境变量 `QINGJIN_MULTI_USER=true` 恢复账号体系，
+> 否则所有接口将无鉴权暴露。下文所有命令均已包含该变量。
+
 ## 1. 上传二进制
 
 ```bash
@@ -62,7 +66,7 @@ export QINGJIN_ADMIN_PASS='换成你的强密码'
 ## 3. 运行
 
 ```bash
-sudo -u qjrxy QINGJIN_ADMIN_USER=admin QINGJIN_ADMIN_PASS='强密码' \
+sudo -u qjrxy QINGJIN_MULTI_USER=true QINGJIN_ADMIN_USER=admin QINGJIN_ADMIN_PASS='强密码' \
   /usr/local/bin/qjrxy -addr :8090 -data /var/lib/qjrxy/data
 ```
 
@@ -70,7 +74,7 @@ sudo -u qjrxy QINGJIN_ADMIN_USER=admin QINGJIN_ADMIN_PASS='强密码' \
 
 ```bash
 sudo cp deploy/qjrxy.service /etc/systemd/system/
-sudo vim /etc/systemd/system/qjrxy.service   # 改掉 QINGJIN_ADMIN_PASS
+sudo vim /etc/systemd/system/qjrxy.service   # 改掉 QINGJIN_ADMIN_PASS；确认有 Environment=QINGJIN_MULTI_USER=true
 sudo systemctl daemon-reload
 sudo systemctl enable --now qjrxy
 sudo journalctl -u qjrxy -f
@@ -82,6 +86,7 @@ sudo journalctl -u qjrxy -f
 docker build -f deploy/Dockerfile -t qjrxy .
 docker run -d --name qjrxy -p 8090:8090 -v $PWD/data:/data \
   -e QINGJIN_ADMIN_USER=admin -e QINGJIN_ADMIN_PASS='强密码' qjrxy
+# 镜像已内置 QINGJIN_MULTI_USER=true，无需重复设置
 ```
 
 ## 4. 验证
@@ -92,6 +97,10 @@ curl http://127.0.0.1:8090/api/selftest      # crypto / database 都应为 ok
 ```
 
 浏览器打开 `http://服务器IP:8090`，用管理员账号登录。
+
+> **从旧版本升级**：新二进制默认单用户模式，升级后必须补设 `QINGJIN_MULTI_USER=true` 再重启，
+> 否则原鉴权会失效。数据库自动迁移（logs 表补 trace_id 列），账号与数据原样保留。
+> 验证：`curl -s http://127.0.0.1:8090/api/system/info | grep -o '"multiUser":[a-z]*'` 应输出 `true`。
 
 ## 5. 反向代理（建议）
 

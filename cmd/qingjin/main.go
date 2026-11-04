@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"net"
 	"os/signal"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
@@ -90,9 +90,9 @@ func main() {
 
 	go func() {
 		if lan := server.LANBaseURLs(cfg.Addr); len(lan) > 0 {
-			log.Printf("服务已启动：%s（局域网）或 http://localhost%s", lan[0], displayAddr(cfg.Addr))
+			log.Printf("服务已启动：%s（局域网）或 %s", lan[0], localURL(cfg.Addr))
 		} else {
-			log.Printf("服务已启动：http://localhost%s", displayAddr(cfg.Addr))
+			log.Printf("服务已启动：%s", localURL(cfg.Addr))
 		}
 		for _, u := range server.LANBaseURLs(cfg.Addr) {
 			log.Printf("局域网访问：%s", u)
@@ -165,27 +165,14 @@ func bootstrapAdmin(ctx context.Context, svc *service.Service, cfg *config.Confi
 	return nil
 }
 
-func displayAddr(addr string) string {
-	if addr == "" {
-		return ":8090"
-	}
-	if addr[0] == ':' {
-		return addr
-	}
-	return addr
-}
-
 // localURL 计算本机可访问的地址：未绑定具体 IP 时用 127.0.0.1。
 func localURL(addr string) string {
-	host, port, ok := strings.Cut(addr, ":")
-	if !ok {
-		port = addr
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host, port = "localhost", "8090"
 	}
 	if host == "" {
-		host = "127.0.0.1"
-	}
-	if port == "" {
-		port = "8090"
+		host = "localhost"
 	}
 	return fmt.Sprintf("http://%s:%s", host, port)
 }
