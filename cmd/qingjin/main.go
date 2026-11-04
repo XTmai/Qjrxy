@@ -39,7 +39,7 @@ func main() {
 	}
 
 	log.SetFlags(log.LstdFlags)
-	log.SetPrefix("[XIAOMAI] ")
+	log.SetPrefix("[Qjrxy] ")
 
 	// 固定时区为北京时间（东八区）。
 	// 签到窗口、日志「今天」的边界、统计口径都依赖本地时区；

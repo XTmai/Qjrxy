@@ -13,7 +13,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{
 		"status": "ok",
 		"time":   time.Now().Format(time.RFC3339),
-		"name":   "XIAOMAI · 今日校园签到与查寝",
+		"name":   "Qjrxy · 今日校园签到与查寝",
 	})
 }
 
