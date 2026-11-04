@@ -167,8 +167,9 @@ make linux           # 交叉编译 Linux amd64/arm64
 
 ### 协议实现
 
+- **newJRXY（作者前作，未公开）** — 本项目协议知识的直接来源：`getSecretKey` 动态密钥协商、CAS/IAP 登录流程、OBS 照片上传与 App 原生加密层的逆向成果均出自作者早期的 newJRXY 项目。
+- **[jrxyzuixingnx](https://github.com/maserpoassr/jrxyzuixingnx)**（Python，MPL-2.0）— 公开的协议逆向研究，对 `getSecretKey` 密钥派生与安卓请求契约做了交叉验证（其文档亦引用了 newJRXY）。本项目未使用其代码，仅参考其公开分析。
 - **[CpdailyHelper](https://github.com/YVFENGXS/CpdailyHelper)** — 提交体加密、任务详情解析、位置范围校验
-- **[jrxyzuixingnx](https://github.com/maserpoassr/jrxyzuixingnx)** — `getSecretKey` 动态密钥协商、CAS/IAP 登录流程、OBS 照片上传，以及 App 原生加密层的逆向分析文档
 - **[campus-device-id](https://github.com/2257929377/campus-device-id)** — `/device.html` 扫码页的 Cordova 桥接方案
 - **[qingjin-cpdaily](https://github.com/3238614968/qingjin-cpdaily)** — 早期界面形态与交互参考
 
