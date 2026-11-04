@@ -139,7 +139,7 @@ export function AuditPage() {
       />
 
       {/* 顶部指标 */}
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <HeadMetric label="执行总次数" value={stats7d ? stats7d.total : "—"} />
         <HeadMetric
           label="达标率"
@@ -262,7 +262,7 @@ export function AuditPage() {
               {selected ? (
                 <TraceTimeline row={selected} />
               ) : (
-                <p className="text-muted-foreground py-6 text-center text-xs">选择左侧一条记录查看链路</p>
+                <p className="text-muted-foreground py-6 text-center text-xs">选择一条记录查看链路</p>
               )}
             </CardContent>
           </Card>

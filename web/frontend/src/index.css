@@ -263,6 +263,15 @@
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
+/* 弹窗打开时暂停背景里的常驻动画。
+   Radix 打开模态层会给 body 加 data-scroll-locked；这时页面已经被遮住，
+   继续跑脉冲点/六边形动画只会和弹窗的进场动画抢合成器，低端机上就是那一下掉帧。 */
+body[data-scroll-locked] .pulse-dot,
+body[data-scroll-locked] .hexagon-background,
+body[data-scroll-locked] .hexagon-accent {
+  animation-play-state: paused;
+}
+
 @keyframes hexagon-drift {
   0% {
     transform: translate3d(-2%, -1%, 0) scale(1.02);

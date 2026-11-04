@@ -1,15 +1,19 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { useEffect, lazy, Suspense } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
 import { HomePage } from "@/pages/home";
-import { AccountsPage } from "@/pages/accounts";
-import { AuditPage } from "@/pages/audit";
-import { SchedulesPage } from "@/pages/schedules";
-import { SettingsPage } from "@/pages/settings";
 import { useInfo, useUser } from "@/hooks/use-auth";
-import { getToken } from "@/api/client";
+import { UNAUTHORIZED_EVENT, getToken } from "@/api/client";
+import { queryClient } from "@/lib/query-client";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+
+// 除首页外的页面按需加载：首屏只解析首页 + 布局，弱机上首次可交互明显更快。
+const AccountsPage = lazy(() => import("@/pages/accounts").then((m) => ({ default: m.AccountsPage })));
+const AuditPage = lazy(() => import("@/pages/audit").then((m) => ({ default: m.AuditPage })));
+const SchedulesPage = lazy(() => import("@/pages/schedules").then((m) => ({ default: m.SchedulesPage })));
+const SettingsPage = lazy(() => import("@/pages/settings").then((m) => ({ default: m.SettingsPage })));
 
 function Gate({ children }: { children: React.ReactNode }) {
   // systemInfo 走 withUser 但单用户模式下无 token 也能取到（服务端自动落到本地用户），
@@ -56,24 +60,40 @@ function LoadError({ onRetry }: { onRetry: () => void }) {
 }
 
 export default function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // 会话失效统一处理：清空缓存并回到登录页。
+  // 之前只 dispatch 事件没有监听者，多用户模式下会话过期后只能手动清 localStorage。
+  useEffect(() => {
+    const onUnauthorized = () => {
+      queryClient.clear();
+      if (location.pathname !== "/login") navigate("/login", { replace: true });
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [navigate, location.pathname]);
+
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route
-        element={
-          <Gate>
-            <Layout />
-          </Gate>
-        }
-      >
-        <Route path="/" element={<HomePage />} />
-        <Route path="/accounts" element={<AccountsPage />} />
-        <Route path="/audit" element={<AuditPage />} />
-        <Route path="/schedules" element={<SchedulesPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/settings/:tab" element={<SettingsPage />} />
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <Suspense fallback={<Spinner />}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          element={
+            <Gate>
+              <Layout />
+            </Gate>
+          }
+        >
+          <Route path="/" element={<HomePage />} />
+          <Route path="/accounts" element={<AccountsPage />} />
+          <Route path="/audit" element={<AuditPage />} />
+          <Route path="/schedules" element={<SchedulesPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings/:tab" element={<SettingsPage />} />
+        </Route>
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </Suspense>
   );
 }

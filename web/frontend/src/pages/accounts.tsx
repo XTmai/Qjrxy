@@ -1,5 +1,5 @@
 // 账号页：搜索/过滤 + 大卡片列表（指纹/照片/位置/计划四块）+ 单卡片创建（保存即登录）+ 批量登录态检测 + 详情弹窗。
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   CalendarClock,
@@ -27,8 +27,10 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/api";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAccounts, useCreateAccount, useProbeAccounts } from "@/hooks/use-accounts";
 import { usePlans } from "@/hooks/use-plans";
+import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/hooks/use-toast";
 import { AccountDetail } from "@/components/account-detail";
 import { CaptchaDialog } from "@/components/captcha-dialog";
@@ -51,6 +53,7 @@ export function AccountsPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [scanAccountId, setScanAccountId] = useState<number | null>(null);
   const probe = useProbeAccounts();
+  const queryClient = useQueryClient();
 
   // 支持 /accounts?account=N 直达详情、?create=1 直达创建
   useEffect(() => {
@@ -99,6 +102,32 @@ export function AccountsPage() {
     });
   };
 
+  // 固定引用：配合 AccountCard 的 memo，打开弹窗时不再重渲染整张列表
+  const handleOpen = useCallback((id: number) => setDetailId(id), []);
+  const handleScan = useCallback((id: number) => setScanAccountId(id), []);
+  const handleLogin = useCallback(async (id: number) => {
+    try {
+      const ch = await api.accountLogin(id);
+      if (ch.done) {
+        toast({ title: "登录成功" });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.accounts.all() });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
+      } else if (ch.needCaptcha) {
+        toast({
+          title: "学校要求验证码",
+          description: "请点「管理」进入账号详情完成登录",
+          variant: "destructive",
+        });
+      }
+    } catch (e) {
+      toast({
+        title: "登录失败",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    }
+  }, [queryClient]);
+
   const detail = accounts?.find((a) => a.id === detailId) ?? null;
 
   return (
@@ -124,7 +153,7 @@ export function AccountsPage() {
       {/* 搜索 + 过滤 chips */}
       {accounts && accounts.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-48">
+          <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-48">
             <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
             <Input
               value={keyword}
@@ -189,29 +218,9 @@ export function AccountsPage() {
             key={a.id}
             account={a}
             planCount={(plans ?? []).filter((p) => p.accountId === a.id && p.enabled).length}
-            onOpen={() => setDetailId(a.id)}
-            onScan={() => setScanAccountId(a.id)}
-            onLogin={async () => {
-              try {
-                const ch = await api.accountLogin(a.id);
-                if (ch.done) {
-                  toast({ title: "登录成功" });
-                  probe.mutate(undefined, { onSuccess: () => {}, onError: () => {} });
-                } else if (ch.needCaptcha) {
-                  toast({
-                    title: "学校要求验证码",
-                    description: "请点「管理」进入账号详情完成登录",
-                    variant: "destructive",
-                  });
-                }
-              } catch (e) {
-                toast({
-                  title: "登录失败",
-                  description: e instanceof Error ? e.message : undefined,
-                  variant: "destructive",
-                });
-              }
-            }}
+            onOpen={handleOpen}
+            onScan={handleScan}
+            onLogin={handleLogin}
           />
         ))}
       </div>
@@ -243,7 +252,9 @@ export function AccountsPage() {
 
 /* ---------------- 账号大卡片（指纹 / 照片 / 位置 / 计划 四块） ---------------- */
 
-function AccountCard({
+// memo：打开弹窗只改父组件的 selected 状态，列表本身没变，
+// 不 memo 的话每开一次弹窗都会把全部卡片重渲染一遍（账号越多越卡）。
+const AccountCard = memo(function AccountCard({
   account,
   planCount,
   onOpen,
@@ -252,9 +263,9 @@ function AccountCard({
 }: {
   account: Account;
   planCount: number;
-  onOpen: () => void;
-  onScan: () => void;
-  onLogin: () => void;
+  onOpen: (id: number) => void;
+  onScan: (id: number) => void;
+  onLogin: (id: number) => void;
 }) {
   const needsLogin = account.loginStatus !== "authorized";
   const needsDevice = !account.deviceId;
@@ -262,7 +273,8 @@ function AccountCard({
 
   return (
     <div
-      className={`bg-card rounded-lg border p-4 transition-colors ${
+      onClick={() => onOpen(account.id)}
+      className={`bg-card cursor-pointer rounded-lg border p-4 transition-colors ${
         ok ? "border-border hover:border-primary/40" : "border-warning-border"
       }`}
     >
@@ -285,7 +297,7 @@ function AccountCard({
             }`}
           />
         </span>
-        <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <button type="button" onClick={() => onOpen(account.id)} className="min-w-0 flex-1 text-left">
           <div className="flex flex-wrap items-center gap-2">
             <p className="truncate text-sm font-semibold">{account.alias || account.username}</p>
             <LoginBadge status={account.loginStatus} />
@@ -296,8 +308,8 @@ function AccountCard({
         </button>
       </div>
 
-      {/* 四块网格：缺失项琥珀高亮 */}
-      <div className="mt-3.5 grid grid-cols-2 gap-2">
+      {/* 四块网格：缺失项琥珀高亮（内部有独立动作，点击不冒泡到整卡） */}
+      <div className="mt-3.5 grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
         <InfoBlock
           icon={Fingerprint}
           label="设备指纹"
@@ -307,14 +319,14 @@ function AccountCard({
               ? `${account.deviceModel || "已绑定"} · ${account.platform === "ios" ? "iOS" : "Android"}`
               : "待扫码绑定"
           }
-          action={needsDevice ? { text: "扫码授权", onClick: onScan } : undefined}
+          action={needsDevice ? { text: "扫码授权", onClick: () => onScan(account.id) } : undefined}
         />
         <InfoBlock
           icon={ImageIcon}
           label="查寝照片"
           ok={!!account.photoUrl}
           value={account.photoUrl ? "已上传" : "未上传"}
-          action={!account.photoUrl ? { text: "去上传", onClick: onOpen } : undefined}
+          action={!account.photoUrl ? { text: "去上传", onClick: () => onOpen(account.id) } : undefined}
           thumb={account.photoUrl ? `${account.photoUrl}?t=${account.updatedAt}` : undefined}
         />
         <InfoBlock
@@ -322,43 +334,46 @@ function AccountCard({
           label="签到位置"
           ok={!!account.address}
           value={account.address ? account.address : "未设置"}
-          action={!account.address ? { text: "自动获取", onClick: onOpen } : undefined}
+          action={!account.address ? { text: "自动获取", onClick: () => onOpen(account.id) } : undefined}
         />
         <InfoBlock
           icon={CalendarClock}
           label="自动计划"
           ok={planCount > 0}
           value={planCount > 0 ? `${planCount} 个启用中` : "未创建"}
-          action={planCount === 0 ? { text: "去创建", onClick: onOpen } : undefined}
+          action={planCount === 0 ? { text: "去创建", onClick: () => onOpen(account.id) } : undefined}
         />
       </div>
 
       {/* 操作区：登录/扫码 优先，管理常驻 */}
-      <div className="border-border mt-3.5 flex gap-2 border-t pt-3">
+      <div
+        className="border-border mt-3.5 flex flex-wrap gap-2 border-t pt-3"
+        onClick={(e) => e.stopPropagation()}
+      >
         {needsLogin && (
-          <Button variant="default" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={onLogin}>
+          <Button variant="default" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onLogin(account.id)}>
             {needsDevice ? "登录账号" : "重新登录"}
           </Button>
         )}
         {needsDevice && (
-          <Button variant={needsLogin ? "outline" : "default"} size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={onScan}>
+          <Button variant={needsLogin ? "outline" : "default"} size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onScan(account.id)}>
             <QrCode className="size-3.5" />
             扫码绑定设备
           </Button>
         )}
         {ok && (
-          <Button variant="outline" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={onOpen}>
+          <Button variant="outline" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onOpen(account.id)}>
             <Settings2 className="size-3.5" />
             管理账号
           </Button>
         )}
-        <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={onOpen}>
+        <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => onOpen(account.id)}>
           详情
         </Button>
       </div>
     </div>
   );
-}
+});
 
 /** 四块信息格：ok 灰调、缺失琥珀调，可带缩略图与快捷动作 */
 function InfoBlock({
@@ -429,6 +444,22 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
   const [challenge, setChallenge] = useState<LoginChallenge | null>(null);
   const captchaResolve = useRef<((ok: boolean) => void) | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const schoolBoxRef = useRef<HTMLDivElement>(null);
+
+  // 点击弹窗其他位置时收起候选列表。
+  // 没有这个，列表会一直盖住下方的学号/密码输入框（小屏上尤其明显）。
+  useEffect(() => {
+    if (!showSchools) return;
+    const onPointerDown = (e: MouseEvent | TouchEvent) => {
+      if (!schoolBoxRef.current?.contains(e.target as Node)) setShowSchools(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("touchstart", onPointerDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("touchstart", onPointerDown);
+    };
+  }, [showSchools]);
 
   // 学校自动匹配（防抖 320ms）
   useEffect(() => {
@@ -462,23 +493,32 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
     try {
       setStep("logging");
       setLogLabel("正在创建账号…");
-      const { account } = await create.mutateAsync({
+      const { account, challenge: ch } = await create.mutateAsync({
         schoolName: school.trim(),
         username: username.trim(),
         password,
       });
 
-      // 保存即登录；学校要验证码时挂起流程，等 CaptchaDialog 回传
+      // 保存即登录；学校要验证码时挂起流程，等 CaptchaDialog 回传。
+      // 注意：challenge 必须来自 mutateAsync 的返回值。读 create.data 拿到的是
+      // 本次 render 的旧快照（恒为 undefined），会导致下面的 Promise 永不 resolve。
       setLogLabel("正在登录…");
       const loginOk = await new Promise<boolean>((resolve) => {
-        const ch = create.data?.challenge;
-        if (ch?.done) {
+        if (!ch || ch.done) {
           resolve(true);
           return;
         }
         captchaResolve.current = resolve;
         setCreatedId(account.id);
-        setChallenge(ch ?? null);
+        setChallenge(ch);
+        // 兜底：验证码始终没有回传时也不能把弹窗永久锁死
+        window.setTimeout(() => {
+          if (captchaResolve.current === resolve) {
+            captchaResolve.current = null;
+            setChallenge(null);
+            resolve(false);
+          }
+        }, 5 * 60_000);
       });
       if (loginOk) toast({ title: "登录成功" });
 
@@ -509,34 +549,39 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
           <DialogBody className="space-y-4">
             {step === "form" ? (
               <>
-                <Field>
-                  <FieldLabel>学校全称</FieldLabel>
-                  <Input
-                    value={school}
-                    onChange={(e) => setSchool(e.target.value)}
-                    onFocus={() => schools.length && setShowSchools(true)}
-                    placeholder="输入几个字自动匹配"
-                    autoComplete="off"
-                  />
-                  {showSchools && (
-                    <div className="bg-popover rounded-lg border border-border shadow-sm">
-                      {schools.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          onClick={() => {
-                            setSchool(s.name);
-                            setShowSchools(false);
-                          }}
-                          className="hover:bg-muted block w-full px-3 py-2 text-left text-sm"
-                        >
-                          {s.name}
-                        </button>
-                      ))}
+                <div ref={schoolBoxRef}>
+                  <Field>
+                    <FieldLabel>学校全称</FieldLabel>
+                    <div className="relative">
+                      <Input
+                        value={school}
+                        onChange={(e) => setSchool(e.target.value)}
+                        onFocus={() => schools.length && setShowSchools(true)}
+                        placeholder="输入几个字自动匹配"
+                        autoComplete="off"
+                      />
+                      {showSchools && (
+                        // 浮层而非文档流：候选列表不再把弹窗撑高到视口之外
+                        <div className="bg-popover absolute inset-x-0 top-full z-50 mt-1 max-h-56 overflow-y-auto overscroll-contain rounded-lg border border-border shadow-md">
+                          {schools.map((s) => (
+                            <button
+                              key={s.id}
+                              type="button"
+                              onClick={() => {
+                                setSchool(s.name);
+                                setShowSchools(false);
+                              }}
+                              className="hover:bg-muted block w-full px-3 py-2 text-left text-sm"
+                            >
+                              {s.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                  <FieldDescription>输入几个字会自动匹配，从下拉中选择即可。</FieldDescription>
-                </Field>
+                    <FieldDescription>输入几个字会自动匹配，从下拉中选择即可。</FieldDescription>
+                  </Field>
+                </div>
                 <Field>
                   <FieldLabel>学号</FieldLabel>
                   <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
