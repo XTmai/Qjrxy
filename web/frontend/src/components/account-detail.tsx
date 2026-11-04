@@ -15,7 +15,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, Bot, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime, relativeTime, taskState, taskTime } from "@/lib/task";
 import { api } from "@/api";
@@ -31,6 +31,18 @@ interface Props {
 
 export function AccountDetail({ account, onClose }: Props) {
   const [deleted, setDeleted] = useState(false);
+  // 弹窗内维护账号快照：上传照片/登录/设置位置后立即刷新，无需重开弹窗或刷新页面
+  const [current, setCurrent] = useState<Account>(account);
+
+  const refreshAccount = async () => {
+    try {
+      const { account: fresh } = await api.account(account.id);
+      if (fresh) setCurrent(fresh);
+    } catch {
+      /* 刷新失败保留旧数据 */
+    }
+    setDeleted(true);
+  };
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose(deleted)}>
@@ -39,13 +51,13 @@ export function AccountDetail({ account, onClose }: Props) {
           <div className="flex items-center gap-3">
             <Avatar size="lg">
               <AvatarFallback className="bg-primary/10 text-primary text-sm font-bold">
-                {(account.alias || account.username).slice(0, 1)}
+                {(current.alias || current.username).slice(0, 1)}
               </AvatarFallback>
             </Avatar>
             <div>
-              <DialogTitle>{account.alias || account.username}</DialogTitle>
+              <DialogTitle>{current.alias || current.username}</DialogTitle>
               <DialogDescription>
-                {account.schoolName} · {account.username}
+                {current.schoolName} · {current.username}
               </DialogDescription>
             </div>
           </div>
@@ -68,7 +80,7 @@ export function AccountDetail({ account, onClose }: Props) {
           </TabsList>
 
           <TabsContent value="tasks">
-            <TasksTab accountId={account.id} onChanged={() => setDeleted(true)} />
+            <TasksTab account={current} onChanged={refreshAccount} />
           </TabsContent>
           <TabsContent value="plans">
             <PlansTab accountId={account.id} />
@@ -77,7 +89,7 @@ export function AccountDetail({ account, onClose }: Props) {
             <LogsTab accountId={account.id} />
           </TabsContent>
           <TabsContent value="device">
-            <DeviceTab account={account} onChanged={() => setDeleted(true)} onDeleted={() => onClose(true)} />
+            <DeviceTab account={current} onChanged={refreshAccount} onDeleted={() => onClose(true)} />
           </TabsContent>
         </Tabs>
 
@@ -93,7 +105,8 @@ export function AccountDetail({ account, onClose }: Props) {
 
 /* ---------------- 任务 tab ---------------- */
 
-function TasksTab({ accountId, onChanged }: { accountId: number; onChanged: () => void }) {
+function TasksTab({ account, onChanged }: { account: Account; onChanged: () => void }) {
+  const accountId = account.id;
   const { toast } = useToast();
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -123,6 +136,15 @@ function TasksTab({ accountId, onChanged }: { accountId: number; onChanged: () =
   };
 
   const run = async (task: Task) => {
+    // 查寝任务需要照片时，缺照片提交必失败。提前拦截并引导上传。
+    if (!account.photoUrl) {
+      toast({
+        title: "缺少签到照片",
+        description: "如果该任务要求照片，提交会失败。请先到「设备」标签上传一张照片。",
+        variant: "destructive",
+      });
+      return;
+    }
     setRunning(task.signInstanceWid);
     try {
       const outcome: RunOutcome = await api.runTask(accountId, task.id, task.kind);
@@ -159,6 +181,9 @@ function TasksTab({ accountId, onChanged }: { accountId: number; onChanged: () =
         const st = taskState(t);
         return (
           <div key={t.id} className="flex items-center gap-3 rounded-xl border p-3">
+            <div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg">
+              <Bot className="size-4" />
+            </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium">{t.taskName || "查寝"}</p>
               <p className="text-muted-foreground mt-0.5 text-xs">{taskTime(t)}</p>
@@ -223,7 +248,9 @@ function LogsTab({ accountId }: { accountId: number }) {
         >
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm">{l.message || l.taskName}</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">{formatDateTime(l.createdAt)}</p>
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              {relativeTime(l.createdAt)} · {formatDateTime(l.createdAt)}
+            </p>
           </div>
           <RunStatusBadge status={l.status} />
         </button>
@@ -295,6 +322,26 @@ function LogDetailRows({ raw }: { raw: string }) {
       );
     if (d.error)
       rows.push(<Row key="err" label="错误" value={<span className="text-destructive">{String(d.error)}</span>} />);
+    // 签到点列表：名称 + 距离/半径 + 是否在范围
+    if (Array.isArray(d.places) && d.places.length > 0) {
+      const places = d.places as Array<{ name: string; distance: number; radius: number; inRange: boolean }>;
+      rows.push(
+        <div key="places" className="border-t pt-2">
+          <p className="text-muted-foreground mb-1.5 text-xs font-medium">签到点</p>
+          <div className="space-y-1.5">
+            {places.map((pl, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate">{pl.name || `签到点 ${i + 1}`}</span>
+                <span className="text-muted-foreground shrink-0 tabular-nums">
+                  {Math.round(pl.distance)}m / 半径 {Math.round(pl.radius)}m
+                </span>
+                <Badge variant={pl.inRange ? "success" : "error"}>{pl.inRange ? "在范围" : "范围外"}</Badge>
+              </div>
+            ))}
+          </div>
+        </div>,
+      );
+    }
     return rows.length ? <div className="border-t pt-2">{rows}</div> : <></>;
   } catch {
     return <></>;
@@ -317,6 +364,7 @@ function DeviceTab({
   const [showScan, setShowScan] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [photoVersion, setPhotoVersion] = useState(Date.now());
 
   const relLogin = async () => {
     setBusy(true);
@@ -354,7 +402,8 @@ function DeviceTab({
       const fd = new FormData();
       fd.append("photo", file);
       await api.uploadPhoto(account.id, fd);
-      toast({ title: "照片已上传" });
+      setPhotoVersion(Date.now()); // 强制刷新 img 缓存
+      toast({ title: "照片已上传", description: "已生效，可直接执行查寝" });
       onChanged();
     } catch (e) {
       toast({ title: "上传失败", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
@@ -427,10 +476,28 @@ function DeviceTab({
         }}
       />
 
-      {account.photoUrl && (
+      {/* 签到照片：查寝任务若要求照片，缺少会导致提交失败 */}
+      {account.photoUrl ? (
         <div>
-          <p className="text-muted-foreground mb-2 text-xs">签到照片</p>
-          <img src={account.photoUrl} alt="签到照片" className="max-h-40 rounded-xl border object-cover" />
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-muted-foreground text-xs">签到照片</p>
+            <span className="text-[11px] text-emerald-600 dark:text-emerald-400">已上传</span>
+          </div>
+          <img
+            src={`${account.photoUrl}?t=${photoVersion}`}
+            alt="签到照片"
+            className="max-h-40 rounded-xl border object-cover"
+          />
+        </div>
+      ) : (
+        <div className="border-amber-500/20 bg-amber-500/5 flex items-start gap-2 rounded-lg border p-3">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+          <div>
+            <p className="text-xs font-medium text-amber-700 dark:text-amber-400">尚未上传签到照片</p>
+            <p className="text-muted-foreground mt-0.5 text-[11px] leading-relaxed">
+              若查寝任务要求照片，缺少照片会导致提交失败。请上传一张宿舍内的照片（jpg / png / webp，不超过 8MB）。
+            </p>
+          </div>
         </div>
       )}
 

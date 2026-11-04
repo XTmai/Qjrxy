@@ -1,7 +1,7 @@
-// 账号页：卡片列表 + 单卡片创建（保存即登录）+ 批量登录态检测 + 详情弹窗。
-import { useCallback, useEffect, useRef, useState } from "react";
+// 账号页：搜索/过滤 + 卡片列表 + 单卡片创建（保存即登录）+ 批量登录态检测 + 详情弹窗。
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { Loader2, MapPin, Plus, QrCode, Search, Smartphone } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,22 +24,20 @@ import { toast } from "@/hooks/use-toast";
 import { AccountDetail } from "@/components/account-detail";
 import { CaptchaDialog } from "@/components/captcha-dialog";
 import { LoginBadge } from "@/components/status-badge";
+import { EmptyBanner } from "@/components/empty-banner";
 import { PageHeader } from "@/components/page-header";
 import type { Account, LoginChallenge, School } from "@/lib/types";
+
+type StatusFilter = "all" | "needs-login" | "needs-device";
 
 export function AccountsPage() {
   const { data: accounts } = useAccounts();
   const [search, setSearch] = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [keyword, setKeyword] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const probe = useProbeAccounts();
-
-  const load = useCallback(async () => {
-    await api.listAccounts().then((d) => {
-      // 让 useAccounts 缓存失效走 refetch：这里简单触发一次 invalidate
-      void d;
-    });
-  }, []);
 
   // 支持 /accounts?account=N 直达详情、?create=1 直达创建
   useEffect(() => {
@@ -58,6 +56,18 @@ export function AccountsPage() {
       setSearch(search, { replace: true });
     }
   }, [search, setSearch]);
+
+  const filtered = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return (accounts ?? []).filter((a) => {
+      if (statusFilter === "needs-login" && a.loginStatus === "authorized") return false;
+      if (statusFilter === "needs-device" && a.deviceId) return false;
+      if (!kw) return true;
+      return [a.alias, a.username, a.schoolName].some((v) =>
+        String(v ?? "").toLowerCase().includes(kw),
+      );
+    });
+  }, [accounts, keyword, statusFilter]);
 
   const probeAll = () => {
     probe.mutate(undefined, {
@@ -87,50 +97,88 @@ export function AccountsPage() {
           <>
             {accounts && accounts.length > 0 && (
               <Button variant="outline" size="sm" disabled={probe.isPending} onClick={probeAll}>
-                {probe.isPending ? "检测中…" : "检测登录态"}
+                {probe.isPending ? <Loader2 className="size-4 animate-spin" /> : "检测登录态"}
               </Button>
             )}
             <Button variant="default" size="sm" onClick={() => setShowCreate(true)}>
+              <Plus className="size-3.5" />
               添加账号
             </Button>
           </>
         }
       />
 
+      {/* 搜索 + 过滤 chips */}
+      {accounts && accounts.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-48">
+            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
+            <Input
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              placeholder="搜索别名、学号或学校"
+              className="pl-9"
+            />
+          </div>
+          {(
+            [
+              ["all", "全部"],
+              ["needs-login", "需登录"],
+              ["needs-device", "待扫码"],
+            ] as const
+          ).map(([key, label]) => (
+            <Button
+              key={key}
+              variant={statusFilter === key ? "secondary" : "ghost"}
+              size="sm"
+              className={statusFilter === key ? "" : "text-muted-foreground"}
+              onClick={() => setStatusFilter(key)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      )}
+
       {!accounts && (
         <div className="space-y-3">
-          {[0, 1].map((i) => (
+          {[0, 1, 2].map((i) => (
             <Skeleton key={i} className="h-24 rounded-2xl" />
           ))}
         </div>
       )}
 
       {accounts && accounts.length === 0 && (
-        <Card>
-          <CardContent className="text-muted-foreground flex flex-col items-center gap-3 py-10 text-center">
-            <p className="text-sm">还没有绑定账号</p>
-            <p className="text-xs">学校 + 学号 + 密码，保存后自动登录</p>
-            <Button variant="default" size="sm" onClick={() => setShowCreate(true)}>
-              添加账号
+        <EmptyBanner
+          tone="destructive"
+          title="还没有绑定账号"
+          description="添加今日校园账号后即可自动查寝。学校 + 学号 + 密码，保存后自动登录。"
+          action={
+            <Button variant="destructive" size="sm" onClick={() => setShowCreate(true)}>
+              去添加
             </Button>
+          }
+        />
+      )}
+
+      {accounts && accounts.length > 0 && filtered.length === 0 && (
+        <Card>
+          <CardContent className="text-muted-foreground py-10 text-center text-sm">
+            没有匹配的账号
           </CardContent>
         </Card>
       )}
 
-      {accounts && accounts.length > 0 && (
-        <div className="space-y-3">
-          {accounts.map((a) => (
-            <AccountCard key={a.id} account={a} onOpen={() => setDetailId(a.id)} />
-          ))}
-        </div>
-      )}
+      {filtered.map((a) => (
+        <AccountCard key={a.id} account={a} onOpen={() => setDetailId(a.id)} />
+      ))}
 
       {showCreate && (
-        <CreateAccountDialog onClose={(created) => { setShowCreate(false); if (created) void load(); }} />
+        <CreateAccountDialog onClose={(created) => { setShowCreate(false); if (created) void 0; }} />
       )}
 
       {detail && (
-        <AccountDetail account={detail} onClose={(deleted) => { setDetailId(null); if (deleted) void load(); }} />
+        <AccountDetail account={detail} onClose={(deleted) => { setDetailId(null); if (deleted) void 0; }} />
       )}
     </div>
   );
@@ -155,7 +203,7 @@ function AccountCard({ account, onOpen }: { account: Account; onOpen: () => void
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="truncate text-sm font-medium">{account.alias || account.username}</p>
             <LoginBadge status={account.loginStatus} />
             {needsDevice && <Badge variant="warning">待扫码</Badge>}
@@ -163,8 +211,33 @@ function AccountCard({ account, onOpen }: { account: Account; onOpen: () => void
           <p className="text-muted-foreground mt-0.5 truncate text-xs">
             {account.schoolName} · {account.username}
           </p>
+          {/* 设备 / 位置 / 照片 chips */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {account.deviceId ? (
+              <span className="bg-muted/60 text-muted-foreground flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px]">
+                <Smartphone className="size-3" />
+                {account.deviceModel || "已绑定"} · {account.platform === "ios" ? "iOS" : "Android"}
+              </span>
+            ) : (
+              <span className="text-muted-foreground bg-muted/60 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px]">
+                <QrCode className="size-3" />
+                设备未绑定
+              </span>
+            )}
+            {account.address && (
+              <span className="text-muted-foreground bg-muted/60 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px]">
+                <MapPin className="size-3" />
+                {account.address}
+              </span>
+            )}
+            {account.photoUrl && (
+              <span className="text-muted-foreground bg-muted/60 rounded-md px-1.5 py-0.5 text-[11px]">
+                有照片
+              </span>
+            )}
+          </div>
           {account.lastProbeAt && (
-            <p className="text-muted-foreground mt-1 truncate text-xs" title={account.lastProbeMsg}>
+            <p className="text-muted-foreground mt-1.5 truncate text-xs" title={account.lastProbeMsg}>
               🛡 登录态已检测 · {relativeTime(account.lastProbeAt)}
               <span className="ml-2">{account.lastProbeMsg}</span>
             </p>

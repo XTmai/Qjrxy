@@ -255,7 +255,7 @@ export function PlansTab({ accountId }: { accountId: number }) {
   const { toast } = useToast();
   const { data: plansData } = usePlans();
   const [form, setForm] = useState<{ open: boolean; existing: Plan | null }>({ open: false, existing: null });
-  const list = (plansData?.plans ?? []).filter((p) => p.accountId === accountId);
+  const list = (plansData ?? []).filter((p) => p.accountId === accountId);
 
   return (
     <div className="space-y-3 py-3">

@@ -7,6 +7,7 @@ export function usePlans() {
   return useQuery({
     queryKey: queryKeys.plans.all(),
     queryFn: () => api.plans(),
+    select: (d) => d.plans,
   });
 }
 

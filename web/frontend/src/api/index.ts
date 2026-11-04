@@ -40,6 +40,7 @@ export const api = {
 
   // ---- 账号 ----
   listAccounts: () => http.get<{ accounts: Account[] }>('/accounts'),
+  account: (id: number) => http.get<{ account: Account; tasks?: Task[] }>(`/accounts/${id}`),
   createAccount: (data: AccountInput) => http.post<{ account: Account }>('/accounts', data),
   updateAccount: (id: number, data: Partial<AccountInput>) =>
     http.patch<{ account: Account }>(`/accounts/${id}`, data),
