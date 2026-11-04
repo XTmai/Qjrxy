@@ -2,12 +2,18 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"qjrxy/internal/secure"
 	"qjrxy/internal/service"
+	"qjrxy/internal/store"
 )
 
 // Server 持有 HTTP 服务依赖。
@@ -17,6 +23,11 @@ type Server struct {
 	// 登录/注册限流：登录 5 次/分钟、注册 3 次/小时（按 IP + 账号名）。
 	loginLimiter    *rateLimiter
 	registerLimiter *rateLimiter
+
+	// 单用户模式缓存的本地用户（懒加载，见 ensureSingleUser）。
+	singleOnce sync.Once
+	singleUser *store.User
+	singleErr  error
 }
 
 // New 创建 HTTP 服务。
@@ -95,10 +106,18 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 }
 
 // withUser 要求登录，并把用户放进上下文。
+// 单用户模式下（cfg.SingleUser）所有请求自动落到唯一的本地用户，
+// 无需登录——本地双击 exe 即用的场景。
 func (s *Server) withUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := bearerToken(r)
 		user, err := s.svc.Authenticate(r.Context(), token)
+		if err != nil && s.svc.Config().SingleUser {
+			if user, err = s.ensureSingleUser(r.Context()); err != nil {
+				writeError(w, &APIError{Status: http.StatusInternalServerError, Code: "failed", Message: err.Error()})
+				return
+			}
+		}
 		if err != nil {
 			if token == "" {
 				writeError(w, unauthorized("请先登录"))
@@ -110,6 +129,32 @@ func (s *Server) withUser(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), ctxUser, user)
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// ensureSingleUser 返回单用户模式下唯一的本地用户：
+// 优先复用库里已有用户（老数据无缝迁移），否则自动创建 admin。
+// 结果缓存在 Server 实例上，避免每个请求都查库。
+func (s *Server) ensureSingleUser(ctx context.Context) (*store.User, error) {
+	s.singleOnce.Do(func() {
+		user, err := s.svc.DB().FirstUser(ctx)
+		if errors.Is(err, store.ErrNotFound) {
+			// 随机密码：单用户模式不走登录，密码仅用于占位，无法被撞库
+			user, err = s.svc.Register(ctx, "admin", secure.RandomID(32), "本地用户")
+			if err != nil {
+				s.singleErr = fmt.Errorf("创建本地用户失败：%w", err)
+				return
+			}
+			log.Printf("单用户模式：已自动创建本地用户 %s（无需登录，打开即用）", user.Username)
+		} else if err != nil {
+			s.singleErr = err
+			return
+		}
+		s.singleUser = user
+	})
+	if s.singleErr != nil {
+		return nil, s.singleErr
+	}
+	return s.singleUser, nil
 }
 
 // pathID 读取路径中的 {id}。

@@ -2,7 +2,7 @@
 // 左侧固定侧边栏（可收起为图标）+ 顶部状态条 + 主内容区
 import { Outlet, useNavigate, Link, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { useUser } from "@/hooks/use-auth";
+import { useUser, useInfo } from "@/hooks/use-auth";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useAuthStore } from "@/stores/auth-store";
 import {
@@ -198,7 +198,10 @@ export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
   const { data: user, isError } = useUser();
+  const { data: info } = useInfo();
   const { data: accounts = [] } = useAccounts();
+  // 单用户模式没有账号体系：不显示退出/账号设置
+  const single = info !== undefined && !info.multiUser;
 
   useEffect(() => {
     if (isError) navigate("/login", { replace: true });
@@ -307,21 +310,31 @@ export function Layout() {
                   align="end"
                   sideOffset={6}
                 >
-                  <DropdownMenuItem onClick={() => navigate("/settings/security")} className="cursor-pointer text-xs">
-                    <Settings2 className="mr-2 size-3.5" />
-                    账号设置
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={async () => {
-                      await useAuthStore.getState().logout();
-                      navigate("/login");
-                    }}
-                    className="focus:bg-danger-soft focus:text-danger-text text-danger cursor-pointer text-xs font-medium"
-                  >
-                    <LogOut className="mr-2 size-3.5" />
-                    退出登录
-                  </DropdownMenuItem>
+                  {!single && (
+                    <>
+                      <DropdownMenuItem onClick={() => navigate("/settings/security")} className="cursor-pointer text-xs">
+                        <Settings2 className="mr-2 size-3.5" />
+                        账号设置
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={async () => {
+                          await useAuthStore.getState().logout();
+                          navigate("/login");
+                        }}
+                        className="focus:bg-danger-soft focus:text-danger-text text-danger cursor-pointer text-xs font-medium"
+                      >
+                        <LogOut className="mr-2 size-3.5" />
+                        退出登录
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {single && (
+                    <DropdownMenuItem onClick={() => navigate("/settings")} className="cursor-pointer text-xs">
+                      <Settings2 className="mr-2 size-3.5" />
+                      系统设置
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </SidebarMenuItem>

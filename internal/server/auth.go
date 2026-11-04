@@ -40,6 +40,12 @@ type registerRequest struct {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	// 单用户模式没有账号体系：前端根本不会进登录页，注册口直接关闭，
+	// 避免有人对无鉴权的本地实例发起注册。
+	if s.svc.Config().SingleUser {
+		writeError(w, &APIError{Status: http.StatusForbidden, Code: "single_user", Message: "单用户模式无需注册，打开即用；服务器多人使用请设置 QINGJIN_MULTI_USER=true"})
+		return
+	}
 	var req registerRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
@@ -124,6 +130,13 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	user, err := s.svc.Authenticate(r.Context(), bearerToken(r))
+	if err != nil && s.svc.Config().SingleUser {
+		// 单用户模式：无 token 也返回本地用户，前端跳过登录页
+		if user, err = s.ensureSingleUser(r.Context()); err != nil {
+			writeError(w, &APIError{Status: http.StatusInternalServerError, Code: "failed", Message: err.Error()})
+			return
+		}
+	}
 	if err != nil {
 		writeError(w, unauthorized("未登录"))
 		return
@@ -155,6 +168,7 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"serverTime":   time.Now().Format(time.RFC3339),
 		"tokenTTLDay":  s.tokenTTL,
 		"quotaEnabled": s.svc.Config().QuotaEnabled,
+		"multiUser":    !s.svc.Config().SingleUser,
 		"features":     features,
 	})
 }

@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /out/qjrxy .
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates tzdata &&     adduser -D -H -u 10001 qjrxy &&     mkdir -p /data && chown qjrxy:qjrxy /data
-ENV TZ=Asia/Shanghai     QINGJIN_ADDR=:8090     QINGJIN_DATA_DIR=/data
+ENV TZ=Asia/Shanghai     QINGJIN_ADDR=:8090     QINGJIN_DATA_DIR=/data     QINGJIN_MULTI_USER=true
 COPY --from=builder /out/qjrxy /usr/local/bin/qjrxy
 USER qjrxy
 EXPOSE 8090

@@ -30,6 +30,7 @@ export function SettingsPage() {
   const switchTab = (t: Tab) => navigate(`/settings/${t}`, { replace: true });
 
   const quotaOn = info?.quotaEnabled ?? false;
+  const singleUser = info !== undefined && !info.multiUser;
   const remaining = user ? Math.max(0, user.quota - user.quotaUsed) : 0;
   const usedPct = user && user.quota > 0 ? Math.min(100, Math.round((user.quotaUsed / user.quota) * 100)) : 0;
 
@@ -141,37 +142,49 @@ export function SettingsPage() {
 
         {/* 安全 */}
         <TabsContent value="security" className="m-0 space-y-5">
-          <Card className="border-border/50">
-            <CardHeader>
-              <CardTitle className="text-base">修改登录密码</CardTitle>
-              <CardDescription>用于登录本系统的密码，与今日校园的密码无关</CardDescription>
-            </CardHeader>
-            <CardContent className="max-w-2xl space-y-4">
-              <Field>
-                <FieldLabel>当前密码</FieldLabel>
-                <Input
-                  type="password"
-                  value={oldPass}
-                  onChange={(e) => setOldPass(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </Field>
-              <Field>
-                <FieldLabel>新密码</FieldLabel>
-                <Input
-                  type="password"
-                  value={newPass}
-                  onChange={(e) => setNewPass(e.target.value)}
-                  placeholder="至少 6 位"
-                  autoComplete="new-password"
-                />
-              </Field>
-              {pwError && <p className="text-destructive text-sm">{pwError}</p>}
-              <Button variant="default" size="sm" disabled={busy} onClick={() => void changePassword()}>
-                更新密码
-              </Button>
-            </CardContent>
-          </Card>
+          {singleUser ? (
+            <Card className="border-border/50">
+              <CardHeader>
+                <CardTitle className="text-base">单用户模式</CardTitle>
+                <CardDescription>
+                  当前以单用户模式运行：打开即用，无需账号密码，数据只保存在本机。
+                  如需多人使用并开启登录，请在服务端设置环境变量 QINGJIN_MULTI_USER=true 后重启。
+                </CardDescription>
+              </CardHeader>
+            </Card>
+          ) : (
+            <Card className="border-border/50">
+              <CardHeader>
+                <CardTitle className="text-base">修改登录密码</CardTitle>
+                <CardDescription>用于登录本系统的密码，与今日校园的密码无关</CardDescription>
+              </CardHeader>
+              <CardContent className="max-w-2xl space-y-4">
+                <Field>
+                  <FieldLabel>当前密码</FieldLabel>
+                  <Input
+                    type="password"
+                    value={oldPass}
+                    onChange={(e) => setOldPass(e.target.value)}
+                    autoComplete="current-password"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel>新密码</FieldLabel>
+                  <Input
+                    type="password"
+                    value={newPass}
+                    onChange={(e) => setNewPass(e.target.value)}
+                    placeholder="至少 6 位"
+                    autoComplete="new-password"
+                  />
+                </Field>
+                {pwError && <p className="text-destructive text-sm">{pwError}</p>}
+                <Button variant="default" size="sm" disabled={busy} onClick={() => void changePassword()}>
+                  更新密码
+                </Button>
+              </CardContent>
+            </Card>
+          )}
         </TabsContent>
 
         {/* 额度（仅托管运营开启时） */}

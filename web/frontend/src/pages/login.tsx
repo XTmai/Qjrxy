@@ -1,16 +1,17 @@
 // 登录 / 注册。基于 openilink 登录页布局（六边形背景 + 居中卡片），
 // 认证通道只保留账号密码（本项目不接入微信/Passkey/OAuth）。
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { HexagonBackground } from "@/components/ui/hexagon-background";
-import { useLogin, useRegister } from "@/hooks/use-auth";
+import { useInfo, useLogin, useRegister } from "@/hooks/use-auth";
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const { data: info, isError: infoError } = useInfo();
   const login = useLogin();
   const register = useRegister();
   const [mode, setMode] = useState<"login" | "register">("login");
@@ -18,6 +19,11 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
   const [error, setError] = useState("");
+
+  // 单用户模式没有登录页：直接进主界面（放在所有 hooks 之后，避免条件 hooks）
+  if (!infoError && info !== undefined && !info.multiUser) {
+    return <Navigate to="/" replace />;
+  }
 
   const busy = login.isPending || register.isPending;
 

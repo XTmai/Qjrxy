@@ -19,6 +19,8 @@ Environment=QINGJIN_ADMIN_PASS=CHANGE_ME_BEFORE_START
 Environment=TZ=Asia/Shanghai
 # 端口也可通过环境变量覆盖（命令行 -addr 优先级更高）
 Environment=QINGJIN_ADDR=:8090
+# 服务器多人使用：开启账号体系（本地 exe 默认单用户直开，无需此变量）
+Environment=QINGJIN_MULTI_USER=true
 
 # 静态二进制，无需额外能力
 NoNewPrivileges=true

@@ -426,3 +426,93 @@ func TestChangePasswordRevokesOtherSessions(t *testing.T) {
 		t.Errorf("当前会话应继续有效，得到 %d", status)
 	}
 }
+
+// newSingleEnv 构造单用户模式实例（cfg.SingleUser=true，模拟本地 exe 直开）。
+func newSingleEnv(t *testing.T) *testEnv {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Addr:       ":0",
+		DataDir:    dir,
+		SecretKey:  bytes.Repeat([]byte{9}, 32),
+		SingleUser: true,
+	}
+	db, err := store.Open(filepath.Join(dir, "single.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	svc := service.New(cfg, db)
+	srv := httptest.NewServer(server.New(svc).Handler(nil))
+	t.Cleanup(srv.Close)
+	return &testEnv{srv: srv, db: db}
+}
+
+// TestSingleUserMode 校验单用户模式：无 token 直用、注册口关闭、老库用户无缝复用。
+func TestSingleUserMode(t *testing.T) {
+	env := newSingleEnv(t)
+
+	// 无 token 的 /auth/me 应自动创建并返回本地用户
+	status, body := env.do(t, http.MethodGet, "/api/auth/me", nil, "")
+	if status != http.StatusOK {
+		t.Fatalf("单用户模式 /auth/me 应 200，得到 %d %v", status, body)
+	}
+	data, _ := body["data"].(map[string]any)
+	user, _ := data["user"].(map[string]any)
+	if user == nil || user["username"] != "admin" {
+		t.Fatalf("应自动创建本地用户 admin，得到 %v", body)
+	}
+
+	// 业务接口同样无 token 可用
+	if status, _ := env.do(t, http.MethodGet, "/api/accounts", nil, ""); status != http.StatusOK {
+		t.Errorf("单用户模式 /api/accounts 应 200，得到 %d", status)
+	}
+	if status, _ := env.do(t, http.MethodGet, "/api/dashboard", nil, ""); status != http.StatusOK {
+		t.Errorf("单用户模式 /api/dashboard 应 200，得到 %d", status)
+	}
+
+	// 注册口关闭（code=single_user）
+	status, body = env.do(t, http.MethodPost, "/api/auth/register",
+		map[string]string{"username": "intruder", "password": "hack9999"}, "")
+	if status != http.StatusForbidden {
+		t.Errorf("单用户模式注册应 403，得到 %d", status)
+	}
+	if errObj, _ := body["error"].(map[string]any); errObj != nil && errObj["code"] != "single_user" {
+		t.Errorf("错误码应为 single_user，得到 %v", errObj)
+	}
+
+	// 老库已有用户：新实例应复用第一个用户而不是再建 admin
+	//（用户须在单用户实例首次访问前就存在，才能测出「复用」路径）
+	dir2 := t.TempDir()
+	db2, err := store.Open(filepath.Join(dir2, "legacy.db"))
+	if err != nil {
+		t.Fatalf("打开老库失败：%v", err)
+	}
+	defer db2.Close()
+	if _, err := db2.CreateUser(context.Background(), "legacyuser", "老用户", "hash", 50); err != nil {
+		t.Fatalf("预置老用户失败：%v", err)
+	}
+	svc2 := service.New(&config.Config{
+		Addr: ":0", DataDir: dir2,
+		SecretKey: bytes.Repeat([]byte{8}, 32), SingleUser: true,
+	}, db2)
+	srv2 := httptest.NewServer(server.New(svc2).Handler(nil))
+	defer srv2.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv2.URL+"/api/auth/me", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("复用老用户时 /auth/me 应 200，得到 %d %s", resp.StatusCode, raw)
+	}
+	outData, _ := out["data"].(map[string]any)
+	if u, _ := outData["user"].(map[string]any); u == nil || u["username"] != "legacyuser" {
+		t.Errorf("应复用已有用户 legacyuser，得到 %v", out)
+	}
+}

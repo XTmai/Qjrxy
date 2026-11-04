@@ -6,17 +6,33 @@ import { AccountsPage } from "@/pages/accounts";
 import { AuditPage } from "@/pages/audit";
 import { SchedulesPage } from "@/pages/schedules";
 import { SettingsPage } from "@/pages/settings";
-import { useUser } from "@/hooks/use-auth";
+import { useInfo, useUser } from "@/hooks/use-auth";
 import { getToken } from "@/api/client";
 import { Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 function Gate({ children }: { children: React.ReactNode }) {
-  const { data: user, isError, isPending } = useUser();
-  // 未登录（无 token）时 useUser 的查询被 enabled 禁用，isPending 恒为 true，
-  // 必须在最前面判断，否则会永远停在加载动画上。
-  if (!getToken()) return <Navigate to="/login" replace />;
+  // systemInfo 走 withUser 但单用户模式下无 token 也能取到（服务端自动落到本地用户），
+  // 因此它是判定「单用户 / 多用户」的公开依据；多用户模式下无 token 时它 401（infoError）。
+  const { data: info, isError: infoError } = useInfo();
+  const single = !infoError && info !== undefined && !info.multiUser;
+  const { data: user, isError, isPending, refetch } = useUser(single);
+
+  if (!getToken()) {
+    if (single) {
+      // 单用户：继续走下面的 user 校验（me() 会返回本地用户）
+    } else if (infoError) {
+      return <Navigate to="/login" replace />;
+    } else {
+      return <Spinner />;
+    }
+  }
   if (isPending) return <Spinner />;
-  if (isError || !user) return <Navigate to="/login" replace />;
+  if (isError || !user) {
+    // 单用户模式下 me() 失败说明服务端异常，给重试入口而不是跳登录页（跳过去也是循环）
+    if (single) return <LoadError onRetry={() => void refetch()} />;
+    return <Navigate to="/login" replace />;
+  }
   return <>{children}</>;
 }
 
@@ -24,6 +40,17 @@ function Spinner() {
   return (
     <div className="bg-background text-foreground flex min-h-screen items-center justify-center">
       <Loader2 className="size-5 animate-spin" />
+    </div>
+  );
+}
+
+function LoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="bg-background text-foreground flex min-h-screen flex-col items-center justify-center gap-3">
+      <p className="text-muted-foreground text-sm">本地服务暂时没有响应</p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        重试
+      </Button>
     </div>
   );
 }

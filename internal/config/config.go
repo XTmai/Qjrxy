@@ -36,22 +36,44 @@ type Config struct {
 	// 用 QINGJIN_TLS_INSECURE_HOSTS 精确列出对应域名（逗号分隔），
 	// 而不是像早期版本那样全局关闭校验。
 	TLSInsecureHosts []string
+
+	// SingleUser 单用户模式：打开即用，无需注册/登录。
+	//
+	// 面向「本地双击 exe 就能用」的个人场景：所有接口自动落到唯一的
+	// 本地用户（首次启动自动创建），前端跳过登录页。
+	//
+	// 安全默认值：单用户模式下若未显式配置 QINGJIN_ADDR，只监听
+	// 127.0.0.1 —— 该模式没有鉴权，绝不能默认暴露到局域网/公网。
+	// 服务器多人使用时设 QINGJIN_MULTI_USER=true 恢复账号体系。
+	//
+	// 注意零值 = false（多用户）：直接构造 Config 的单测与既有部署
+	// 保持原有行为；只有经 config.Load() 读取环境变量时才会默认开启。
+	SingleUser bool
 }
 
 // Load 从环境变量读取配置，未设置的项使用默认值。
 //
 // 支持的环境变量：
 //
-//	QINGJIN_ADDR            监听地址（默认 :8090）
+//	QINGJIN_ADDR            监听地址（默认 :8090；单用户模式默认 127.0.0.1:8090）
 //	QINGJIN_DATA_DIR        数据目录（默认 ./data）
 //	QINGJIN_SECRET          32 字节密钥（base64），不填则自动生成到 <data>/secret.key
 //	QINGJIN_ADMIN_USER      管理员用户名（默认空，即首次访问时注册）
 //	QINGJIN_ADMIN_PASS      管理员密码
+//	QINGJIN_MULTI_USER      多用户/账号体系开关（默认 false=单用户直开；服务器多人用设为 true）
 //	QINGJIN_QUOTA_ENABLED   额度/卡密体系开关（默认 false；托管运营场景设为 true）
 //	QINGJIN_REGISTER_OPEN   是否允许自助注册（默认 false：仅首次初始化可注册）
 //	QINGJIN_TLS_INSECURE_HOSTS  允许跳过证书校验的主机后缀，逗号分隔（默认空=严格校验）
 func Load() (*Config, error) {
-	addr := envOr("QINGJIN_ADDR", ":8090")
+	multiUser := envBool("QINGJIN_MULTI_USER", false)
+
+	// 单用户模式（本地 exe）默认只监听回环地址：该模式无鉴权，
+	// 显式设置 QINGJIN_ADDR 才会绑定其它地址。
+	addrDefault := ":8090"
+	if !multiUser {
+		addrDefault = "127.0.0.1:8090"
+	}
+	addr := envOr("QINGJIN_ADDR", addrDefault)
 	dataDir := envOr("QINGJIN_DATA_DIR", "./data")
 
 	absDir, err := filepath.Abs(dataDir)
@@ -71,6 +93,7 @@ func Load() (*Config, error) {
 		Addr:             addr,
 		DataDir:          absDir,
 		SecretKey:        key,
+		SingleUser:       !multiUser,
 		AdminUser:        strings.TrimSpace(os.Getenv("QINGJIN_ADMIN_USER")),
 		AdminPass:        os.Getenv("QINGJIN_ADMIN_PASS"),
 		QuotaEnabled:     envBool("QINGJIN_QUOTA_ENABLED", false),

@@ -6,8 +6,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { useAuthStore } from "@/stores/auth-store";
 import type { User } from "@/lib/types";
 
-/** 当前登录用户；无 token 时不发起请求。 */
-export function useUser() {
+/** 当前登录用户；无 token 时不发起请求（单用户模式 force=true，服务端自动落到本地用户）。 */
+export function useUser(force = false) {
   const setUser = useAuthStore((s) => s.setUser);
   return useQuery({
     queryKey: queryKeys.user(),
@@ -16,7 +16,7 @@ export function useUser() {
       setUser(user);
       return user;
     },
-    enabled: Boolean(getToken()),
+    enabled: Boolean(getToken()) || force,
     staleTime: 5 * 60_000,
     retry: false,
   });

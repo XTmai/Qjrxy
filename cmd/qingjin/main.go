@@ -9,7 +9,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -93,6 +96,17 @@ func main() {
 		}
 	}()
 
+	// 单用户模式（本地 exe）：启动后自动打开浏览器，双击即用。
+	// 服务器多人部署请设 QINGJIN_MULTI_USER=true；QINGJIN_NO_OPEN=1 可关闭自动打开。
+	if cfg.SingleUser && os.Getenv("QINGJIN_NO_OPEN") != "1" {
+		go func() {
+			time.Sleep(400 * time.Millisecond) // 等监听就绪
+			if err := openBrowser(localURL(cfg.Addr)); err != nil {
+				log.Printf("自动打开浏览器失败（可手动访问 http://localhost%s）：%v", displayAddr(cfg.Addr), err)
+			}
+		}()
+	}
+
 	// 优雅退出
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -142,6 +156,33 @@ func displayAddr(addr string) string {
 		return addr
 	}
 	return addr
+}
+
+// localURL 计算本机可访问的地址：未绑定具体 IP 时用 127.0.0.1。
+func localURL(addr string) string {
+	host, port, ok := strings.Cut(addr, ":")
+	if !ok {
+		port = addr
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if port == "" {
+		port = "8090"
+	}
+	return fmt.Sprintf("http://%s:%s", host, port)
+}
+
+// openBrowser 用系统默认浏览器打开页面（Windows/macOS/Linux）。
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		return exec.Command("open", url).Start()
+	default:
+		return exec.Command("xdg-open", url).Start()
+	}
 }
 
 const appVersion = "1.0.0"

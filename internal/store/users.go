@@ -60,6 +60,14 @@ func (db *DB) UserByUsername(ctx context.Context, username string) (*User, error
 	return scanUser(row)
 }
 
+// FirstUser 返回最早创建的用户（单用户模式落到已有数据时使用）。
+func (db *DB) FirstUser(ctx context.Context) (*User, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, username, nickname, password_hash, role, quota, quota_used, theme, created_at
+		FROM users ORDER BY id LIMIT 1`)
+	return scanUser(row)
+}
+
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Username, &u.Nickname, &u.PasswordHash, &u.Role,

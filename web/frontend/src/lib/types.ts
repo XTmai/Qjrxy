@@ -211,6 +211,8 @@ export interface SystemInfo {
   serverTime: string;
   tokenTTLDay: number;
   quotaEnabled: boolean;
+  /** false = 单用户模式：打开即用，无登录/注册 */
+  multiUser: boolean;
   features: string[];
 }
 
