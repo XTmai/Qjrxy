@@ -34,11 +34,13 @@ type School struct {
 
 // ClientOptions 控制 HTTP 行为。
 type ClientOptions struct {
-	Timeout    time.Duration
-	Insecure   bool
-	ProxyURL   string
-	UserAgent  string
-	HTTPClient *http.Client
+	Timeout time.Duration
+	// InsecureHosts 是允许跳过证书校验的主机后缀白名单（见 tls.go）。
+	// 为空表示对全部主机做严格校验，这是默认且推荐的行为。
+	InsecureHosts []string
+	ProxyURL      string
+	UserAgent     string
+	HTTPClient    *http.Client
 }
 
 func defaultHTTPClient(opts ClientOptions) *http.Client {
@@ -51,7 +53,7 @@ func defaultHTTPClient(opts ClientOptions) *http.Client {
 		timeout = 30 * time.Second
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = insecureTLSConfig(opts.Insecure)
+	transport.TLSClientConfig = tlsConfigFor(opts.InsecureHosts)
 	if opts.ProxyURL != "" {
 		if u, err := url.Parse(opts.ProxyURL); err == nil {
 			transport.Proxy = http.ProxyURL(u)

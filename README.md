@@ -76,6 +76,21 @@ make build          # 前端构建 + Go 编译 → bin/qjrxy
 | `QINGJIN_ADMIN_USER` | 空 | 首次启动创建的管理员账号 |
 | `QINGJIN_ADMIN_PASS` | 空 | 管理员密码 |
 | `QINGJIN_QUOTA_ENABLED` | `false` | 额度/卡密体系开关（托管多用户运营场景才需要） |
+| `QINGJIN_REGISTER_OPEN` | `false` | 是否允许自助注册。默认只在库中还没有任何用户时允许（首次初始化），之后注册口自动关闭 |
+| `QINGJIN_TLS_INSECURE_HOSTS` | 空 | 允许跳过证书校验的主机后缀，逗号分隔（如 `campusphere.net`）。仅个别学校证书链残缺时才用，默认对全部主机做严格校验 |
+
+> **关于证书校验**：服务器到学校这一跳承载学号与密码，默认做完整证书链校验。
+> 若某校入口证书链不完整导致无法登录，用 `QINGJIN_TLS_INSECURE_HOSTS` **精确列出该校域名**，
+> 不要整体关闭校验——否则同链路上的任何人都能伪造学校登录页拿到明文密码。
+
+> **关于卡密**：开启 `QINGJIN_QUOTA_ENABLED` 后，卡密是**一次性**的，且必须先在库里预置：
+>
+> ```bash
+> sqlite3 data/qingjin.db "INSERT INTO redeem_codes (code, amount, created_at) \
+>   VALUES ('QJ-A1B2-C3D4', 30, strftime('%Y-%m-%dT%H:%M:%S+08:00','now','localtime'));"
+> ```
+>
+> 兑换时才会把 `used_by` 原子占位，未入库或已使用的码一律拒绝。
 
 ## 架构
 

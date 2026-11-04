@@ -148,11 +148,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if err := s.svc.ChangePassword(r.Context(), user.ID, req.OldPassword, req.NewPassword); err != nil {
+	if err := s.svc.ChangePassword(r.Context(), user.ID, req.OldPassword, req.NewPassword, bearerToken(r)); err != nil {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusOK, map[string]any{"message": "密码已更新"})
+	writeData(w, http.StatusOK, map[string]any{"message": "密码已更新，其他设备上的登录已失效"})
 }
 
 // handleFetchRange 自动获取签到范围（只读，不写库）。

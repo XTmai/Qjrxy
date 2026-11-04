@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 type testEnv struct {
 	srv   *httptest.Server
 	token string
+	db    *store.DB
 }
 
 func newEnv(t *testing.T) *testEnv {
@@ -29,6 +31,7 @@ func newEnv(t *testing.T) *testEnv {
 		DataDir:      dir,
 		SecretKey:    bytes.Repeat([]byte{7}, 32),
 		QuotaEnabled: true, // 兑换等用例依赖额度体系
+		RegisterOpen: true, // 多用户用例需要在同一实例内注册多个账号
 	}
 	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
@@ -41,7 +44,7 @@ func newEnv(t *testing.T) *testEnv {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	env := &testEnv{srv: srv}
+	env := &testEnv{srv: srv, db: db}
 	env.register(t, "apiuser", "secret123")
 	return env
 }
@@ -221,6 +224,11 @@ func TestValidation(t *testing.T) {
 func TestRedeemQuota(t *testing.T) {
 	env := newEnv(t)
 
+	// 卡密必须由运维预置入库，面额以库中的发卡记录为准。
+	if err := env.db.CreateRedeemCode(context.Background(), "QJ-A1B2-C3D4", 30); err != nil {
+		t.Fatalf("预置卡密失败：%v", err)
+	}
+
 	status, body := env.do(t, http.MethodPost, "/api/quota/redeem",
 		map[string]string{"code": "QJ-A1B2-C3D4"}, env.token)
 	if status != http.StatusOK {
@@ -229,6 +237,20 @@ func TestRedeemQuota(t *testing.T) {
 	data, _ := body["data"].(map[string]any)
 	if data["granted"] != float64(30) {
 		t.Errorf("应兑换 30 次，得到 %v", data["granted"])
+	}
+
+	// 同一张卡密只能兑换一次。
+	status, _ = env.do(t, http.MethodPost, "/api/quota/redeem",
+		map[string]string{"code": "QJ-A1B2-C3D4"}, env.token)
+	if status != http.StatusBadRequest {
+		t.Errorf("重复兑换应被拒绝，得到 %d", status)
+	}
+
+	// 格式合法但未入库的卡密必须失败（回归：早期实现会白送 30 次）。
+	status, _ = env.do(t, http.MethodPost, "/api/quota/redeem",
+		map[string]string{"code": "QJ-0000-0000"}, env.token)
+	if status != http.StatusBadRequest {
+		t.Errorf("未入库的卡密应被拒绝，得到 %d", status)
 	}
 
 	for _, bad := range []string{"", "ABC", "QJ-XX", "QJ-GGGG-HHHH"} {
@@ -311,5 +333,96 @@ func TestEnvelopeShape(t *testing.T) {
 	raw, _ := io.ReadAll(resp.Body)
 	if !strings.HasPrefix(strings.TrimSpace(string(raw)), "{") {
 		t.Errorf("响应应为 JSON 对象：%s", raw)
+	}
+}
+
+// TestRegisterClosedByDefault 校验默认配置下，注册口在首个账号创建后自动关闭。
+//
+// 公网实例被陌生人注册占用的根源就在这里：早期实现不设任何门，
+// 任何人扫到端口都能注册并把账号挂到别人的服务器上。
+func TestRegisterClosedByDefault(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{
+		Addr:      ":0",
+		DataDir:   dir,
+		SecretKey: bytes.Repeat([]byte{9}, 32),
+		// 故意不设置 RegisterOpen：走默认的「仅首次初始化可注册」
+	}
+	db, err := store.Open(filepath.Join(dir, "closed.db"))
+	if err != nil {
+		t.Fatalf("打开数据库失败：%v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	srv := httptest.NewServer(server.New(service.New(cfg, db)).Handler(nil))
+	t.Cleanup(srv.Close)
+	env := &testEnv{srv: srv, db: db}
+
+	// 库里没有用户：允许创建第一个账号
+	env.register(t, "firstuser", "secret123")
+
+	status, body := env.do(t, http.MethodPost, "/api/auth/register",
+		map[string]string{"username": "intruder", "password": "secret123"}, "")
+	if status != http.StatusForbidden {
+		t.Fatalf("第二个账号应被拒绝注册，得到 %d %v", status, body)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if errObj["code"] != "register_closed" {
+		t.Errorf("错误码应为 register_closed，得到 %v", errObj)
+	}
+}
+
+// TestLoginRateLimited 校验登录接口对同一账号的连续尝试做限流。
+func TestLoginRateLimited(t *testing.T) {
+	env := newEnv(t)
+
+	// 限流窗口内允许 5 次尝试，第 6 次起返回 429。
+	var last int
+	for i := 0; i < 7; i++ {
+		last, _ = env.do(t, http.MethodPost, "/api/auth/login",
+			map[string]string{"username": "apiuser", "password": "wrong-password"}, "")
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("连续失败尝试应触发 429，得到 %d", last)
+	}
+
+	// 限流不应影响其他账号的正常登录。
+	env.register(t, "otheruser", "secret123")
+	status, body := env.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"username": "otheruser", "password": "secret123"}, "")
+	if status != http.StatusOK {
+		t.Fatalf("其他账号登录应正常，得到 %d %v", status, body)
+	}
+}
+
+// TestChangePasswordRevokesOtherSessions 校验改密后其他会话立即失效。
+func TestChangePasswordRevokesOtherSessions(t *testing.T) {
+	env := newEnv(t)
+
+	// 模拟另一台设备登录，拿到第二个 token。
+	_, body := env.do(t, http.MethodPost, "/api/auth/login",
+		map[string]string{"username": "apiuser", "password": "secret123"}, "")
+	data, _ := body["data"].(map[string]any)
+	otherToken, _ := data["token"].(string)
+	if otherToken == "" {
+		t.Fatalf("登录未返回 token：%v", body)
+	}
+
+	status, _ := env.do(t, http.MethodPost, "/api/auth/password",
+		map[string]string{"oldPassword": "secret123", "newPassword": "newpass123"}, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("改密失败：%d", status)
+	}
+
+	// 改密前的另一个会话应失效。
+	status, _ = env.do(t, http.MethodGet, "/api/auth/me", nil, otherToken)
+	if status != http.StatusUnauthorized {
+		t.Errorf("其他设备会话应在改密后失效，得到 %d", status)
+	}
+
+	// 发起改密的当前会话保持可用。
+	status, _ = env.do(t, http.MethodGet, "/api/auth/me", nil, env.token)
+	if status != http.StatusOK {
+		t.Errorf("当前会话应继续有效，得到 %d", status)
 	}
 }

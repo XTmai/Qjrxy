@@ -163,7 +163,10 @@ func (s *Service) CollectDeviceInfo(ctx context.Context, userID int64, ticket st
 }
 
 // ChangePassword 修改平台登录密码。
-func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword string) error {
+//
+// 改密后使该用户其他设备上的会话立即失效（保留当前这一次），
+// 否则账号被盗后改密并不能把入侵者踢下线。
+func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword, currentToken string) error {
 	if len(newPassword) < 6 {
 		return errors.New("新密码至少 6 位")
 	}
@@ -178,5 +181,8 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword,
 	if err != nil {
 		return err
 	}
-	return s.db.UpdateUserPassword(ctx, userID, hash)
+	if err := s.db.UpdateUserPassword(ctx, userID, hash); err != nil {
+		return err
+	}
+	return s.db.DeleteOtherSessions(ctx, userID, currentToken)
 }

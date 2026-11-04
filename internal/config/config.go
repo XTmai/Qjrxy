@@ -24,6 +24,18 @@ type Config struct {
 	// 面向「托管运营」场景（多用户 + 卡密充值）；个人自部署保持默认关闭，
 	// 关闭时执行不扣额度、兑换接口不可用、前端隐藏额度相关 UI。
 	QuotaEnabled bool
+	// RegisterOpen 控制注册接口是否对外开放。
+	//
+	// 默认 false：仅当库中还没有任何用户（首次初始化）时允许注册，
+	// 之后注册口自动关闭，避免公网实例被陌生人占用。
+	// 需要多人自行注册的场景显式设置 QINGJIN_REGISTER_OPEN=true。
+	RegisterOpen bool
+	// TLSInsecureHosts 是允许跳过证书校验的主机后缀白名单。
+	//
+	// 默认为空，即对学校系统做完整证书校验。个别学校证书链不完整时，
+	// 用 QINGJIN_TLS_INSECURE_HOSTS 精确列出对应域名（逗号分隔），
+	// 而不是像早期版本那样全局关闭校验。
+	TLSInsecureHosts []string
 }
 
 // Load 从环境变量读取配置，未设置的项使用默认值。
@@ -36,6 +48,8 @@ type Config struct {
 //	QINGJIN_ADMIN_USER      管理员用户名（默认空，即首次访问时注册）
 //	QINGJIN_ADMIN_PASS      管理员密码
 //	QINGJIN_QUOTA_ENABLED   额度/卡密体系开关（默认 false；托管运营场景设为 true）
+//	QINGJIN_REGISTER_OPEN   是否允许自助注册（默认 false：仅首次初始化可注册）
+//	QINGJIN_TLS_INSECURE_HOSTS  允许跳过证书校验的主机后缀，逗号分隔（默认空=严格校验）
 func Load() (*Config, error) {
 	addr := envOr("QINGJIN_ADDR", ":8090")
 	dataDir := envOr("QINGJIN_DATA_DIR", "./data")
@@ -54,13 +68,33 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Addr:         addr,
-		DataDir:      absDir,
-		SecretKey:    key,
-		AdminUser:    strings.TrimSpace(os.Getenv("QINGJIN_ADMIN_USER")),
-		AdminPass:    os.Getenv("QINGJIN_ADMIN_PASS"),
-		QuotaEnabled: envBool("QINGJIN_QUOTA_ENABLED", false),
+		Addr:             addr,
+		DataDir:          absDir,
+		SecretKey:        key,
+		AdminUser:        strings.TrimSpace(os.Getenv("QINGJIN_ADMIN_USER")),
+		AdminPass:        os.Getenv("QINGJIN_ADMIN_PASS"),
+		QuotaEnabled:     envBool("QINGJIN_QUOTA_ENABLED", false),
+		RegisterOpen:     envBool("QINGJIN_REGISTER_OPEN", false),
+		TLSInsecureHosts: splitList(os.Getenv("QINGJIN_TLS_INSECURE_HOSTS")),
 	}, nil
+}
+
+// splitList 解析逗号分隔的配置项，去空白、去空项。
+func splitList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // envBool 读取布尔型环境变量（接受 1/true/yes/on，大小写不敏感）。
