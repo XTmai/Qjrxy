@@ -12,6 +12,7 @@ import {
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { dialogOrigin } from "@/lib/dialog-origin"
 
 const Dialog = Root
 
@@ -43,10 +44,18 @@ const DialogContent = React.forwardRef<
   <DialogPortal>
     <DialogOverlay />
     <Content
-      ref={ref}
+      ref={(node) => {
+        // 展开起点：从触发点击的位置 zoom + fade 展开（无指针时回退居中）。
+        // ref 在首帧绘制前执行，origin 会先于入场动画生效。
+        if (node && !node.style.transformOrigin) {
+          node.style.transformOrigin = dialogOrigin(node.getBoundingClientRect());
+        }
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      }}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] transform-gpu gap-4 border bg-background p-6 shadow-lg duration-200 will-change-transform data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
-        className
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] transform-gpu gap-4 border bg-background p-6 shadow-lg duration-200 will-change-transform data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
+        className,
       )}
       {...props}
     >
