@@ -78,9 +78,11 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	// ---- 记录 ----
 	mux.HandleFunc("GET /api/logs", s.withUser(s.handleListLogs))
 	mux.HandleFunc("GET /api/logs/trend", s.withUser(s.handleLogTrend))
+	mux.HandleFunc("GET /api/logs/audit", s.withUser(s.handleAuditLogs))
 	mux.HandleFunc("GET /api/logs/{id}", s.withUser(s.handleGetLog))
 
 	// ---- 工作台 ----
+	mux.HandleFunc("GET /api/stats/7d", s.withUser(s.handleStats7d))
 	mux.HandleFunc("GET /api/dashboard", s.withUser(s.handleDashboard))
 
 	// ---- 额度 ----

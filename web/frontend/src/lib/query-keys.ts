@@ -26,5 +26,10 @@ export const queryKeys = {
     trend: (days: number) => ["logs", "trend", { days }] as const,
   },
 
+  stats: {
+    sevenDays: () => ["stats", "7d"] as const,
+    audit: (params: Record<string, unknown>) => ["stats", "audit", params] as const,
+  },
+
   schools: (q: string) => ["schools", { q }] as const,
 };

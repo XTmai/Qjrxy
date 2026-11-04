@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -488,4 +489,71 @@ func defaultStr(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// ---------- 审计与统计 ----------
+
+// handleAuditLogs 返回审计用的执行记录（含流水号与耗时字段）。
+func (s *Server) handleAuditLogs(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	logs, total, err := s.svc.DB().ListLogs(r.Context(), store.LogFilter{
+		UserID: user.ID,
+		Status: q.Get("status"),
+		Scope:  q.Get("scope"),
+		Kind:   q.Get("kind"),
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	// 提取 detail 中的耗时/偏移字段，扁平化给前端
+	type auditRow struct {
+		store.Log
+		LatencyMs  int64   `json:"latencyMs"`
+		GeoOffsetM float64 `json:"geoOffsetM"`
+		InRange    *bool   `json:"inRange"`
+	}
+	out := make([]auditRow, 0, len(logs))
+	for _, l := range logs {
+		row := auditRow{Log: l}
+		var d struct {
+			LatencyMs  int64   `json:"latencyMs"`
+			GeoOffsetM float64 `json:"geoOffsetM"`
+			InRange    *bool   `json:"inRange"`
+		}
+		if l.Detail != "" && json.Unmarshal([]byte(l.Detail), &d) == nil {
+			row.LatencyMs = d.LatencyMs
+			row.GeoOffsetM = d.GeoOffsetM
+			row.InRange = d.InRange
+		}
+		out = append(out, row)
+	}
+	writeData(w, http.StatusOK, map[string]any{"logs": out, "total": total})
+}
+
+// handleStats7d 返回最近 7 天聚合指标（监控总览用）。
+func (s *Server) handleStats7d(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	stats, err := s.svc.DB().AggregateLogs7d(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, stats)
 }

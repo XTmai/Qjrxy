@@ -13,6 +13,7 @@ type Log struct {
 	UserID       int64  `json:"userId"`
 	AccountID    int64  `json:"accountId"`
 	PlanID       int64  `json:"planId"`
+	TraceID      string `json:"traceId"`
 	TaskName     string `json:"taskName"`
 	Kind         string `json:"kind"`
 	Source       string `json:"source"`
@@ -39,9 +40,9 @@ func (db *DB) CreateLog(ctx context.Context, l *Log) (int64, error) {
 		l.CreatedAt = now()
 	}
 	res, err := db.ExecContext(ctx, `
-		INSERT INTO logs (user_id, account_id, plan_id, task_name, kind, source, status, message, detail, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		l.UserID, l.AccountID, l.PlanID, l.TaskName, l.Kind, l.Source, l.Status, l.Message, l.Detail, l.CreatedAt)
+		INSERT INTO logs (user_id, account_id, plan_id, trace_id, task_name, kind, source, status, message, detail, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		l.UserID, l.AccountID, l.PlanID, l.TraceID, l.TaskName, l.Kind, l.Source, l.Status, l.Message, l.Detail, l.CreatedAt)
 	if err != nil {
 		return 0, err
 	}
@@ -110,7 +111,7 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]Log, int, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	query := `SELECT l.id, l.user_id, l.account_id, l.plan_id, l.task_name, l.kind, l.source, l.status,
+	query := `SELECT l.id, l.user_id, l.account_id, l.plan_id, l.trace_id, l.task_name, l.kind, l.source, l.status,
 		l.message, l.detail, l.created_at, COALESCE(a.alias,''), COALESCE(a.school_name,''), COALESCE(a.username,'')
 		FROM logs l LEFT JOIN accounts a ON a.id = l.account_id
 		WHERE ` + clause + ` ORDER BY l.id DESC LIMIT ? OFFSET ?`
@@ -124,7 +125,7 @@ func (db *DB) ListLogs(ctx context.Context, f LogFilter) ([]Log, int, error) {
 	out := []Log{}
 	for rows.Next() {
 		var l Log
-		if err := rows.Scan(&l.ID, &l.UserID, &l.AccountID, &l.PlanID, &l.TaskName, &l.Kind, &l.Source,
+		if err := rows.Scan(&l.ID, &l.UserID, &l.AccountID, &l.PlanID, &l.TraceID, &l.TaskName, &l.Kind, &l.Source,
 			&l.Status, &l.Message, &l.Detail, &l.CreatedAt, &l.AccountAlias, &l.SchoolName,
 			&l.AccountUser); err != nil {
 			return nil, 0, err
@@ -243,15 +244,75 @@ func startOfToday() time.Time {
 	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 }
 
+// LogStats7d 是最近 7 天的聚合指标，供监控总览页使用。
+type LogStats7d struct {
+	Total       int     `json:"total"`
+	Success     int     `json:"success"`
+	SuccessRate float64 `json:"successRate"` // 0-100
+	AvgLatency  int     `json:"avgLatencyMs"`
+	// 平均地理偏移（米），从 detail.geoOffsetM 取平均
+	AvgGeoOffset float64 `json:"avgGeoOffsetM"`
+}
+
+// AggregateLogs7d 统计最近 7 天的执行情况。
+func (db *DB) AggregateLogs7d(ctx context.Context, userID int64) (LogStats7d, error) {
+	since := startOfToday().AddDate(0, 0, -6).Format(time.RFC3339)
+	rows, err := db.QueryContext(ctx, `
+		SELECT status, COUNT(*), COALESCE(AVG(CAST(json_extract(detail, '$.latencyMs') AS REAL)), 0)
+		FROM logs
+		WHERE user_id = ? AND created_at >= ?
+		GROUP BY status`, userID, since)
+	if err != nil {
+		return LogStats7d{}, err
+	}
+	defer rows.Close()
+
+	var out LogStats7d
+	var latencySum, latencyCount float64
+	for rows.Next() {
+		var status string
+		var n int
+		var avgLat float64
+		if err := rows.Scan(&status, &n, &avgLat); err != nil {
+			return out, err
+		}
+		out.Total += n
+		if status == StatusSuccess {
+			out.Success += n
+		}
+		if avgLat > 0 {
+			latencySum += avgLat * float64(n)
+			latencyCount += float64(n)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	if out.Total > 0 {
+		out.SuccessRate = float64(out.Success) / float64(out.Total) * 100
+	}
+	if latencyCount > 0 {
+		out.AvgLatency = int(latencySum / latencyCount)
+	}
+
+	// 平均地理偏移单独查（detail.geoOffsetM）
+	_ = db.QueryRowContext(ctx, `
+		SELECT COALESCE(AVG(CAST(json_extract(detail, '$.geoOffsetM') AS REAL)), 0)
+		FROM logs
+		WHERE user_id = ? AND created_at >= ?
+		  AND json_extract(detail, '$.geoOffsetM') IS NOT NULL`, userID, since).Scan(&out.AvgGeoOffset)
+	return out, nil
+}
+
 // LogByID 查询单条记录。
 func (db *DB) LogByID(ctx context.Context, userID, id int64) (*Log, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT l.id, l.user_id, l.account_id, l.plan_id, l.task_name, l.kind, l.source, l.status,
+		SELECT l.id, l.user_id, l.account_id, l.plan_id, l.trace_id, l.task_name, l.kind, l.source, l.status,
 			l.message, l.detail, l.created_at, COALESCE(a.alias,''), COALESCE(a.school_name,''), COALESCE(a.username,'')
 		FROM logs l LEFT JOIN accounts a ON a.id = l.account_id
 		WHERE l.id = ? AND l.user_id = ?`, id, userID)
 	var l Log
-	err := row.Scan(&l.ID, &l.UserID, &l.AccountID, &l.PlanID, &l.TaskName, &l.Kind, &l.Source,
+	err := row.Scan(&l.ID, &l.UserID, &l.AccountID, &l.PlanID, &l.TraceID, &l.TaskName, &l.Kind, &l.Source,
 		&l.Status, &l.Message, &l.Detail, &l.CreatedAt, &l.AccountAlias, &l.SchoolName, &l.AccountUser)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

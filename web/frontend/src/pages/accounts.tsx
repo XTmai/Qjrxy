@@ -1,7 +1,17 @@
-// 账号页：搜索/过滤 + 卡片列表 + 单卡片创建（保存即登录）+ 批量登录态检测 + 详情弹窗。
+// 账号页：搜索/过滤 + 大卡片列表（指纹/照片/位置/计划四块）+ 单卡片创建（保存即登录）+ 批量登录态检测 + 详情弹窗。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ImageIcon, Loader2, MapPin, Plus, QrCode, Search, Smartphone } from "lucide-react";
+import {
+  CalendarClock,
+  Fingerprint,
+  ImageIcon,
+  Loader2,
+  MapPin,
+  Plus,
+  QrCode,
+  Search,
+  Settings2,
+} from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +28,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/api";
 import { useAccounts, useCreateAccount, useProbeAccounts } from "@/hooks/use-accounts";
+import { usePlans } from "@/hooks/use-plans";
 import { toast } from "@/hooks/use-toast";
 import { AccountDetail } from "@/components/account-detail";
 import { CaptchaDialog } from "@/components/captcha-dialog";
@@ -25,12 +36,14 @@ import { DeviceScanDialog } from "@/components/device-scan-dialog";
 import { LoginBadge } from "@/components/status-badge";
 import { EmptyBanner } from "@/components/empty-banner";
 import { PageHeader } from "@/components/page-header";
+import { maskUser } from "@/lib/utils";
 import type { Account, LoginChallenge, School } from "@/lib/types";
 
 type StatusFilter = "all" | "needs-login" | "needs-device";
 
 export function AccountsPage() {
   const { data: accounts } = useAccounts();
+  const { data: plans } = usePlans();
   const [search, setSearch] = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
@@ -169,35 +182,39 @@ export function AccountsPage() {
         </Card>
       )}
 
-      {filtered.map((a) => (
-        <AccountCard
-          key={a.id}
-          account={a}
-          onOpen={() => setDetailId(a.id)}
-          onScan={() => setScanAccountId(a.id)}
-          onLogin={async () => {
-            try {
-              const ch = await api.accountLogin(a.id);
-              if (ch.done) {
-                toast({ title: "登录成功" });
-                probe.mutate(undefined, { onSuccess: () => {}, onError: () => {} });
-              } else if (ch.needCaptcha) {
+      {/* 大卡片两列网格 */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {filtered.map((a) => (
+          <AccountCard
+            key={a.id}
+            account={a}
+            planCount={(plans ?? []).filter((p) => p.accountId === a.id && p.enabled).length}
+            onOpen={() => setDetailId(a.id)}
+            onScan={() => setScanAccountId(a.id)}
+            onLogin={async () => {
+              try {
+                const ch = await api.accountLogin(a.id);
+                if (ch.done) {
+                  toast({ title: "登录成功" });
+                  probe.mutate(undefined, { onSuccess: () => {}, onError: () => {} });
+                } else if (ch.needCaptcha) {
+                  toast({
+                    title: "学校要求验证码",
+                    description: "请点「管理」进入账号详情完成登录",
+                    variant: "destructive",
+                  });
+                }
+              } catch (e) {
                 toast({
-                  title: "学校要求验证码",
-                  description: "请点「管理」进入账号详情完成登录",
+                  title: "登录失败",
+                  description: e instanceof Error ? e.message : undefined,
                   variant: "destructive",
                 });
               }
-            } catch (e) {
-              toast({
-                title: "登录失败",
-                description: e instanceof Error ? e.message : undefined,
-                variant: "destructive",
-              });
-            }
-          }}
-        />
-      ))}
+            }}
+          />
+        ))}
+      </div>
 
       {showCreate && (
         <CreateAccountDialog onClose={(created) => { setShowCreate(false); if (created) void 0; }} />
@@ -224,85 +241,172 @@ export function AccountsPage() {
   );
 }
 
-/* ---------------- 账号卡片 ---------------- */
+/* ---------------- 账号大卡片（指纹 / 照片 / 位置 / 计划 四块） ---------------- */
 
 function AccountCard({
   account,
+  planCount,
   onOpen,
   onScan,
   onLogin,
 }: {
   account: Account;
+  planCount: number;
   onOpen: () => void;
   onScan: () => void;
   onLogin: () => void;
 }) {
   const needsLogin = account.loginStatus !== "authorized";
   const needsDevice = !account.deviceId;
+  const ok = !needsLogin && !needsDevice;
 
   return (
-    <div className="hover:border-primary/40 bg-card rounded-lg border border-border p-4 transition-colors">
-      <button type="button" onClick={onOpen} className="flex w-full items-start gap-3 text-left">
-        <Avatar size="lg">
-          <AvatarFallback className="bg-primary/10 text-primary text-sm font-bold">
-            {(account.alias || account.username).slice(0, 1)}
-          </AvatarFallback>
-        </Avatar>
-        <div className="min-w-0 flex-1">
+    <div
+      className={`bg-card rounded-lg border p-4 transition-colors ${
+        ok ? "border-border hover:border-primary/40" : "border-warning-border"
+      }`}
+    >
+      {/* 头部：头像 + 身份 + 状态 */}
+      <div className="flex items-start gap-3">
+        <span className="relative shrink-0">
+          <Avatar size="lg">
+            <AvatarFallback className="bg-primary-soft text-primary text-sm font-bold">
+              {(account.alias || account.username).slice(0, 1)}
+            </AvatarFallback>
+          </Avatar>
+          {/* 登录状态脉冲点 */}
+          <span
+            className={`absolute -top-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-card ${
+              account.loginStatus === "authorized"
+                ? "bg-success pulse-dot"
+                : account.loginStatus === "expired"
+                  ? "bg-danger pulse-dot"
+                  : "bg-muted-foreground"
+            }`}
+          />
+        </span>
+        <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-medium">{account.alias || account.username}</p>
+            <p className="truncate text-sm font-semibold">{account.alias || account.username}</p>
             <LoginBadge status={account.loginStatus} />
           </div>
-          <p className="text-muted-foreground mt-0.5 truncate text-xs">
-            {account.schoolName} · {account.username}
+          <p className="text-muted-foreground mt-0.5 truncate font-mono text-[11px]">
+            {maskUser(account.username)} · {account.schoolName}
           </p>
-          <div className="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
-            {account.deviceId ? (
-              <span className="flex items-center gap-1">
-                <Smartphone className="size-3" />
-                {account.deviceModel || "已绑定"} · {account.platform === "ios" ? "iOS" : "Android"}
-              </span>
-            ) : (
-              <span className="text-warning-strong flex items-center gap-1">
-                <QrCode className="size-3" />
-                设备未绑定
-              </span>
-            )}
-            {account.address && (
-              <span className="flex min-w-0 items-center gap-1">
-                <MapPin className="size-3 shrink-0" />
-                <span className="truncate">{account.address}</span>
-              </span>
-            )}
-            {account.photoUrl ? (
-              <span className="flex items-center gap-1">
-                <ImageIcon className="size-3" />
-                已传照片
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-muted-foreground/70">
-                <ImageIcon className="size-3" />
-                无照片
-              </span>
-            )}
-          </div>
-        </div>
-      </button>
+        </button>
+      </div>
 
-      {/* 待办引导：只显示当前缺的东西，一键直达 */}
-      {(needsLogin || needsDevice) && (
-        <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
-          {needsLogin && (
-            <Button variant="default" size="sm" className="h-8 flex-1" onClick={onLogin}>
-              登录账号
-            </Button>
-          )}
-          {needsDevice && (
-            <Button variant="default" size="sm" className="h-8 flex-1" onClick={onScan}>
-              扫码绑定设备
-            </Button>
-          )}
-        </div>
+      {/* 四块网格：缺失项琥珀高亮 */}
+      <div className="mt-3.5 grid grid-cols-2 gap-2">
+        <InfoBlock
+          icon={Fingerprint}
+          label="设备指纹"
+          ok={!!account.deviceId}
+          value={
+            account.deviceId
+              ? `${account.deviceModel || "已绑定"} · ${account.platform === "ios" ? "iOS" : "Android"}`
+              : "待扫码绑定"
+          }
+          action={needsDevice ? { text: "扫码授权", onClick: onScan } : undefined}
+        />
+        <InfoBlock
+          icon={ImageIcon}
+          label="查寝照片"
+          ok={!!account.photoUrl}
+          value={account.photoUrl ? "已上传" : "未上传"}
+          action={!account.photoUrl ? { text: "去上传", onClick: onOpen } : undefined}
+          thumb={account.photoUrl ? `${account.photoUrl}?t=${account.updatedAt}` : undefined}
+        />
+        <InfoBlock
+          icon={MapPin}
+          label="签到位置"
+          ok={!!account.address}
+          value={account.address ? account.address : "未设置"}
+          action={!account.address ? { text: "自动获取", onClick: onOpen } : undefined}
+        />
+        <InfoBlock
+          icon={CalendarClock}
+          label="自动计划"
+          ok={planCount > 0}
+          value={planCount > 0 ? `${planCount} 个启用中` : "未创建"}
+          action={planCount === 0 ? { text: "去创建", onClick: onOpen } : undefined}
+        />
+      </div>
+
+      {/* 操作区：登录/扫码 优先，管理常驻 */}
+      <div className="border-border mt-3.5 flex gap-2 border-t pt-3">
+        {needsLogin && (
+          <Button variant="default" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={onLogin}>
+            {needsDevice ? "登录账号" : "重新登录"}
+          </Button>
+        )}
+        {needsDevice && (
+          <Button variant={needsLogin ? "outline" : "default"} size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={onScan}>
+            <QrCode className="size-3.5" />
+            扫码绑定设备
+          </Button>
+        )}
+        {ok && (
+          <Button variant="outline" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={onOpen}>
+            <Settings2 className="size-3.5" />
+            管理账号
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={onOpen}>
+          详情
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** 四块信息格：ok 灰调、缺失琥珀调，可带缩略图与快捷动作 */
+function InfoBlock({
+  icon: Icon,
+  label,
+  value,
+  ok,
+  action,
+  thumb,
+}: {
+  icon: typeof Fingerprint;
+  label: string;
+  value: string;
+  ok: boolean;
+  action?: { text: string; onClick: () => void };
+  thumb?: string;
+}) {
+  return (
+    <div
+      className={`rounded-md border p-2.5 ${
+        ok ? "border-border bg-muted/30" : "border-warning-border bg-warning-soft/60"
+      }`}
+    >
+      <div className="flex items-center gap-1.5">
+        <Icon className={`size-3 ${ok ? "text-muted-foreground" : "text-warning"}`} />
+        <span className={`tracking-label text-[10px] font-medium uppercase ${ok ? "text-muted-foreground" : "text-warning-text"}`}>
+          {label}
+        </span>
+        {thumb && (
+          <img
+            src={thumb}
+            alt={label}
+            className="ml-auto size-5 rounded object-cover ring-1 ring-border"
+            loading="lazy"
+          />
+        )}
+      </div>
+      <p className={`mt-1.5 truncate text-xs font-medium ${ok ? "" : "text-warning-text"}`} title={value}>
+        {value}
+      </p>
+      {action && (
+        <button
+          type="button"
+          onClick={action.onClick}
+          className="text-warning mt-1 text-[10px] font-medium hover:underline"
+        >
+          {action.text} →
+        </button>
       )}
     </div>
   );

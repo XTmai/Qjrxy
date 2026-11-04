@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
 	plan_id     INTEGER NOT NULL DEFAULT 0,
+	trace_id    TEXT NOT NULL DEFAULT '',
 	task_name   TEXT NOT NULL DEFAULT '',
 	kind        TEXT NOT NULL DEFAULT '',
 	source      TEXT NOT NULL DEFAULT 'manual',
@@ -185,6 +186,7 @@ func (db *DB) migrate() error {
 		`ALTER TABLE accounts ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN last_probe_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN last_probe_msg TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE logs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)
 	}

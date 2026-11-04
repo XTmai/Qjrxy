@@ -140,6 +140,21 @@ export interface RunLog {
   accountUsername?: string;
 }
 
+export interface AuditRow extends RunLog {
+  traceId: string;
+  latencyMs: number;
+  geoOffsetM: number;
+  inRange?: boolean | null;
+}
+
+export interface Stats7d {
+  total: number;
+  success: number;
+  successRate: number;
+  avgLatencyMs: number;
+  avgGeoOffsetM: number;
+}
+
 export interface LogDetail {
   code?: string;
   message?: string;

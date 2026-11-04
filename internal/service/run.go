@@ -72,10 +72,13 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		return nil, err
 	}
 
+	traceID := NewTraceID()
+	startedAt := time.Now()
 	logID, err := s.db.CreateLog(ctx, &store.Log{
 		UserID:    opts.UserID,
 		AccountID: account.ID,
 		PlanID:    opts.PlanID,
+		TraceID:   traceID,
 		TaskName:  task.TaskName,
 		Kind:      task.Kind,
 		Source:    defaultIfEmpty(opts.Source, "manual"),
@@ -126,7 +129,7 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 			Task: task.TaskName}, nil
 	}
 
-	detailJSON := marshalDetail(buildLogDetail(detail, result, account, lon, lat))
+	detailJSON := marshalDetail(buildLogDetail(detail, result, account, lon, lat, task, traceID, time.Since(startedAt)))
 	if result.Success {
 		// 事后核对：服务端在「任务还没到签到时间」时也会返回 code=0 SUCCESS，
 		// 靠响应字段无法区分。这里回查一次任务列表，确认该任务确实从
@@ -343,14 +346,20 @@ func (s *Service) confirmSigned(ctx context.Context, account *store.Account, tas
 }
 
 // buildLogDetail 组装可回溯的执行详情。
-func buildLogDetail(detail *cpdaily.TaskDetail, result *cpdaily.SignResult, account *store.Account, lon, lat float64) map[string]any {
+func buildLogDetail(detail *cpdaily.TaskDetail, result *cpdaily.SignResult, account *store.Account,
+	lon, lat float64, task *store.Task, traceID string, latency time.Duration) map[string]any {
 	payload := map[string]any{
-		"code":    result.Code,
-		"message": result.Message,
-		"lon":     lon,
-		"lat":     lat,
-		"address": account.Address,
-		"device":  account.DeviceID,
+		"code":      result.Code,
+		"message":   result.Message,
+		"lon":       lon,
+		"lat":       lat,
+		"address":   account.Address,
+		"device":    account.DeviceID,
+		"traceId":   traceID,
+		"latencyMs": latency.Milliseconds(),
+		"signDate":  task.SignDate,
+		"beginClock": task.BeginClock,
+		"endClock":   task.EndClock,
 	}
 	if detail != nil {
 		payload["taskName"] = detail.TaskName
@@ -359,6 +368,12 @@ func buildLogDetail(detail *cpdaily.TaskDetail, result *cpdaily.SignResult, acco
 		check := detail.CheckRange(lon, lat)
 		payload["inRange"] = check.InRange
 		payload["places"] = check.Places
+		// 取最近的签到点作为基准，记录实际提交坐标相对它的偏移
+		if len(check.Places) > 0 {
+			minDist := check.Places[0].Distance
+			payload["geoOffsetM"] = minDist
+			payload["geoBase"] = check.Places[0].Name
+		}
 	}
 	return payload
 }
@@ -497,4 +512,17 @@ func jitterCoord(lon, lat float64) (float64, float64) {
 func TodayLabel(t time.Time) string {
 	weekdays := []string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"}
 	return fmt.Sprintf("%d月%d日%s", int(t.Month()), t.Day(), weekdays[int(t.Weekday())])
+}
+
+// NewTraceID 生成一次执行的流水号，格式：QJ-YYYYMMDD-XXXXXX。
+//
+// 用于在审计日志里定位单次执行，前端表格与链路详情都以它为主键展示。
+func NewTraceID() string {
+	const charset = "0123456789ABCDEF"
+	now := time.Now()
+	buf := make([]byte, 6)
+	for i := range buf {
+		buf[i] = charset[rand.Intn(len(charset))]
+	}
+	return fmt.Sprintf("QJ-%s-%s", now.Format("20060102"), string(buf))
 }

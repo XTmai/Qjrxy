@@ -3,6 +3,7 @@ import { http } from './client';
 import type {
   Account,
   AccountInput,
+  AuditRow,
   Dashboard,
   DayStat,
   LoginChallenge,
@@ -13,6 +14,7 @@ import type {
   RunOutcome,
   School,
   SignRange,
+  Stats7d,
   SystemInfo,
   Task,
   User,
@@ -104,6 +106,14 @@ export const api = {
     return http.get<{ logs: RunLog[]; total: number }>(`/logs${qs.toString() ? `?${qs}` : ''}`);
   },
   log: (id: number) => http.get<{ log: RunLog }>(`/logs/${id}`),
+  auditLogs: (params: { status?: string; scope?: string; kind?: string; limit?: number; offset?: number }) => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+    });
+    return http.get<{ logs: AuditRow[]; total: number }>(`/logs/audit${qs.toString() ? `?${qs}` : ''}`);
+  },
+  stats7d: () => http.get<Stats7d>('/stats/7d'),
   logTrend: (days = 14) => http.get<{ days: number; trend: DayStat[] }>(`/logs/trend?days=${days}`),
 
   // ---- 工作台 ----

@@ -14,7 +14,7 @@ import type { Plan, PlanInput } from "@/lib/types";
 
 const DAY_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
-export function PlanCard({ plan }: { plan: Plan }) {
+export function PlanCard({ plan, onEdit }: { plan: Plan; onEdit?: (plan: Plan) => void }) {
   const { toast } = useToast();
   const toggle = useTogglePlan();
   const reset = useResetPlan();
@@ -71,6 +71,11 @@ export function PlanCard({ plan }: { plan: Plan }) {
       </div>
 
       <div className="mt-3 flex gap-2">
+        {onEdit && (
+          <Button variant="ghost" size="sm" onClick={() => onEdit(plan)}>
+            编辑
+          </Button>
+        )}
         {ranToday && (
           <Button
             variant="outline"

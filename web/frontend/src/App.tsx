@@ -3,6 +3,8 @@ import { Layout } from "@/components/layout";
 import { LoginPage } from "@/pages/login";
 import { HomePage } from "@/pages/home";
 import { AccountsPage } from "@/pages/accounts";
+import { AuditPage } from "@/pages/audit";
+import { SchedulesPage } from "@/pages/schedules";
 import { SettingsPage } from "@/pages/settings";
 import { useUser } from "@/hooks/use-auth";
 import { getToken } from "@/api/client";
@@ -39,6 +41,8 @@ export default function App() {
       >
         <Route path="/" element={<HomePage />} />
         <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/audit" element={<AuditPage />} />
+        <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/:tab" element={<SettingsPage />} />
       </Route>
