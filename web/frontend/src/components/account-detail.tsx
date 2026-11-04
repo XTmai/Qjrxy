@@ -15,7 +15,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-import { AlertTriangle, Bot, Loader2 } from "lucide-react";
+import { Bot, Check, ChevronRight, ImageIcon, Loader2, LogIn, MapPin, QrCode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime, relativeTime, taskState, taskTime } from "@/lib/task";
 import { api } from "@/api";
@@ -33,6 +33,7 @@ export function AccountDetail({ account, onClose }: Props) {
   const [deleted, setDeleted] = useState(false);
   // 弹窗内维护账号快照：上传照片/登录/设置位置后立即刷新，无需重开弹窗或刷新页面
   const [current, setCurrent] = useState<Account>(account);
+  const [tab, setTab] = useState("tasks");
 
   const refreshAccount = async () => {
     try {
@@ -44,6 +45,10 @@ export function AccountDetail({ account, onClose }: Props) {
     setDeleted(true);
   };
 
+  const needsLogin = current.loginStatus !== "authorized";
+  const needsDevice = !current.deviceId;
+  const needsPhoto = !current.photoUrl;
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose(deleted)}>
       <DialogContent className="max-w-lg">
@@ -54,41 +59,76 @@ export function AccountDetail({ account, onClose }: Props) {
                 {(current.alias || current.username).slice(0, 1)}
               </AvatarFallback>
             </Avatar>
-            <div>
-              <DialogTitle>{current.alias || current.username}</DialogTitle>
-              <DialogDescription>
+            <div className="min-w-0 flex-1">
+              <DialogTitle className="truncate">{current.alias || current.username}</DialogTitle>
+              <DialogDescription className="truncate">
                 {current.schoolName} · {current.username}
               </DialogDescription>
             </div>
           </div>
+          {/* 关键状态：一眼看出还差什么 */}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <LoginBadge status={current.loginStatus} />
+            <Badge variant={current.deviceId ? "secondary" : "warning"}>
+              {current.deviceId ? current.deviceModel || "设备已绑定" : "设备未绑定"}
+            </Badge>
+            <Badge variant={current.photoUrl ? "secondary" : "warning"}>
+              {current.photoUrl ? "已传照片" : "无照片"}
+            </Badge>
+            {current.address && <Badge variant="secondary">{current.address}</Badge>}
+          </div>
         </DialogHeader>
 
-        <Tabs defaultValue="tasks">
-          <TabsList className="w-full">
+        {/* 待办：只列缺失项，点一下即处理 */}
+        {(needsLogin || needsDevice || needsPhoto) && (
+          <div className="bg-warning/10 border-warning/25 -mt-1 rounded-lg border px-3 py-2.5">
+            <p className="text-warning-strong text-[11px] font-medium">还需要完成</p>
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              {needsLogin && (
+                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("device")}>
+                  登录账号
+                </Button>
+              )}
+              {needsDevice && (
+                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("device")}>
+                  扫码绑定设备
+                </Button>
+              )}
+              {needsPhoto && (
+                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("device")}>
+                  上传照片
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList className="bg-muted/50 w-full p-1">
             <TabsTrigger value="tasks" className="flex-1">
-              任务
+              查寝任务
             </TabsTrigger>
             <TabsTrigger value="plans" className="flex-1">
-              计划
+              自动计划
             </TabsTrigger>
-            <TabsTrigger value="logs" className="flex-1">
-              记录
+            <TabsTrigger value="records" className="flex-1">
+              执行记录
             </TabsTrigger>
             <TabsTrigger value="device" className="flex-1">
-              设备
+              设置
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="tasks">
+          <TabsContent value="tasks" className="m-0">
             <TasksTab account={current} onChanged={refreshAccount} />
           </TabsContent>
-          <TabsContent value="plans">
+          <TabsContent value="plans" className="m-0">
             <PlansTab accountId={account.id} />
           </TabsContent>
-          <TabsContent value="logs">
+          <TabsContent value="records" className="m-0">
             <LogsTab accountId={account.id} />
           </TabsContent>
-          <TabsContent value="device">
+          <TabsContent value="device" className="m-0">
             <DeviceTab account={current} onChanged={refreshAccount} onDeleted={() => onClose(true)} />
           </TabsContent>
         </Tabs>
@@ -422,48 +462,47 @@ function DeviceTab({
     }
   };
 
+  const actions = [
+    {
+      key: "scan",
+      title: account.deviceId ? "重新扫码绑定" : "扫码绑定设备",
+      desc: account.deviceId
+        ? `${account.deviceModel || "已绑定"} · ${account.platform === "ios" ? "iOS" : "Android"}`
+        : "用平时打卡的手机扫一扫，自动获取设备信息",
+      icon: QrCode,
+      done: Boolean(account.deviceId),
+      run: () => setShowScan(true),
+    },
+    {
+      key: "login",
+      title: "账密登录",
+      desc: account.lastProbeAt
+        ? `${relativeTime(account.lastProbeAt)}检测 · ${account.lastProbeMsg || ""}`
+        : "用保存的密码登录学校系统",
+      icon: LogIn,
+      done: account.loginStatus === "authorized",
+      run: () => void relLogin(),
+    },
+    {
+      key: "range",
+      title: "自动获取位置",
+      desc: account.address || "从学校签到任务读取签到点",
+      icon: MapPin,
+      done: Boolean(account.address),
+      run: () => void applyRange(),
+    },
+    {
+      key: "photo",
+      title: account.photoUrl ? "更换签到照片" : "上传签到照片",
+      desc: account.photoUrl ? "已上传，查寝时自动使用" : "查寝要求照片时必须上传",
+      icon: ImageIcon,
+      done: Boolean(account.photoUrl),
+      run: () => fileRef.current?.click(),
+    },
+  ];
+
   return (
-    <div className="space-y-4 py-3">
-      <div className="space-y-1.5 text-sm">
-        <div className="flex items-center justify-between">
-          <span className="text-muted-foreground text-xs">登录状态</span>
-          <LoginBadge status={account.loginStatus} />
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted-foreground text-xs">最近探测</span>
-          <span className="text-xs">
-            {account.lastProbeAt ? relativeTime(account.lastProbeAt) : "—"} · {account.lastProbeMsg || ""}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted-foreground text-xs">设备</span>
-          <span className="text-xs">
-            {account.deviceId
-              ? `${account.deviceModel || "已绑定"} · ${account.platform === "ios" ? "iOS" : "Android"}`
-              : "未绑定"}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span className="text-muted-foreground text-xs">位置</span>
-          <span className="text-xs">{account.address || "未设置"}</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" size="sm" onClick={() => setShowScan(true)}>
-          {account.deviceId ? "重新扫码" : "扫码绑定设备"}
-        </Button>
-        <Button variant="outline" size="sm" disabled={busy} onClick={() => void relLogin()}>
-          账密登录
-        </Button>
-        <Button variant="outline" size="sm" disabled={busy} onClick={() => void applyRange()}>
-          自动获取位置
-        </Button>
-        <Button variant="outline" size="sm" disabled={busy} onClick={() => fileRef.current?.click()}>
-          上传照片
-        </Button>
-      </div>
-
+    <div className="space-y-3 py-3">
       <input
         ref={fileRef}
         type="file"
@@ -476,27 +515,47 @@ function DeviceTab({
         }}
       />
 
-      {/* 签到照片：查寝任务若要求照片，缺少会导致提交失败 */}
-      {account.photoUrl ? (
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-muted-foreground text-xs">签到照片</p>
-            <span className="text-[11px] text-emerald-600 dark:text-emerald-400">已上传</span>
-          </div>
+      {/* 操作列表：每项说明状态 + 点击即执行 */}
+      <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+        {actions.map((a) => (
+          <button
+            key={a.key}
+            type="button"
+            disabled={busy}
+            onClick={a.run}
+            className="hover:bg-muted/50 flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors disabled:opacity-50"
+          >
+            <span
+              className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${
+                a.done ? "bg-success/12 text-success" : "bg-muted text-muted-foreground"
+              }`}
+            >
+              <a.icon className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">{a.title}</span>
+              <span className="text-muted-foreground block truncate text-xs">{a.desc}</span>
+            </span>
+            {a.done ? (
+              <Check className="size-4 shrink-0 text-success" />
+            ) : (
+              <ChevronRight className="text-muted-foreground/50 size-4 shrink-0" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* 照片预览 */}
+      {account.photoUrl && (
+        <div className="border-border flex gap-3 rounded-lg border p-3">
           <img
             src={`${account.photoUrl}?t=${photoVersion}`}
             alt="签到照片"
-            className="max-h-40 rounded-xl border object-cover"
+            className="size-20 shrink-0 rounded-lg border object-cover"
           />
-        </div>
-      ) : (
-        <div className="border-amber-500/20 bg-amber-500/5 flex items-start gap-2 rounded-lg border p-3">
-          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
-          <div>
-            <p className="text-xs font-medium text-amber-700 dark:text-amber-400">尚未上传签到照片</p>
-            <p className="text-muted-foreground mt-0.5 text-[11px] leading-relaxed">
-              若查寝任务要求照片，缺少照片会导致提交失败。请上传一张宿舍内的照片（jpg / png / webp，不超过 8MB）。
-            </p>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium">签到照片</p>
+            <p className="text-muted-foreground mt-0.5 text-[11px]">查寝提交时自动上传到学校</p>
           </div>
         </div>
       )}
