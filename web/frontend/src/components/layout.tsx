@@ -103,7 +103,7 @@ function TopBar() {
   }, []);
 
   return (
-    <header className="bg-background/95 sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b px-5 backdrop-blur">
+    <header className="bg-background sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b px-5">
       <div className="flex min-w-0 items-center gap-3">
         <SidebarTrigger className="-ml-1.5 size-8" />
         <Separator orientation="vertical" className="h-4 opacity-50" />

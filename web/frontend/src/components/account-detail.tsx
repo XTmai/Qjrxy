@@ -30,7 +30,6 @@ interface Props {
 }
 
 export function AccountDetail({ account, onClose }: Props) {
-  const [deleted, setDeleted] = useState(false);
   // 弹窗内维护账号快照：上传照片/登录/设置位置后立即刷新，无需重开弹窗或刷新页面
   const [current, setCurrent] = useState<Account>(account);
   const [tab, setTab] = useState("tasks");
@@ -42,7 +41,6 @@ export function AccountDetail({ account, onClose }: Props) {
     } catch {
       /* 刷新失败保留旧数据 */
     }
-    setDeleted(true);
   };
 
   const needsLogin = current.loginStatus !== "authorized";
@@ -50,7 +48,7 @@ export function AccountDetail({ account, onClose }: Props) {
   const needsPhoto = !current.photoUrl;
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose(deleted)}>
+    <Dialog open onOpenChange={(o) => !o && onClose(false)}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <div className="flex items-center gap-3">
@@ -134,7 +132,7 @@ export function AccountDetail({ account, onClose }: Props) {
         </Tabs>
 
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onClose(deleted)}>
+          <Button variant="ghost" onClick={() => onClose(false)}>
             关闭
           </Button>
         </DialogFooter>
@@ -158,7 +156,10 @@ function TasksTab({ account, onChanged }: { account: Account; onChanged: () => v
   };
 
   useEffect(() => {
-    void load();
+    // 弹窗进场动画 200ms；请求结果回来若撞上动画中段会因整树重渲染掉帧，
+    // 推迟到动画结束后再拉数据（视觉上无感知差异）。
+    const t = setTimeout(() => void load(), 260);
+    return () => clearTimeout(t);
   }, [accountId]);
 
   const sync = async () => {
@@ -551,6 +552,8 @@ function DeviceTab({
           <img
             src={`${account.photoUrl}?t=${photoVersion}`}
             alt="签到照片"
+            loading="lazy"
+            decoding="async"
             className="size-20 shrink-0 rounded-lg border object-cover"
           />
           <div className="min-w-0 flex-1">
