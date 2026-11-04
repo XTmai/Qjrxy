@@ -42,8 +42,10 @@ type Config struct {
 	// 面向「本地双击 exe 就能用」的个人场景：所有接口自动落到唯一的
 	// 本地用户（首次启动自动创建），前端跳过登录页。
 	//
-	// 安全默认值：单用户模式下若未显式配置 QINGJIN_ADDR，只监听
-	// 127.0.0.1 —— 该模式没有鉴权，绝不能默认暴露到局域网/公网。
+	// 默认监听 :8090（全部网卡）：扫码授权需要手机能访问到本机，
+	// 二维码才能用局域网地址生成（同 qrcp/LocalSend 等局域网工具的
+	// 惯例）。该模式下 API 无鉴权，仅建议家庭网络使用；启动时会打印
+	// 警告。只允许本机访问可显式设置 QINGJIN_ADDR=127.0.0.1:8090。
 	// 服务器多人使用时设 QINGJIN_MULTI_USER=true 恢复账号体系。
 	//
 	// 注意零值 = false（多用户）：直接构造 Config 的单测与既有部署
@@ -67,13 +69,9 @@ type Config struct {
 func Load() (*Config, error) {
 	multiUser := envBool("QINGJIN_MULTI_USER", false)
 
-	// 单用户模式（本地 exe）默认只监听回环地址：该模式无鉴权，
-	// 显式设置 QINGJIN_ADDR 才会绑定其它地址。
-	addrDefault := ":8090"
-	if !multiUser {
-		addrDefault = "127.0.0.1:8090"
-	}
-	addr := envOr("QINGJIN_ADDR", addrDefault)
+	// 单用户模式默认监听全部网卡：扫码授权要求手机能访问到本机。
+	// 无鉴权风险见 SingleUser 字段注释；只允许本机可显式设 127.0.0.1:8090。
+	addr := envOr("QINGJIN_ADDR", ":8090")
 	dataDir := envOr("QINGJIN_DATA_DIR", "./data")
 
 	absDir, err := filepath.Abs(dataDir)

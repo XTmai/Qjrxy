@@ -169,7 +169,9 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"tokenTTLDay":  s.tokenTTL,
 		"quotaEnabled": s.svc.Config().QuotaEnabled,
 		"multiUser":    !s.svc.Config().SingleUser,
-		"features":     features,
+		// 局域网可访问地址：扫码授权需要手机用这些地址打开本机
+		"lanUrls": LANBaseURLs(s.svc.Config().Addr),
+		"features": features,
 	})
 }
 

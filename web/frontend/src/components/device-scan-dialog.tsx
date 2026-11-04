@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "@/api";
+import { useInfo } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -12,6 +13,13 @@ import {
   DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Globe, ShieldAlert, Wifi } from "lucide-react";
+
+/** 当前页面是否通过本机回环地址打开（手机无法访问这种地址）。 */
+function onLoopback(): boolean {
+  const h = location.hostname.toLowerCase();
+  return h === "localhost" || h === "127.0.0.1" || h === "[::1]" || h === "::1";
+}
 
 interface Props {
   accountId: number;
@@ -19,6 +27,9 @@ interface Props {
 }
 
 export function DeviceScanDialog({ accountId, onClose }: Props) {
+  const { data: sysInfo } = useInfo();
+  const loopback = onLoopback();
+  const lanUrls = sysInfo?.lanUrls ?? [];
   const [qr, setQr] = useState("");
   const [status, setStatus] = useState<"loading" | "waiting" | "collected" | "error">("loading");
   const [error, setError] = useState("");
@@ -75,6 +86,50 @@ export function DeviceScanDialog({ accountId, onClose }: Props) {
         <DialogTitle>扫码绑定设备</DialogTitle>
         <DialogDescription>用你平时打卡的那台手机扫码，设备信息自动写入</DialogDescription>
         <DialogBody className="space-y-4 text-center">
+          {/* 局域网引导：手机必须能访问到这台电脑，二维码才能被打开 */}
+          {loopback && lanUrls.length > 0 && (
+            <div className="border-warning-border bg-warning-soft rounded-lg border p-3 text-left">
+              <p className="text-warning-text flex items-center gap-1.5 text-xs font-medium">
+                <Wifi className="size-3.5" />
+                手机与电脑需在同一 Wi-Fi（或手机开热点给电脑）
+              </p>
+              <p className="text-warning-text mt-1 text-[11px] opacity-80">
+                当前页面是本机地址，手机扫不开。请点击下方地址改用局域网打开，再重新扫码：
+              </p>
+              <div className="mt-2 space-y-1.5">
+                {lanUrls.map((u) => (
+                  <button
+                    key={u}
+                    type="button"
+                    onClick={() => {
+                      location.host = new URL(u).host; // 同路径切换到局域网地址
+                    }}
+                    className="text-warning-text bg-background/60 flex w-full items-center justify-between rounded-md px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:bg-background"
+                  >
+                    <span>{u}</span>
+                    <Globe className="size-3 shrink-0" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {loopback && lanUrls.length === 0 && (
+            <div className="border-danger-border bg-danger-soft rounded-lg border p-3 text-left">
+              <p className="text-danger-text flex items-center gap-1.5 text-xs font-medium">
+                <ShieldAlert className="size-3.5" />
+                服务只监听了本机（127.0.0.1），手机无法访问
+              </p>
+              <p className="text-danger-text mt-1 text-[11px] opacity-80">
+                请改用默认方式启动（监听全部网卡），或设置 QINGJIN_ADDR=:8090 后重启，再扫码。
+              </p>
+            </div>
+          )}
+          {!loopback && (
+            <p className="text-muted-foreground flex items-center justify-center gap-1.5 text-[11px]">
+              <Wifi className="size-3" />
+              手机与电脑保持同一网络即可；扫描后手机会打开本页地址提交设备信息
+            </p>
+          )}
           {qr && <img src={qr} alt="设备绑定二维码" className="mx-auto size-52 rounded-xl border p-2" />}
           {status === "loading" && <p className="text-muted-foreground text-sm">正在生成二维码…</p>}
           {status === "waiting" && (

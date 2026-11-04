@@ -213,6 +213,8 @@ export interface SystemInfo {
   quotaEnabled: boolean;
   /** false = 单用户模式：打开即用，无登录/注册 */
   multiUser: boolean;
+  /** 本机局域网可访问地址（扫码授权用；只绑回环时为空） */
+  lanUrls?: string[];
   features: string[];
 }
 

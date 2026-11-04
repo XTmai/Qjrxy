@@ -90,6 +90,13 @@ func main() {
 
 	go func() {
 		log.Printf("服务已启动：http://localhost%s", displayAddr(cfg.Addr))
+		for _, u := range server.LANBaseURLs(cfg.Addr) {
+			log.Printf("局域网访问：%s", u)
+		}
+		if cfg.SingleUser {
+			log.Printf("提示：单用户模式无账号鉴权，请仅在可信网络（家庭 Wi-Fi）下使用；" +
+				"只允许本机访问请设 QINGJIN_ADDR=127.0.0.1:8090")
+		}
 		log.Printf("数据目录：%s", cfg.DataDir)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("HTTP 服务异常退出：%v", err)
