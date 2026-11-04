@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -44,6 +45,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// 注册口默认只在「库里还没有任何用户」时开放（首次初始化），
+	// 之后自动关闭，避免公网实例被陌生人注册占用。
+	// 需要多人自助注册的场景显式设置 QINGJIN_REGISTER_OPEN=true。
+	if allowed, reason := s.registerAllowed(r.Context()); !allowed {
+		writeError(w, &APIError{Status: http.StatusForbidden, Code: "register_closed", Message: reason})
+		return
+	}
+	if ok, wait := s.registerLimiter.allow(authLimitKey(r, req.Username), time.Now()); !ok {
+		writeError(w, tooMany(wait))
+		return
+	}
 	user, err := s.svc.Register(r.Context(), req.Username, req.Password, req.Nickname)
 	if err != nil {
 		writeError(w, err)
@@ -57,6 +69,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusCreated, map[string]any{"user": user, "token": token})
 }
 
+// registerAllowed 判断当前是否允许注册。
+func (s *Server) registerAllowed(ctx context.Context) (bool, string) {
+	if s.svc.Config().RegisterOpen {
+		return true, ""
+	}
+	count, err := s.svc.DB().CountUsers(ctx)
+	if err != nil {
+		return false, "暂时无法确认注册状态，请稍后重试"
+	}
+	if count == 0 {
+		return true, "" // 首次初始化：允许创建第一个账号
+	}
+	return false, "注册已关闭：本实例仅限受邀使用。如需开放自助注册，请设置 QINGJIN_REGISTER_OPEN=true"
+}
+
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -68,11 +95,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// 登录限流：挡住针对单账号的撞库，避免无限次尝试。
+	limitKey := authLimitKey(r, req.Username)
+	if ok, wait := s.loginLimiter.allow(limitKey, time.Now()); !ok {
+		writeError(w, tooMany(wait))
+		return
+	}
 	user, token, err := s.svc.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	s.loginLimiter.reset(limitKey)
 	s.setTokenCookie(w, token)
 	writeData(w, http.StatusOK, map[string]any{"user": user, "token": token})
 }

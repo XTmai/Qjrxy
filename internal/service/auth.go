@@ -67,11 +67,14 @@ func (s *Service) BeginLogin(ctx context.Context, userID, accountID int64) (*Log
 	s.mu.Lock()
 	// 清理过期状态
 	for id, state := range s.state {
-		if time.Since(state.CreatedAt) > 10*time.Minute {
+		if time.Since(state.CreatedAt) > loginStateTTL {
 			delete(s.state, id)
 		}
 	}
 	challenge.State.Cookies = client.Cookies()
+	// 绑定发起者，供 SubmitCaptcha 校验 ticket 归属。
+	challenge.State.UserID = userID
+	challenge.State.AccountID = account.ID
 	s.state[ticket] = challenge.State
 	s.mu.Unlock()
 
@@ -81,8 +84,29 @@ func (s *Service) BeginLogin(ctx context.Context, userID, accountID int64) (*Log
 		NeedCaptcha: challenge.NeedCaptcha,
 		Captcha:     challenge.Captcha,
 		CaptchaKind: challenge.CaptchaKind,
-		ExpiresAt:   time.Now().Add(10 * time.Minute),
+		ExpiresAt:   time.Now().Add(loginStateTTL),
 	}, nil
+}
+
+// loginStateTTL 是登录中间态（含明文密码）的最长保留时间。
+const loginStateTTL = 10 * time.Minute
+
+// PruneExpiredStates 主动回收过期的登录中间态。
+//
+// LoginState 里保存着明文密码（CAS/IAP 表单需要重放），不能只等下一次
+// BeginLogin 才顺手清理——没人再登录时，这些状态会一直留在内存里。
+// 由调度器每分钟调用一次。
+func (s *Service) PruneExpiredStates() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := 0
+	for id, state := range s.state {
+		if state == nil || time.Since(state.CreatedAt) > loginStateTTL {
+			delete(s.state, id)
+			removed++
+		}
+	}
+	return removed
 }
 
 // SubmitCaptcha 提交验证码完成登录。
@@ -96,8 +120,12 @@ func (s *Service) SubmitCaptcha(ctx context.Context, userID, accountID int64, ti
 	if !ok {
 		return errors.New("验证码会话已过期，请重新登录")
 	}
-	if time.Since(state.CreatedAt) > 10*time.Minute {
+	if time.Since(state.CreatedAt) > loginStateTTL {
 		return errors.New("验证码会话已过期，请重新登录")
+	}
+	// 校验 ticket 归属：只能完成自己发起的登录，否则会把别人的会话写进当前账号。
+	if state.UserID != userID || state.AccountID != accountID {
+		return errors.New("验证码会话与当前账号不匹配，请重新登录")
 	}
 	account, err := s.db.AccountByID(ctx, userID, accountID)
 	if err != nil {

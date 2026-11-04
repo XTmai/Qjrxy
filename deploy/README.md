@@ -38,16 +38,26 @@ sudo ss -lntp | grep -E ':(8080|8090|9000)'
 QINGJIN_ADDR=127.0.0.1:8090 ./qjrxy -data /var/lib/qjrxy/data
 ```
 
-## 2. 设置管理员（重要）
+## 2. 首次初始化（重要）
 
-**公网部署必须设置**，否则任何人都能注册：
+注册口默认只在**库中还没有任何用户**时开放：第一次访问页面注册的那个账号就是实例主人，
+之后注册自动关闭（返回 403 `register_closed`）。需要多人自助注册时再显式开启：
+
+```bash
+QINGJIN_REGISTER_OPEN=true ./qjrxy -data /var/lib/qjrxy/data
+```
+
+如果希望跳过页面注册、直接由环境变量建号：
 
 ```bash
 export QINGJIN_ADMIN_USER=admin
 export QINGJIN_ADMIN_PASS='换成你的强密码'
 ```
 
-首次启动时若库中无用户，会自动创建这个管理员；之后该变量被忽略。
+首次启动时若库中无用户，会自动创建这个账号；库中已有用户时该变量被忽略。
+
+> 登录接口有频率限制（同一 IP + 账号名 5 次/分钟，注册 3 次/小时），
+> 超限返回 429，属正常防护，不是故障。
 
 ## 3. 运行
 

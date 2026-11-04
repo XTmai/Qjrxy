@@ -61,6 +61,16 @@ CREATE TABLE IF NOT EXISTS sessions (
 	expires_at TEXT NOT NULL,
 	created_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+
+-- 卡密：一次性消费。兑换时用条件 UPDATE 原子占用，避免同一张卡被重复兑换。
+CREATE TABLE IF NOT EXISTS redeem_codes (
+	code       TEXT PRIMARY KEY,
+	amount     INTEGER NOT NULL,
+	used_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+	used_at    TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS accounts (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT,

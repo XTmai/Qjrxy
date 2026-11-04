@@ -2,7 +2,6 @@ package cpdaily
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,18 +10,16 @@ import (
 	"time"
 )
 
-// tlsConfig 返回允许跳过证书校验的配置。
-// 今日校园部分学校入口证书链不完整，官方 App 同样忽略，这里保持一致。
-func insecureTLSConfig(insecure bool) *tls.Config {
-	return &tls.Config{InsecureSkipVerify: insecure, MinVersion: tls.VersionTLS12}
-}
-
 const (
 	tenantListURL = "https://mobile.campushoy.com/v6/config/guest/tenant/list"
 	tenantInfoURL = "https://mobile.campushoy.com/v6/config/guest/tenant/info"
 )
 
 // httpGetJSON 发起一个不依赖会话的 GET 请求。
+//
+// 证书校验沿用全局 TLS 策略：默认严格校验，只有 QINGJIN_TLS_INSECURE_HOSTS
+// 里显式列出的主机才跳过。学校列表与入口地址直接决定后续登录发往哪里，
+// 这条链路被劫持等于密码被劫持，不能再无条件关闭校验。
 func httpGetJSON(ctx context.Context, rawURL string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -30,7 +27,7 @@ func httpGetJSON(ctx context.Context, rawURL string, out any) error {
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 14) cpdaily/"+AppVersion)
 	client := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: insecureTLSConfig(true),
+		TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
 	}}
 	resp, err := client.Do(req)
 	if err != nil {

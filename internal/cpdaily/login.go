@@ -27,9 +27,15 @@ const (
 
 // LoginState 是登录过程中的中间状态（需要验证码时由服务端保存）。
 type LoginState struct {
-	Tenant      *Tenant
-	Username    string
-	Password    string
+	Tenant   *Tenant
+	Username string
+	Password string
+	// UserID / AccountID 记录这次登录的发起者。
+	//
+	// 验证码是两段式流程，服务端必须确认 ticket 确实属于发起者：
+	// 否则持有他人 ticket 的登录用户，可以把别人的会话写进自己的账号。
+	UserID      int64
+	AccountID   int64
 	LoginURL    string
 	FormType    int // CAS 表单类型 0/1/2
 	Params      map[string]string

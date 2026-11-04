@@ -347,9 +347,19 @@ func (s *Server) handleRedeemQuota(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	amount := redeemAmount(req.Code)
-	if amount <= 0 {
+	code, ok := normalizeRedeemCode(req.Code)
+	if !ok {
+		writeError(w, badRequest("卡密格式不正确"))
+		return
+	}
+	// 卡密必须在库里预置且未被使用过；面额取自库，不再由格式推断。
+	amount, err := s.svc.DB().RedeemCode(r.Context(), code, user.ID)
+	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, badRequest("卡密无效或已被使用"))
+		return
+	}
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	if err := s.svc.DB().GrantQuota(r.Context(), user.ID, amount); err != nil {
@@ -364,24 +374,28 @@ func (s *Server) handleRedeemQuota(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"user": updated, "granted": amount, "message": "兑换成功"})
 }
 
-// redeemAmount 校验卡密格式。演示实现：QJ-XXXX-XXXX 形式的卡密固定兑换 30 次。
-func redeemAmount(code string) int {
+// normalizeRedeemCode 校验卡密格式并归一化（大写、去空白）。
+//
+// 只做格式校验，是否有效、面额多少一律以数据库里的发卡记录为准。
+// 早期实现按格式直接返回固定 30 次且不落任何使用记录，
+// 导致同一个码可以无限次兑换。
+func normalizeRedeemCode(code string) (string, bool) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	if !strings.HasPrefix(code, "QJ-") {
-		return 0
+		return "", false
 	}
 	parts := strings.Split(strings.TrimPrefix(code, "QJ-"), "-")
 	if len(parts) != 2 || len(parts[0]) != 4 || len(parts[1]) != 4 {
-		return 0
+		return "", false
 	}
 	for _, p := range parts {
 		for _, ch := range p {
 			if !strings.ContainsRune("0123456789ABCDEF", ch) {
-				return 0
+				return "", false
 			}
 		}
 	}
-	return 30
+	return code, true
 }
 
 // helpers

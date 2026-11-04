@@ -92,6 +92,8 @@ func (s *Scheduler) Start() {
 			case <-ctx.Done():
 				return
 			case now := <-ticker.C:
+				// 顺手回收过期的登录中间态：里面有明文密码，不能长期留在内存里。
+				s.svc.PruneExpiredStates()
 				if !shouldProbeNow(now, s.lastProbeAt) {
 					continue
 				}

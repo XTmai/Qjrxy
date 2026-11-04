@@ -119,9 +119,9 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if s.svc.Config().QuotaEnabled {
-		// 真正发起过提交才扣一次。此时不会再因余额不足失败（已预检），
-		// 即便并发导致扣减未命中，也不影响本次已成功的结果。
+	// 只对「真正签到成功」扣一次额度。
+	// 失败与待核对不该向用户收费——那等于当天没签上还要掉一次额度。
+	if s.svc.Config().QuotaEnabled && outcome.Status == store.StatusSuccess {
 		_, _ = s.svc.DB().ConsumeQuota(r.Context(), user.ID)
 	}
 	writeData(w, http.StatusOK, outcome)

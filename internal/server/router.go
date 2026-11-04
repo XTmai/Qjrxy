@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"qjrxy/internal/service"
 )
@@ -13,11 +14,19 @@ import (
 type Server struct {
 	svc      *service.Service
 	tokenTTL int
+	// 登录/注册限流：登录 5 次/分钟、注册 3 次/小时（按 IP + 账号名）。
+	loginLimiter    *rateLimiter
+	registerLimiter *rateLimiter
 }
 
 // New 创建 HTTP 服务。
 func New(svc *service.Service) *Server {
-	return &Server{svc: svc, tokenTTL: 30}
+	return &Server{
+		svc:             svc,
+		tokenTTL:        30,
+		loginLimiter:    newRateLimiter(5, time.Minute),
+		registerLimiter: newRateLimiter(3, time.Hour),
+	}
 }
 
 // Handler 返回配置好的路由。

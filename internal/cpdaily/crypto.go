@@ -130,23 +130,6 @@ QRdKMaFWtxZLc+0Gdkf8zvdPf3rcYt6VjPnq3Hu1iSdytD8SIuTcSGFoPctId7jZ
 zEjMjj74mnu3WtihZQIDAQAB
 -----END PUBLIC KEY-----`
 
-const secretPrivateKeyPEM = `-----BEGIN PRIVATE KEY-----
-MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAKcyZ9yEReNLggED
-LYqJVXKF4ZNDp/9sET7D3Dt7VZJKH8iK+KqjozEvT16E1RYpfjTmzXcGIbicVH6k
-Htzy14+kzh8v28fY/a8Vd9Ot9v+eT6Jlze3uw2HsyFbad9Pl8x8d5rjMp8xHHXU+
-qLvKiEzOmTvB+MDTyAnhPc42Q85HAgMBAAECgYAdny2NgRXMtkT7HvADml88IgIc
-ECGEfEX148dx9mDrwRwucIir2r//58zdBxWljoZgov+F9d0lkvTZVwRsys1rySqp
-BpDUB+WIQuYMHGqrf4ByZ+136TsSyXuKQ7PzOJ22HXnjth8QANS2ulFY9nE+ZpB8
-9vEBoatDkJ9dx2TZ6QJBANvNYkchnkqAjXxYD5A///gQ1LZ2JLY4HB7WzIFRQNft
-IXUmfyEWPYSpTdIroWoNInejJNZJStAFT2Bfq/IaN70CQQDCuzz7NOmq2iuqI20E
-GY4qDMGjcJJT7ZWmeGRVADwKaLS4VrifZy201ZJxwaqTaFb9wd45whncaDz22S+t
-QGxTAkBeqoyDWkVUjR1iyoKZfBcAfi8/Do8tM+lYluapY5dr6COa0yO52lxQgKKV
-vFje1h1cLZW1/QcNpNvVBB+IPCZ5AkA/UyRBjLNwHAKXEW4iJy1T/1H5FGKBaIGB
-4SS/f5QGzoX2bD0dmTAD3nABDjmqNgQUATeDENvYEQ3COF6IuKqBAkAxefuDjLbT
-wtVE14AhMxnNt58HlOeNLUICipkq/cZBgkseHCurPEiXXVDARIA4nj82YTqKjXrp
-mI/+1VLKBQ9Z
------END PRIVATE KEY-----`
-
 func parseRSAPublicKey() (*rsa.PublicKey, error) {
 	block, _ := pem.Decode([]byte(secretPublicKeyPEM))
 	if block == nil {
@@ -163,22 +146,6 @@ func parseRSAPublicKey() (*rsa.PublicKey, error) {
 	return pub, nil
 }
 
-func parseRSAPrivateKey() (*rsa.PrivateKey, error) {
-	block, _ := pem.Decode([]byte(secretPrivateKeyPEM))
-	if block == nil {
-		return nil, errors.New("私钥解析失败")
-	}
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	priv, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		return nil, errors.New("不是 RSA 私钥")
-	}
-	return priv, nil
-}
-
 // RSAEncryptSecret 加密 getSecretKey 的 p 参数。
 func RSAEncryptSecret(seed string) (string, error) {
 	pub, err := parseRSAPublicKey()
@@ -190,23 +157,6 @@ func RSAEncryptSecret(seed string) (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(raw), nil
-}
-
-// RSADecryptSecret 解密 getSecretKey 返回的 data。
-func RSADecryptSecret(b64 string) (string, error) {
-	priv, err := parseRSAPrivateKey()
-	if err != nil {
-		return "", err
-	}
-	raw, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return "", err
-	}
-	out, err := rsa.DecryptPKCS1v15(rand.Reader, priv, raw)
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
 }
 
 // CryptoSelfTest 校验加解密链路，供 /api/system/selftest 使用。

@@ -92,6 +92,19 @@ func (db *DB) UpdateUserPassword(ctx context.Context, userID int64, hash string)
 	return err
 }
 
+// DeleteOtherSessions 删除该用户除 keepToken 之外的全部会话（改密后调用）。
+//
+// 密码一旦被改，旧密码签发的 token 就不该继续有效——否则账号被盗后
+// 改密形同虚设，攻击者手里的 30 天 token 照样能用。
+func (db *DB) DeleteOtherSessions(ctx context.Context, userID int64, keepToken string) error {
+	if strings.TrimSpace(keepToken) == "" {
+		_, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+		return err
+	}
+	_, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ? AND token <> ?`, userID, keepToken)
+	return err
+}
+
 // ConsumeQuota 扣减一次额度，返回是否成功。
 func (db *DB) ConsumeQuota(ctx context.Context, userID int64) (bool, error) {
 	res, err := db.ExecContext(ctx,

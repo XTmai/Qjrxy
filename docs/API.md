@@ -417,7 +417,13 @@ GET  /api/device/poll/{ticket}          → pending=false 时自动回填并消�
 { "code": "QJ-A1B2-C3D4" }
 ```
 
-当前实现：`QJ-XXXX-XXXX`（4 位十六进制 × 2）兑换 30 次。校验规则在 `internal/server/accounts.go` 的 `redeemAmount` 中，可自行替换为数据库卡密表。
+当前实现：卡密为**一次性**，且必须先在 `redeem_codes` 表预置（`code`, `amount`）。兑换时用条件 UPDATE 原子占位 `used_by`，未入库、格式不符或已使用的码一律返回 400。
+
+```bash
+# 预置一张 30 次卡密
+sqlite3 data/qingjin.db \
+  "INSERT INTO redeem_codes (code, amount, created_at) VALUES ('QJ-A1B2-C3D4', 30, '2026-11-04T12:00:00+08:00');"
+```
 
 返回 `{ "user": {...}, "granted": 30, "message": "兑换成功" }`。
 

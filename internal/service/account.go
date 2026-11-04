@@ -31,13 +31,16 @@ type Service struct {
 func New(cfg *config.Config, db *store.DB) *Service {
 	photos := cfg.PhotosDir()
 	_ = os.MkdirAll(photos, 0o755)
+	// 证书校验策略：默认对学校系统做完整校验，只有配置里显式列出的主机才跳过。
+	// 这条链路承载学号与密码，不能再按早期版本全局关闭校验。
+	cpdaily.ConfigureTLSInsecureHosts(cfg.TLSInsecureHosts)
 	return &Service{
 		cfg:   cfg,
 		db:    db,
 		state: map[string]*cpdaily.LoginState{},
 		opts: cpdaily.ClientOptions{
-			Timeout:  40 * time.Second,
-			Insecure: true, // 部分学校证书链不完整，与官方 App 行为一致
+			Timeout:       40 * time.Second,
+			InsecureHosts: cfg.TLSInsecureHosts,
 		},
 	}
 }
