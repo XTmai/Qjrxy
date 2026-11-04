@@ -191,10 +191,17 @@ function AccountCard({ account, onOpen }: { account: Account; onOpen: () => void
   const needsDevice = !account.deviceId;
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="hover:border-border-strong bg-card w-full rounded-2xl border p-4 text-left transition-colors"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="hover:border-border-strong bg-card w-full cursor-pointer rounded-2xl border p-4 text-left transition-colors"
     >
       <div className="flex items-start gap-3">
         <Avatar size="lg">
@@ -249,7 +256,7 @@ function AccountCard({ account, onOpen }: { account: Account; onOpen: () => void
           </Badge>
         )}
       </div>
-    </button>
+    </div>
   );
 }
 
