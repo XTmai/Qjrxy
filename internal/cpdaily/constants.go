@@ -1,9 +1,9 @@
 // Package cpdaily 实现今日校园（CPDaily / Campusphere）签到、查寝、收集等接口的协议层。
 //
-// 协议细节参考以下开源项目并做了整合：
-//   - YVFENGXS/CpdailyHelper     提交加密、任务详情、位置校验
-//   - maserpoassr/jrxyzuixingnx  getSecretKey 动态密钥、CAS/IAP 登录、OBS 上传
-//   - 2257929377/campus-device-id Cordova 设备 ID 获取页
+// 协议细节参考以下开源项目并做了整合（详见 README 致谢）：
+//   - github.com/YVFENGXS/CpdailyHelper      提交加密、任务详情、位置校验
+//   - github.com/maserpoassr/jrxyzuixingnx   getSecretKey 动态密钥、CAS/IAP 登录、OBS 上传
+//   - github.com/2257929377/campus-device-id Cordova 设备 ID 获取页（/device.html）
 package cpdaily
 
 // AppVersion 当前模拟的今日校园客户端版本。

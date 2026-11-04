@@ -104,11 +104,32 @@ make linux           # 交叉编译 Linux amd64/arm64
 
 ## 致谢
 
-- 界面基于 [OpeniLink Hub](https://github.com/openilink/openilink-hub)（MIT）的 shadcn/ui 骨架改造
-- 协议细节参考：[qingjin-cpdaily](https://github.com/3238614968/qingjin-cpdaily)、
-  [CpdailyHelper](https://github.com/YVFENGXS/CpdailyHelper)、
-  [jrxyzuixingnx](https://github.com/maserpoassr/jrxyzuixingnx)、
-  [campus-device-id](https://github.com/2257929377/campus-device-id)
+本项目的协议实现与界面积累自多个开源项目的研究成果。感谢以下作者：
+
+### 界面
+
+- **[OpeniLink Hub](https://github.com/openilink/openilink-hub)**（MIT）— 前端骨架来源。`web/frontend/src/components/ui/` 的 shadcn/ui 组件、侧边栏布局、登录页六边形背景、主题令牌均移植自该项目，并按本项目需求改造（导航收敛为三页、移除微信扫码/Passkey/OAuth 认证通道、补充业务组件）。
+- **[shadcn/ui](https://ui.shadcn.com)**（MIT）— 组件体系与 `radix-nova` 风格预设
+- **[Radix UI](https://www.radix-ui.com)**（MIT）— 无样式可访问性原语
+- **[Geist](https://vercel.com/font)** — 字体（SIL Open Font License）
+
+### 协议实现
+
+- **[CpdailyHelper](https://github.com/YVFENGXS/CpdailyHelper)** — 提交体加密、任务详情解析、位置范围校验
+- **[jrxyzuixingnx](https://github.com/maserpoassr/jrxyzuixingnx)** — `getSecretKey` 动态密钥协商、CAS/IAP 登录流程、OBS 照片上传，以及 App 原生加密层的逆向分析文档
+- **[campus-device-id](https://github.com/2257929377/campus-device-id)** — `/device.html` 扫码页的 Cordova 桥接方案
+- **[qingjin-cpdaily](https://github.com/3238614968/qingjin-cpdaily)** — 早期界面形态与交互参考
+
+### 技术栈
+
+- **Go**：`modernc.org/sqlite`（纯 Go SQLite，无 CGO）、`goquery`（HTML 解析）、`skip2/go-qrcode`（二维码）、`golang.org/x/crypto`（scrypt）
+- **前端**：React 19、Vite、Tailwind CSS v4、TanStack Query、zustand、lucide-react
+
+## 声明
+
+本项目与「今日校园」（Campusphere / 江苏金智教育）官方无任何关联，未获其授权或认可。
+所有接口调用均由使用者本人的账号发起，本项目不提供任何服务器中转或代登录服务。
+
 
 ## License
 
