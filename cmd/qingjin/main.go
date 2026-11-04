@@ -89,7 +89,11 @@ func main() {
 	sched.Start()
 
 	go func() {
-		log.Printf("服务已启动：http://localhost%s", displayAddr(cfg.Addr))
+		if lan := server.LANBaseURLs(cfg.Addr); len(lan) > 0 {
+			log.Printf("服务已启动：%s（局域网）或 http://localhost%s", lan[0], displayAddr(cfg.Addr))
+		} else {
+			log.Printf("服务已启动：http://localhost%s", displayAddr(cfg.Addr))
+		}
 		for _, u := range server.LANBaseURLs(cfg.Addr) {
 			log.Printf("局域网访问：%s", u)
 		}
@@ -104,12 +108,18 @@ func main() {
 	}()
 
 	// 单用户模式（本地 exe）：启动后自动打开浏览器，双击即用。
+	// 优先用局域网地址——这样二维码直接可用，不用再手动切换第二遍；
+	// 没有局域网（无网卡/只绑回环）时回退 localhost。
 	// 服务器多人部署请设 QINGJIN_MULTI_USER=true；QINGJIN_NO_OPEN=1 可关闭自动打开。
 	if cfg.SingleUser && os.Getenv("QINGJIN_NO_OPEN") != "1" {
+		openURL := localURL(cfg.Addr)
+		if lan := server.LANBaseURLs(cfg.Addr); len(lan) > 0 {
+			openURL = lan[0]
+		}
 		go func() {
 			time.Sleep(400 * time.Millisecond) // 等监听就绪
-			if err := openBrowser(localURL(cfg.Addr)); err != nil {
-				log.Printf("自动打开浏览器失败（可手动访问 http://localhost%s）：%v", displayAddr(cfg.Addr), err)
+			if err := openBrowser(openURL); err != nil {
+				log.Printf("自动打开浏览器失败（可手动访问 %s）：%v", openURL, err)
 			}
 		}()
 	}
