@@ -167,7 +167,7 @@ export function HomePage() {
                 调度引擎在线
               </Badge>
             </div>
-            <p className="text-muted-foreground mt-0.5 text-xs">
+            <p className="text-muted-foreground mt-0.5 text-xs text-pretty">
               {accounts.length} 个账号中 {readyCount} 个已就绪 · {headline}
             </p>
           </div>

@@ -189,6 +189,54 @@ export function AuditPage() {
             ) : rows.length === 0 ? (
               <p className="text-muted-foreground py-14 text-center text-sm">该筛选条件下暂无执行记录</p>
             ) : (
+              <>
+              {/* 移动端卡片列表（< md）：6 列表格在 390px 下会被截断，横向滑体验差 */}
+              <ul className="divide-y md:hidden">
+                {rows.map((r) => (
+                  <li key={r.id}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(r.id)}
+                      className={`w-full px-4 py-3 text-left transition-colors ${
+                        selectedId === r.id ? "bg-primary-soft/60" : ""
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium">
+                            {r.accountAlias || `账号 ${r.accountId}`}
+                            <span className="text-muted-foreground ml-1.5 font-mono text-[10px]">
+                              {maskUser(r.accountUsername || "")}
+                            </span>
+                          </p>
+                          <p className="text-muted-foreground mt-0.5 truncate font-mono text-[10px]">
+                            {clockOf(r.createdAt)} · {dateOf(r.createdAt)}
+                          </p>
+                        </div>
+                        <RunStatusBadge status={r.status} />
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+                        <span className="min-w-0 flex-1 truncate">{r.taskName || "查寝"}</span>
+                        <span className="text-muted-foreground shrink-0 font-mono tabular-nums">
+                          {r.latencyMs ? `${r.latencyMs}ms` : ""}
+                        </span>
+                        <span
+                          className={`shrink-0 rounded px-1 py-0.5 font-mono text-[10px] tabular-nums ${
+                            r.geoOffsetM && r.geoOffsetM > 500
+                              ? "bg-warning-soft text-warning-text"
+                              : "bg-success-soft text-success-text"
+                          }`}
+                        >
+                          {r.geoOffsetM ? `${r.geoOffsetM.toFixed(0)}m` : "—"}
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+
+              {/* 桌面表格（>= md） */}
+              <div className="hidden md:block">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -242,6 +290,8 @@ export function AuditPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
+              </>
             )}
           </CardContent>
         </Card>
