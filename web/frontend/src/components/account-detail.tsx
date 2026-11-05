@@ -103,16 +103,16 @@ export function AccountDetail({ account, onClose }: Props) {
 
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="bg-muted/50 w-full p-1">
-            <TabsTrigger value="tasks" className="flex-1">
+            <TabsTrigger value="tasks" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               查寝任务
             </TabsTrigger>
-            <TabsTrigger value="plans" className="flex-1">
+            <TabsTrigger value="plans" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               自动计划
             </TabsTrigger>
-            <TabsTrigger value="records" className="flex-1">
+            <TabsTrigger value="records" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               执行记录
             </TabsTrigger>
-            <TabsTrigger value="device" className="flex-1">
+            <TabsTrigger value="device" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               设置
             </TabsTrigger>
           </TabsList>
@@ -147,12 +147,20 @@ function TasksTab({ account, onChanged }: { account: Account; onChanged: () => v
   const accountId = account.id;
   const { toast } = useToast();
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [loadError, setLoadError] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
 
   const load = async () => {
-    const { tasks } = await api.tasks();
-    setTasks(tasks.filter((t) => t.accountId === accountId && t.kind === "attendance"));
+    try {
+      const { tasks } = await api.tasks();
+      setTasks(tasks.filter((t) => t.accountId === accountId && t.kind === "attendance"));
+      setLoadError("");
+    } catch (e) {
+      // 吞掉异常会让界面永远停在「加载中」，必须落一个可重试的错误态
+      setTasks([]);
+      setLoadError(e instanceof Error ? e.message : "任务加载失败");
+    }
   };
 
   useEffect(() => {
@@ -215,7 +223,15 @@ function TasksTab({ account, onChanged }: { account: Account; onChanged: () => v
           <Loader2 className="size-4 animate-spin" /> 加载中…
         </p>
       )}
-      {tasks && tasks.length === 0 && (
+      {loadError && (
+        <p className="text-danger-text bg-danger-soft rounded-lg px-3 py-2 text-xs">
+          {loadError}
+          <button type="button" className="ml-2 underline" onClick={() => void load()}>
+            重试
+          </button>
+        </p>
+      )}
+      {tasks && tasks.length === 0 && !loadError && (
         <p className="text-muted-foreground py-4 text-center text-sm">暂无查寝任务，点上方按钮从学校同步</p>
       )}
       {tasks?.map((t) => {

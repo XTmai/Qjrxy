@@ -40,7 +40,7 @@ DialogOverlay.displayName = Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof Content>,
   React.ComponentPropsWithoutRef<typeof Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onAnimationEnd, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <Content
@@ -53,8 +53,16 @@ const DialogContent = React.forwardRef<
         if (typeof ref === "function") ref(node);
         else if (ref) ref.current = node;
       }}
+      onAnimationEnd={(e) => {
+        // 入场动画结束后立刻撤掉 will-change：否则整个弹窗生命周期都常驻
+        // 一个合成层（嵌套弹窗会叠到两层），低端设备上更容易掉帧、文字发虚。
+        if (e.target === e.currentTarget) e.currentTarget.style.willChange = "auto";
+        onAnimationEnd?.(e);
+      }}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] transform-gpu gap-4 border bg-background p-6 shadow-lg duration-200 will-change-transform data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-lg",
+        // 移动端：左右各留 1rem，避免弹窗贴边；最大高度 = 视口 - 2rem 且内部可滚动，
+        // 否则「添加账号」这类长表单在小屏上会把提交按钮顶到屏幕外且滚不到。
+        "fixed left-[50%] top-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] transform-gpu gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-5 shadow-lg duration-200 will-change-transform data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-6",
         className,
       )}
       {...props}

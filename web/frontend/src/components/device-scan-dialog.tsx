@@ -39,6 +39,9 @@ export function DeviceScanDialog({ accountId, onClose }: Props) {
 
   useEffect(() => {
     let alive = true;
+    // StrictMode 下 effect 会执行两次：上一轮 cleanup 把 stopped 置了 true，
+    // 不重置的话这一轮会立刻退出，二维码永远停在 loading。
+    stopped.current = false;
 
     const poll = async (ticket: string) => {
       while (!stopped.current && alive) {
