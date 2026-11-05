@@ -12,7 +12,7 @@ import {
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { dialogOrigin } from "@/lib/dialog-origin"
+import { dialogOriginCss } from "@/lib/dialog-origin"
 
 const Dialog = Root
 
@@ -48,7 +48,7 @@ const DialogContent = React.forwardRef<
         // 展开起点：从触发点击的位置 zoom + fade 展开（无指针时回退居中）。
         // ref 在首帧绘制前执行，origin 会先于入场动画生效。
         if (node && !node.style.transformOrigin) {
-          node.style.transformOrigin = dialogOrigin(node.getBoundingClientRect());
+          node.style.transformOrigin = dialogOriginCss();
         }
         if (typeof ref === "function") ref(node);
         else if (ref) ref.current = node;
@@ -62,7 +62,7 @@ const DialogContent = React.forwardRef<
       className={cn(
         // 移动端：左右各留 1rem，避免弹窗贴边；最大高度 = 视口 - 2rem 且内部可滚动，
         // 否则「添加账号」这类长表单在小屏上会把提交按钮顶到屏幕外且滚不到。
-        "fixed left-[50%] top-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] transform-gpu gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-5 shadow-lg duration-200 will-change-transform data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-6",
+        "fixed left-[50%] top-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] transform-gpu gap-4 overflow-y-auto overscroll-contain rounded-lg border bg-background p-5 shadow-lg duration-200 ease-out will-change-transform data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-6",
         className,
       )}
       {...props}
