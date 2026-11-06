@@ -129,6 +129,7 @@ export function HomePage() {
 
   const readiness = accounts.length ? Math.round((readyCount / accounts.length) * 100) : 0;
   const enabledPlans = (plans ?? []).filter((p) => p.enabled);
+  const blockedPlans = enabledPlans.filter((p) => (p.lastResult ?? "").startsWith("需人工处理"));
 
   const headline = allDone
     ? "今日查寝全部完成"
@@ -201,6 +202,18 @@ export function HomePage() {
           action={
             <Button variant="destructive" size="sm" className="h-7 text-xs" asChild>
               <Link to="/accounts">去处理</Link>
+            </Button>
+          }
+        />
+      )}
+      {blockedPlans.length > 0 && (
+        <EmptyBanner
+          tone="warning"
+          title={`${blockedPlans.length} 个计划需人工处理（设备需辅导员授权）`}
+          description="学校判定「疑似更换手机频繁」，已停止当天自动重试。请联系辅导员在辅导猫「手机授权管理」中授权本机，之后在调度计划页对该计划点「重置今日」恢复自动执行。"
+          action={
+            <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
+              <Link to="/schedules">去处理</Link>
             </Button>
           }
         />

@@ -65,7 +65,13 @@ export function PlanCard({ plan, onEdit }: { plan: Plan; onEdit?: (plan: Plan) =
         {plan.lastResult && (
           <p>
             <span className="text-muted-foreground inline-block w-16">执行结果</span>
-            {plan.lastResult}
+            {plan.lastResult.startsWith("需人工处理") ? (
+              <span className="text-warning-text bg-warning-soft rounded px-1 py-0.5 font-medium">
+                {plan.lastResult}
+              </span>
+            ) : (
+              plan.lastResult
+            )}
           </p>
         )}
       </div>

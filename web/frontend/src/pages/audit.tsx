@@ -215,6 +215,9 @@ export function AuditPage() {
                         </div>
                         <RunStatusBadge status={r.status} />
                       </div>
+                      {r.status !== "success" && r.message && (
+                        <p className="text-danger-text mt-1 line-clamp-2 text-[11px]">{r.message}</p>
+                      )}
                       <div className="mt-1.5 flex items-center gap-2 text-[11px]">
                         <span className="min-w-0 flex-1 truncate">{r.taskName || "查寝"}</span>
                         <span className="text-muted-foreground shrink-0 font-mono tabular-nums">
@@ -243,6 +246,7 @@ export function AuditPage() {
                     <TableHead className="pl-4">时间</TableHead>
                     <TableHead>账号</TableHead>
                     <TableHead>任务</TableHead>
+                    <TableHead>结果</TableHead>
                     <TableHead className="text-right">耗时</TableHead>
                     <TableHead className="text-right">偏移</TableHead>
                     <TableHead>状态</TableHead>
@@ -275,6 +279,16 @@ export function AuditPage() {
                         <p className="max-w-40 truncate text-xs">{r.taskName || "查寝"}</p>
                         <p className="text-muted-foreground text-[10px]">
                           {r.source === "auto" ? "自动计划" : "手动执行"}
+                        </p>
+                      </TableCell>
+                      <TableCell>
+                        <p
+                          className={`max-w-36 truncate text-xs ${
+                            r.status === "success" ? "text-muted-foreground" : "text-danger-text"
+                          }`}
+                          title={r.message}
+                        >
+                          {r.message || "—"}
                         </p>
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">

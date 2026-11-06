@@ -398,6 +398,14 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 		log.Printf("计划 %d 执行完成：%s", plan.ID, result)
 		return
 	}
+	// 设备需辅导员授权（code=3「更换手机频繁」类）：确定性权限拒绝，
+	// 重试注定失败，还会给学校风控累积失败提交记录。停止当天自动重试，
+	// 结果里给出指引；用户授权后在计划卡片点「重置今日」或手动执行恢复。
+	if service.IsDeviceAuthRequired("", outcome.Message) {
+		_ = s.db.RecordPlanRun(ctx, plan.ID, "需人工处理（设备需辅导员授权）："+outcome.Message)
+		log.Printf("计划 %d 需人工处理：设备需授权，已停止当天自动重试", plan.ID)
+		return
+	}
 	// 待核对与临时性失败都不写 last_run_at，保留当天机会：
 	// 这类结果不代表任务已经处理完，后续窗口内仍应继续尝试。
 	// 只有「已过期 / 已签到」这类确定性结果才占用当天名额。
@@ -411,7 +419,7 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 
 // isTransientMessage 判断执行结果的文案是否属于可重试的临时情况。
 func isTransientMessage(msg string) bool {
-	deterministic := []string{"已过签到时间", "已签到", "无需重复", "已完成"}
+	deterministic := []string{"已过签到时间", "已签到", "无需重复", "已完成", "更换手机", "手机授权", "辅导猫", "密码错误"}
 	for _, kw := range deterministic {
 		if strings.Contains(msg, kw) {
 			return false

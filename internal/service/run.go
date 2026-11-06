@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -122,6 +123,12 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 			result, detail, err = client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
 		}
 	}
+	if err == nil {
+		// 学校返回的文案可能夹带 HTML（实测「手机授权管理」提示里嵌了 <span>），
+		// 原样入库会在审计页和通知里显示原始标签。
+		result.Message = sanitizeSchoolMessage(result.Message)
+		result.Hint = sanitizeSchoolMessage(result.Hint)
+	}
 	if err != nil {
 		detailJSON := marshalDetail(map[string]any{"error": err.Error()})
 		_ = s.db.UpdateLog(ctx, logID, store.StatusPending, err.Error(), detailJSON)
@@ -161,8 +168,14 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	if cpdaily.IsAuthExpired(errors.New(result.Message)) {
 		_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
 	}
+	hint := result.Hint
+	if IsDeviceAuthRequired(result.Code, result.Message) {
+		// 确定性权限拒绝：10 分钟重试注定失败，还会给学校风控累积失败记录。
+		// 调度器据此停止当天自动重试，等待人工授权后手动恢复。
+		hint = defaultIfEmpty(hint, "请先联系辅导员在辅导猫「手机授权管理」中授权本机，处理后手动执行或重置计划")
+	}
 	return &RunOutcome{LogID: logID, Status: status, Message: result.Message,
-		Hint: result.Hint, Task: task.TaskName}, nil
+		Hint: hint, Task: task.TaskName}, nil
 }
 
 // TaskWindow 是一个任务的签到时间窗口。
@@ -349,15 +362,15 @@ func (s *Service) confirmSigned(ctx context.Context, account *store.Account, tas
 func buildLogDetail(detail *cpdaily.TaskDetail, result *cpdaily.SignResult, account *store.Account,
 	lon, lat float64, task *store.Task, traceID string, latency time.Duration) map[string]any {
 	payload := map[string]any{
-		"code":      result.Code,
-		"message":   result.Message,
-		"lon":       lon,
-		"lat":       lat,
-		"address":   account.Address,
-		"device":    account.DeviceID,
-		"traceId":   traceID,
-		"latencyMs": latency.Milliseconds(),
-		"signDate":  task.SignDate,
+		"code":       result.Code,
+		"message":    result.Message,
+		"lon":        lon,
+		"lat":        lat,
+		"address":    account.Address,
+		"device":     account.DeviceID,
+		"traceId":    traceID,
+		"latencyMs":  latency.Milliseconds(),
+		"signDate":   task.SignDate,
 		"beginClock": task.BeginClock,
 		"endClock":   task.EndClock,
 	}
@@ -392,6 +405,35 @@ func fileExists(path string) bool {
 	}
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+// sanitizeSchoolMessage 清理学校返回文案中的 HTML 标签与多余空白。
+// 服务端偶尔在提示里内嵌样式标签（如红色的「手机授权管理」），原样透传
+// 会让前端显示出一堆原始标签。
+func sanitizeSchoolMessage(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if !strings.Contains(msg, "<") {
+		return msg
+	}
+	tag := regexp.MustCompile(`<[^>]*>`)
+	msg = tag.ReplaceAllString(msg, "")
+	// 去标签后可能留下连续空格
+	ws := regexp.MustCompile(`\s{2,}`)
+	return strings.TrimSpace(ws.ReplaceAllString(msg, " "))
+}
+
+// IsDeviceAuthRequired 识别「设备需辅导员授权」类确定性拒绝（学校 code=3）。
+//
+// 这类错误重试没有意义——必须由辅导员在辅导猫后台授权后才可能成功；
+// 调度器据此停止当天自动重试，避免给学校风控累积大量失败提交记录。
+func IsDeviceAuthRequired(code, message string) bool {
+	joined := code + " " + message
+	for _, kw := range []string{"更换手机", "手机授权", "辅导猫", "授权使用该手机"} {
+		if strings.Contains(joined, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 // isVerification 判断失败是否属于"需要人工核对"而非确定失败。
