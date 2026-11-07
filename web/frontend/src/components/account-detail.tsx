@@ -566,7 +566,7 @@ function DeviceTab({
       {account.photoUrl && (
         <div className="border-border flex gap-3 rounded-lg border p-3">
           <img
-            src={`${account.photoUrl}?t=${photoVersion}`}
+            src={`${account.photoUrl}?w=320&t=${photoVersion}`}
             alt="签到照片"
             loading="lazy"
             decoding="async"

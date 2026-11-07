@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"qjrxy/internal/service"
@@ -324,7 +325,25 @@ func (s *Server) handleGetPhoto(w http.ResponseWriter, r *http.Request) {
 		writeError(w, notFound("照片文件不存在"))
 		return
 	}
-	w.Header().Set("Cache-Control", "private, max-age=60")
+	// ?w=96/320 返回缩略图：手机原图通常 3-5MB / 3000×4000px，列表页 12 张
+	// 原图直出会让浏览器解码上亿像素，页面明显卡顿。缩略图按 JPEG 重新
+	// 编码（EXIF 方向已烘焙进像素），URL 带 t=updatedAt 版本号，可长缓存。
+	if wStr := r.URL.Query().Get("w"); wStr != "" {
+		tw, err := strconv.Atoi(wStr)
+		if err != nil || tw < 16 || tw > 1280 {
+			writeError(w, badRequest("w 参数需在 16-1280 之间"))
+			return
+		}
+		if thumb, terr := photoThumbnail(path, tw); terr == nil {
+			w.Header().Set("Content-Type", "image/jpeg")
+			// 前端用 t=updatedAt 做缓存破坏，URL 内容不可变，可以长缓存
+			w.Header().Set("Cache-Control", "private, max-age=604800, immutable")
+			_, _ = w.Write(thumb)
+			return
+		}
+		// 生成失败（如 webp）：退回原图
+	}
+	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(w, r, path)
 }
 

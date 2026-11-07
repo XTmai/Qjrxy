@@ -369,7 +369,7 @@ const AccountCard = memo(function AccountCard({
           ok={!!account.photoUrl}
           value={account.photoUrl ? "已上传" : "未上传"}
           action={!account.photoUrl ? { text: "去上传", onClick: () => onOpen(account.id) } : undefined}
-          thumb={account.photoUrl ? `${account.photoUrl}?t=${account.updatedAt}` : undefined}
+          thumb={account.photoUrl ? `${account.photoUrl}?w=96&t=${account.updatedAt}` : undefined}
         />
         <InfoBlock
           icon={MapPin}
@@ -450,6 +450,7 @@ function InfoBlock({
             alt={label}
             className="ml-auto size-5 rounded object-cover ring-1 ring-border"
             loading="lazy"
+            decoding="async"
           />
         )}
       </div>

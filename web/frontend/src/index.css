@@ -215,6 +215,9 @@
     @apply font-sans;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* 有/无滚动条的页面视口宽度差 15px，导航时整页横移一下；
+       预留滚动条槽位后视口宽度恒定，导航不再晃动 */
+    scrollbar-gutter: stable;
   }
   body {
     @apply bg-background text-foreground;
