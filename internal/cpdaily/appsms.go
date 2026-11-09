@@ -233,7 +233,10 @@ func AppMobileLogin(ctx context.Context, device DeviceProfile, tenantID, phone, 
 }
 
 // ExchangeTGC 用学校 CAS 票（tgc）换取业务域会话（MOD_AUTH_CAS）。
-func ExchangeTGC(ctx context.Context, client *Client, host, tgc string) error {
+//
+// 设备头（CpdailyInfo / wisDeviceId）必须一并带上：换票请求同时承担
+// 「确认设备」的作用，缺失时服务端会跳回 portal/login 当作未登录。
+func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device DeviceProfile, tenantID string) error {
 	tgc = strings.TrimSpace(tgc)
 	if tgc == "" || host == "" {
 		return errors.New("缺少换票参数")
@@ -252,8 +255,14 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string) error {
 	req.Header.Set("User-Agent", casUserAgent)
 	req.Header.Set("TGC", tgcHeader)
 	req.Header.Set("Cookie", "AUTHTGC="+tgc+"; CASTGC="+tgc)
-	req.Header.Set("CpdailyClientType", "CPDAILY")
-	req.Header.Set("CpdailyStandAlone", "0")
+	// 复用短信登录的设备头，但 Cookie 要换成 CAS 票
+	for k, v := range appSMSHeaders(device, tenantID) {
+		switch k {
+		case "Cookie", "Content-Type":
+			continue
+		}
+		req.Header.Set(k, v)
+	}
 	noRedirect := &http.Client{
 		Timeout: 20 * time.Second,
 		Transport: &http.Transport{

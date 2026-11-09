@@ -197,7 +197,7 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		}
 		host = tenant.Host
 	}
-	if err := cpdaily.ExchangeTGC(ctx, client, host, result.TGC); err != nil {
+	if err := cpdaily.ExchangeTGC(ctx, client, host, result.TGC, device, account.TenantID); err != nil {
 		return nil, err
 	}
 	if _, err := s.finishSession(ctx, account, client); err != nil {
