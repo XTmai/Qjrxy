@@ -505,7 +505,7 @@ function DeviceTab({
     {
       key: "sms",
       title: "短信验证码登录",
-      desc: "学校自建统一身份认证专用，用手机验证码登录",
+      desc: "用绑定的手机号 + 验证码登录，所有学校通用",
       icon: MessageSquare,
       done: false,
       run: () => setShowSMS(true),

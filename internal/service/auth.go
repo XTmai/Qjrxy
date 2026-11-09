@@ -100,8 +100,11 @@ type SMSTicket struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// BeginSMSLogin 为「学校自建统一身份认证」的账号发起短信登录：
-// 探测自建 CAS → 打开登录页 → 请求学校下发验证码，然后返回 ticket 等待输入。
+// BeginSMSLogin 用今日校园账号绑定的手机号发送验证码。
+//
+// 走 campushoy 官方账号体系（mobile.campushoy.com），登录成功后由服务端
+// 返回学校 CAS 票（tgc），再用它换取业务域会话——因此所有学校通用，
+// 不依赖学校网页是否开放短信入口。
 func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, phone string) (*SMSTicket, error) {
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
@@ -111,31 +114,15 @@ func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, ph
 	if err != nil {
 		return nil, err
 	}
-	tenant := &cpdaily.Tenant{
-		ID: account.TenantID, Name: account.SchoolName, JoinType: account.JoinType,
-		Host: account.Host, IDSURL: account.IDSURL,
-	}
-	if tenant.Host == "" || tenant.IDSURL == "" {
-		resolved, err := cpdaily.ResolveTenant(ctx, account.SchoolName)
-		if err != nil {
-			return nil, err
+	device := deviceProfile(account, account.Lon, account.Lat)
+	tenantID := strings.TrimSpace(account.TenantID)
+	if tenantID == "" || account.Host == "" {
+		// 老数据可能没存租户信息，用学校名重新解析一次
+		if tenant, terr := cpdaily.ResolveTenant(ctx, account.SchoolName); terr == nil {
+			tenantID = tenant.ID
 		}
-		tenant = resolved
 	}
-
-	client := cpdaily.NewClient(s.opts, nil)
-	profile, probeInfo, err := cpdaily.DetectSelfHostedCAS(ctx, client, tenant)
-	if err != nil {
-		return nil, fmt.Errorf("探测学校认证入口失败：%w", err)
-	}
-	if profile == nil {
-		return nil, fmt.Errorf("该校未使用自建统一身份认证，不支持短信登录（%s）", probeInfo)
-	}
-	state, err := cpdaily.OpenSelfCASLogin(ctx, client, profile)
-	if err != nil {
-		return nil, err
-	}
-	if err := cpdaily.SendSelfCASSMSCode(ctx, client, profile, phone); err != nil {
+	if err := cpdaily.SendAppSMSCode(ctx, device, tenantID, phone); err != nil {
 		return nil, err
 	}
 
@@ -146,12 +133,18 @@ func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, ph
 			delete(s.state, id)
 		}
 	}
-	state.Cookies = client.Cookies()
-	state.UserID = userID
-	state.AccountID = account.ID
-	// 手机号与会话一起暂存，提交验证码时不需要前端再传
-	state.Params[paramSMSPhone] = phone
-	state.Params[paramSMSProfile] = profile.LoginURL
+	// 复用登录中间态：只存手机号与设备信息，不含密码
+	state := &cpdaily.LoginState{
+		Tenant: &cpdaily.Tenant{
+			ID: account.TenantID, Name: account.SchoolName, JoinType: account.JoinType,
+			Host: account.Host, IDSURL: account.IDSURL,
+		},
+		Username:  phone,
+		UserID:    userID,
+		AccountID: account.ID,
+		Params:    map[string]string{paramSMSPhone: phone},
+		CreatedAt: time.Now(),
+	}
 	s.state[ticket] = state
 	s.mu.Unlock()
 
@@ -162,7 +155,7 @@ func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, ph
 	}, nil
 }
 
-// SubmitSMSLogin 用验证码完成短信登录，并保存会话。
+// SubmitSMSLogin 用验证码完成 App 登录，并用返回的 CAS 票换取业务会话。
 func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, ticketID, code string) (*store.Account, error) {
 	code = strings.TrimSpace(code)
 	if code == "" {
@@ -184,33 +177,33 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		return nil, errors.New("验证码会话与当前账号不匹配，请重新获取")
 	}
 	phone := state.Params[paramSMSPhone]
-	profileURL := state.Params[paramSMSProfile]
-	delete(state.Params, paramSMSPhone)
-	delete(state.Params, paramSMSProfile)
 
 	account, err := s.db.AccountByID(ctx, userID, accountID)
 	if err != nil {
 		return nil, err
 	}
-	tenant := &cpdaily.Tenant{
-		ID: account.TenantID, Name: account.SchoolName, JoinType: account.JoinType,
-		Host: account.Host, IDSURL: account.IDSURL,
-	}
-	client := cpdaily.NewClient(s.opts, state.Cookies)
-	client, err = cpdaily.SubmitSelfCASLogin(ctx, client, tenant, state, phone, code)
+	device := deviceProfile(account, account.Lon, account.Lat)
+	result, err := cpdaily.AppMobileLogin(ctx, device, account.TenantID, phone, code)
 	if err != nil {
+		return nil, err
+	}
+
+	client := cpdaily.NewClient(s.opts, nil)
+	host := account.Host
+	if host == "" {
+		tenant, terr := cpdaily.ResolveTenant(ctx, account.SchoolName)
+		if terr != nil {
+			return nil, terr
+		}
+		host = tenant.Host
+	}
+	if err := cpdaily.ExchangeTGC(ctx, client, host, result.TGC); err != nil {
 		return nil, err
 	}
 	if _, err := s.finishSession(ctx, account, client); err != nil {
 		return nil, err
 	}
-	// 短信登录成功后补充手机号（仅掩码用途之外的完整号码不入库，避免多存敏感信息）
-	_ = profileURL
-	updated, err := s.db.AccountByID(ctx, userID, accountID)
-	if err != nil {
-		return nil, err
-	}
-	return updated, nil
+	return s.db.AccountByID(ctx, userID, accountID)
 }
 
 // maskPhone 保留前 3 后 2 位。

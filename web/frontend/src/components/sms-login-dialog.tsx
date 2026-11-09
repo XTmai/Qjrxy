@@ -91,7 +91,7 @@ export function SmsLoginDialog({ accountId, onClose }: Props) {
           短信验证码登录
         </DialogTitle>
         <DialogDescription>
-          适用于学校自建统一身份认证（如 my.nut.edu.cn）。请填写学校账号绑定的手机号。
+          使用今日校园账号绑定的手机号登录，所有学校通用。密码错误的备用方案。
         </DialogDescription>
         <DialogBody className="space-y-4">
           <div className="space-y-1.5">
@@ -100,7 +100,7 @@ export function SmsLoginDialog({ accountId, onClose }: Props) {
               <Input
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="学校绑定手机号"
+                placeholder="今日校园绑定的手机号"
                 inputMode="numeric"
                 autoComplete="tel"
               />

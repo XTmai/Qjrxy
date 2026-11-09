@@ -139,58 +139,6 @@ func OpenSelfCASLogin(ctx context.Context, client *Client, profile *SelfCASProfi
 	return state, nil
 }
 
-// SendSelfCASSMSCode 请求学校 CAS 下发短信验证码。
-// 接口与参数来自学校登录页脚本（v1/services/sedsms?mobile=...）。
-func SendSelfCASSMSCode(ctx context.Context, client *Client, profile *SelfCASProfile, phone string) error {
-	phone = strings.TrimSpace(phone)
-	if phone == "" {
-		return errors.New("请填写手机号")
-	}
-	target := profile.Base + "/v1/services/sedsms?mobile=" + url.QueryEscape(phone)
-	resp, err := client.do(ctx, http.MethodGet, target, map[string]string{
-		"User-Agent":       casUserAgent,
-		"Referer":          profile.LoginURL,
-		"X-Requested-With": "XMLHttpRequest",
-		"Accept":           "text/plain, */*; q=0.01",
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("请求短信验证码失败：%w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	text := strings.TrimSpace(string(body))
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("学校短信服务返回 HTTP %d：%s", resp.StatusCode, truncate(text, 120))
-	}
-	if strings.Contains(strings.ToLower(text), "success") {
-		return nil
-	}
-	if text == "" {
-		return errors.New("短信接口无响应：学校可能已关闭该功能，或需要先在网页完成一次登录")
-	}
-	// 学校会返回中文错误（如「手机号未绑定」「发送过于频繁」）
-	return fmt.Errorf("学校短信服务拒绝：%s", truncate(text, 120))
-}
-
-// SubmitSelfCASLogin 用手机号 + 短信验证码提交登录，并跟随跳转换取业务域会话。
-func SubmitSelfCASLogin(ctx context.Context, client *Client, tenant *Tenant, state *LoginState, phone, code string) (*Client, error) {
-	phone = strings.TrimSpace(phone)
-	code = strings.TrimSpace(code)
-	if phone == "" || code == "" {
-		return nil, errors.New("手机号或验证码为空")
-	}
-	state.Tenant = tenant
-	state.Params["username"] = phone
-	state.Params["mobileCode"] = code
-	delete(state.Params, "password")
-
-	if err := submitCAS(ctx, client, tenant, state); err != nil {
-		return nil, err
-	}
-	return client, nil
-}
-
 // resolveURL 把相对 action 解析成绝对地址。
 func resolveURL(base, ref string) (string, error) {
 	b, err := url.Parse(base)
