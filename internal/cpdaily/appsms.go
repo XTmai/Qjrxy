@@ -238,19 +238,33 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string) error {
 	if tgc == "" || host == "" {
 		return errors.New("缺少换票参数")
 	}
+	// TGC 头是 tgc 经 DES-CBC（XCE927== / IV 0102030405060708）加密后的 base64，
+	// 直接塞明文 CAS 票服务端不认，会跳回 portal/login 形成重定向循环。
+	tgcHeader, err := DESEncrypt(tgc, desKeyToken)
+	if err != nil {
+		return fmt.Errorf("构造换票凭证失败：%w", err)
+	}
 	target := "https://" + host + "/iap/login"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("User-Agent", casUserAgent)
-	req.Header.Set("TGC", tgc)
+	req.Header.Set("TGC", tgcHeader)
 	req.Header.Set("Cookie", "AUTHTGC="+tgc+"; CASTGC="+tgc)
 	req.Header.Set("CpdailyClientType", "CPDAILY")
 	req.Header.Set("CpdailyStandAlone", "0")
-	noRedirect := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
-	}}
+	noRedirect := &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
+		},
+		// 必须显式禁止自动跟随：未认证时业务域会与门户互相跳转，
+		// 自动跟随会一路跑到 10 次重定向上限。
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := noRedirect.Do(req)
 	if err != nil {
 		return fmt.Errorf("换取业务会话失败：%w", err)
@@ -260,13 +274,18 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string) error {
 	if _, ok := client.Cookies()["MOD_AUTH_CAS"]; ok {
 		return nil
 	}
-	// 部分部署会把会话种在 302 目标上，再跟一次
+	// 部分部署会把会话种在 302 目标上：手动跟一次，且不自动跟随，
+	// 否则未登录时业务域会和门户互相跳转，直到触发 10 次重定向上限。
 	if loc := resp.Header.Get("Location"); loc != "" {
-		follow, err := client.do(ctx, http.MethodGet, loc, map[string]string{"User-Agent": casUserAgent}, nil)
-		if err != nil {
-			return fmt.Errorf("跟随换票跳转失败：%w", err)
+		followReq, ferr := http.NewRequestWithContext(ctx, http.MethodGet, loc, nil)
+		if ferr == nil {
+			followReq.Header.Set("User-Agent", casUserAgent)
+			followReq.Header.Set("Cookie", client.CookieString())
+			if follow, ferr2 := noRedirect.Do(followReq); ferr2 == nil {
+				client.absorb(follow)
+				follow.Body.Close()
+			}
 		}
-		follow.Body.Close()
 	}
 	if _, ok := client.Cookies()["MOD_AUTH_CAS"]; !ok {
 		return errors.New("登录已通过，但未拿到业务会话（MOD_AUTH_CAS），请重试")
