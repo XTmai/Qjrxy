@@ -195,6 +195,71 @@ func (s *Server) handleAccountCaptcha(w http.ResponseWriter, r *http.Request) {
 	writeData(w, http.StatusOK, map[string]any{"done": true, "message": "登录成功"})
 }
 
+// handleSMSSend 为「学校自建统一身份认证」的账号发送短信验证码。
+func (s *Server) handleSMSSend(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var req struct {
+		Phone string `json:"phone"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	ticket, err := s.svc.BeginSMSLogin(r.Context(), user.ID, id, req.Phone)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{
+		"done":      false,
+		"ticket":    ticket.ID,
+		"phone":     ticket.Phone,
+		"expiresAt": ticket.ExpiresAt,
+		"message":   "验证码已发送，请注意查收",
+	})
+}
+
+// handleSMSLogin 用短信验证码完成登录。
+func (s *Server) handleSMSLogin(w http.ResponseWriter, r *http.Request) {
+	user, err := requireUser(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	id, err := pathID(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var req struct {
+		Ticket string `json:"ticket"`
+		Code   string `json:"code"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Ticket) == "" || strings.TrimSpace(req.Code) == "" {
+		writeError(w, badRequest("验证码与会话标识不能为空"))
+		return
+	}
+	account, err := s.svc.SubmitSMSLogin(r.Context(), user.ID, id, req.Ticket, req.Code)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeData(w, http.StatusOK, map[string]any{"done": true, "message": "登录成功", "account": toAccountView(account)})
+}
+
 // handleProbeAccounts 手动触发登录态探测（单个或全部账号）。
 //
 // 探测会顺带同步任务：会话有效则更新任务缓存，失效则自动用保存的密码重登。

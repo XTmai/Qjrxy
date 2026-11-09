@@ -48,6 +48,13 @@ export const api = {
     http.patch<{ account: Account }>(`/accounts/${id}`, data),
   deleteAccount: (id: number) => http.del<{ message: string }>(`/accounts/${id}`),
   accountLogin: (id: number) => http.post<LoginChallenge>(`/accounts/${id}/login`, {}),
+  smsSend: (id: number, phone: string) =>
+    http.post<{ done: boolean; ticket: string; phone: string; expiresAt: string; message: string }>(
+      `/accounts/${id}/sms/send`,
+      { phone },
+    ),
+  smsLogin: (id: number, ticket: string, code: string) =>
+    http.post<{ done: boolean; message: string; account?: Account }>(`/accounts/${id}/sms/login`, { ticket, code }),
   submitCaptcha: (id: number, ticket: string, code: string) =>
     http.post<{ done: boolean; message?: string }>(`/accounts/${id}/captcha`, { ticket, code }),
   verifyAccount: (id: number) =>

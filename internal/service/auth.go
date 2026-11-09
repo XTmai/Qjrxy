@@ -13,6 +13,11 @@ import (
 	"qjrxy/internal/store"
 )
 
+const (
+	paramSMSPhone   = "_smsPhone"
+	paramSMSProfile = "_smsProfile"
+)
+
 // LoginTicket 是一次"待输入验证码"的登录。
 type LoginTicket struct {
 	ID          string
@@ -86,6 +91,135 @@ func (s *Service) BeginLogin(ctx context.Context, userID, accountID int64) (*Log
 		CaptchaKind: challenge.CaptchaKind,
 		ExpiresAt:   time.Now().Add(loginStateTTL),
 	}, nil
+}
+
+// SMSTicket 是一次「已发送短信、等待验证码」的登录。
+type SMSTicket struct {
+	ID        string    `json:"ticket"`
+	Phone     string    `json:"phone"` // 掩码后的手机号，仅用于界面回显
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// BeginSMSLogin 为「学校自建统一身份认证」的账号发起短信登录：
+// 探测自建 CAS → 打开登录页 → 请求学校下发验证码，然后返回 ticket 等待输入。
+func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, phone string) (*SMSTicket, error) {
+	phone = strings.TrimSpace(phone)
+	if phone == "" {
+		return nil, errors.New("请填写手机号")
+	}
+	account, err := s.db.AccountByID(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	tenant := &cpdaily.Tenant{
+		ID: account.TenantID, Name: account.SchoolName, JoinType: account.JoinType,
+		Host: account.Host, IDSURL: account.IDSURL,
+	}
+	if tenant.Host == "" || tenant.IDSURL == "" {
+		resolved, err := cpdaily.ResolveTenant(ctx, account.SchoolName)
+		if err != nil {
+			return nil, err
+		}
+		tenant = resolved
+	}
+
+	client := cpdaily.NewClient(s.opts, nil)
+	profile, err := cpdaily.DetectSelfHostedCAS(ctx, client, tenant)
+	if err != nil {
+		return nil, fmt.Errorf("探测学校认证入口失败：%w", err)
+	}
+	if profile == nil {
+		return nil, errors.New("该校使用今日校园标准认证，不支持短信登录（请用账号密码登录）")
+	}
+	state, err := cpdaily.OpenSelfCASLogin(ctx, client, profile)
+	if err != nil {
+		return nil, err
+	}
+	if err := cpdaily.SendSelfCASSMSCode(ctx, client, profile, phone); err != nil {
+		return nil, err
+	}
+
+	ticket := secure.RandomID(18)
+	s.mu.Lock()
+	for id, st := range s.state {
+		if st == nil || time.Since(st.CreatedAt) > loginStateTTL {
+			delete(s.state, id)
+		}
+	}
+	state.Cookies = client.Cookies()
+	state.UserID = userID
+	state.AccountID = account.ID
+	// 手机号与会话一起暂存，提交验证码时不需要前端再传
+	state.Params[paramSMSPhone] = phone
+	state.Params[paramSMSProfile] = profile.LoginURL
+	s.state[ticket] = state
+	s.mu.Unlock()
+
+	return &SMSTicket{
+		ID:        ticket,
+		Phone:     maskPhone(phone),
+		ExpiresAt: time.Now().Add(loginStateTTL),
+	}, nil
+}
+
+// SubmitSMSLogin 用验证码完成短信登录，并保存会话。
+func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, ticketID, code string) (*store.Account, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, errors.New("请输入验证码")
+	}
+	s.mu.Lock()
+	state, ok := s.state[ticketID]
+	if ok {
+		delete(s.state, ticketID)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return nil, errors.New("验证码会话已过期，请重新获取")
+	}
+	if time.Since(state.CreatedAt) > loginStateTTL {
+		return nil, errors.New("验证码会话已过期，请重新获取")
+	}
+	if state.UserID != userID || state.AccountID != accountID {
+		return nil, errors.New("验证码会话与当前账号不匹配，请重新获取")
+	}
+	phone := state.Params[paramSMSPhone]
+	profileURL := state.Params[paramSMSProfile]
+	delete(state.Params, paramSMSPhone)
+	delete(state.Params, paramSMSProfile)
+
+	account, err := s.db.AccountByID(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	tenant := &cpdaily.Tenant{
+		ID: account.TenantID, Name: account.SchoolName, JoinType: account.JoinType,
+		Host: account.Host, IDSURL: account.IDSURL,
+	}
+	client := cpdaily.NewClient(s.opts, state.Cookies)
+	client, err = cpdaily.SubmitSelfCASLogin(ctx, client, tenant, state, phone, code)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.finishSession(ctx, account, client); err != nil {
+		return nil, err
+	}
+	// 短信登录成功后补充手机号（仅掩码用途之外的完整号码不入库，避免多存敏感信息）
+	_ = profileURL
+	updated, err := s.db.AccountByID(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// maskPhone 保留前 3 后 2 位。
+func maskPhone(p string) string {
+	r := []rune(p)
+	if len(r) <= 5 {
+		return p
+	}
+	return string(r[:3]) + "****" + string(r[len(r)-2:])
 }
 
 // loginStateTTL 是登录中间态（含明文密码）的最长保留时间。

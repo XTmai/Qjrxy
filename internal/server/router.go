@@ -64,6 +64,8 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("DELETE /api/accounts/{id}", s.withUser(s.handleDeleteAccount))
 	mux.HandleFunc("POST /api/accounts/{id}/login", s.withUser(s.handleAccountLogin))
 	mux.HandleFunc("POST /api/accounts/{id}/captcha", s.withUser(s.handleAccountCaptcha))
+	mux.HandleFunc("POST /api/accounts/{id}/sms/send", s.withUser(s.handleSMSSend))
+	mux.HandleFunc("POST /api/accounts/{id}/sms/login", s.withUser(s.handleSMSLogin))
 	mux.HandleFunc("POST /api/accounts/{id}/verify", s.withUser(s.handleVerifySession))
 	mux.HandleFunc("POST /api/accounts/probe", s.withUser(s.handleProbeAccounts))
 	mux.HandleFunc("POST /api/accounts/{id}/photo", s.withUser(s.handleUploadPhoto))
