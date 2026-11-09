@@ -28,38 +28,43 @@ type SelfCASProfile struct {
 }
 
 // DetectSelfHostedCAS 探测 /iap/login 是否跳转到学校自建 CAS。
-// 不是自建 CAS（或无法判断）时返回 (nil, nil)。
-func DetectSelfHostedCAS(ctx context.Context, client *Client, tenant *Tenant) (*SelfCASProfile, error) {
+// 不是自建 CAS 时返回 (nil, info, nil)，info 里带实际入口与跳转位置，便于排查。
+func DetectSelfHostedCAS(ctx context.Context, client *Client, tenant *Tenant) (*SelfCASProfile, string, error) {
 	entry := serviceBase(tenant.IDSURL, "iap") + "/login"
 	resp, err := client.doNoRedirect(ctx, http.MethodGet, entry, map[string]string{
 		"User-Agent": casUserAgent,
 	}, nil)
 	if err != nil {
-		return nil, err
+		return nil, entry, err
 	}
 	defer resp.Body.Close()
+	info := fmt.Sprintf("入口 %s → HTTP %d", entry, resp.StatusCode)
 	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
-		return nil, nil
+		return nil, info, nil
 	}
 	loc := strings.TrimSpace(resp.Header.Get("Location"))
+	info += " → " + loc
 	if loc == "" {
-		return nil, nil
+		return nil, info, nil
 	}
 	u, err := url.Parse(loc)
 	if err != nil || u.Host == "" {
-		return nil, nil
+		return nil, info, nil
 	}
 	host := strings.ToLower(u.Host)
-	// 仍在本校 campusphere 域内 → 是标准 IAP，不是自建 CAS
-	if strings.Contains(host, "campusphere.net") || strings.Contains(host, strings.ToLower(tenant.Host)) {
-		return nil, nil
+	// 仍在本校 campusphere 域内 → 是标准 IAP，不是自建 CAS。
+	// 注意：tenant.Host 可能为空（老数据/解析失败），空串会让 Contains 恒真，
+	// 必须显式判空，否则所有学校都会被误判成「标准认证」。
+	th := strings.ToLower(strings.TrimSpace(tenant.Host))
+	if strings.Contains(host, "campusphere.net") || (th != "" && strings.Contains(host, th)) {
+		return nil, info, nil
 	}
 	base := u.Scheme + "://" + u.Host + strings.TrimSuffix(u.Path, "/login")
 	base = strings.TrimRight(base, "/")
 	if base == "" {
-		return nil, nil
+		return nil, info, nil
 	}
-	return &SelfCASProfile{LoginURL: loc, Base: base}, nil
+	return &SelfCASProfile{LoginURL: loc, Base: base}, info, nil
 }
 
 // OpenSelfCASLogin 打开 CAS 登录页，解析表单隐藏字段（execution / _eventId 等），

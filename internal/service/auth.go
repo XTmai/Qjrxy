@@ -124,12 +124,12 @@ func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, ph
 	}
 
 	client := cpdaily.NewClient(s.opts, nil)
-	profile, err := cpdaily.DetectSelfHostedCAS(ctx, client, tenant)
+	profile, probeInfo, err := cpdaily.DetectSelfHostedCAS(ctx, client, tenant)
 	if err != nil {
 		return nil, fmt.Errorf("探测学校认证入口失败：%w", err)
 	}
 	if profile == nil {
-		return nil, errors.New("该校使用今日校园标准认证，不支持短信登录（请用账号密码登录）")
+		return nil, fmt.Errorf("该校未使用自建统一身份认证，不支持短信登录（%s）", probeInfo)
 	}
 	state, err := cpdaily.OpenSelfCASLogin(ctx, client, profile)
 	if err != nil {
