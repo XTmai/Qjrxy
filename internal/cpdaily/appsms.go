@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -232,10 +233,23 @@ func AppMobileLogin(ctx context.Context, device DeviceProfile, tenantID, phone, 
 	return &res, nil
 }
 
+// iapLoginURL 构造换票入口。
+//
+// service 是 CAS 的必需参数：IAP 需要知道把票据签给哪个业务域，
+// 缺了它即使 TGC 有效也只会 302 到登录页。
+func iapLoginURL(host string) string {
+	service := "https://" + host + "/portal/login"
+	return "https://" + host + "/iap/login?service=" + url.QueryEscape(service)
+}
+
 // ExchangeTGC 用学校 CAS 票（tgc）换取业务域会话（MOD_AUTH_CAS）。
 //
-// 设备头（CpdailyInfo / wisDeviceId）必须一并带上：换票请求同时承担
-// 「确认设备」的作用，缺失时服务端会跳回 portal/login 当作未登录。
+// 两个容易踩的点：
+//  1. service 是 CAS 的必需参数。IAP 需要知道把票据签给哪个业务域，
+//     不带 service 时即使 TGC 有效也只会 302 到 mobile.html 登录页。
+//  2. MOD_AUTH_CAS 往往种在 ticket 校验之后的那一跳，只跟一次会漏。
+//
+// 设备头（CpdailyInfo / wisDeviceId）一并带上，兼容要求校验设备的部署。
 func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device DeviceProfile, tenantID string) error {
 	tgc = strings.TrimSpace(tgc)
 	if tgc == "" || host == "" {
@@ -247,22 +261,17 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 	if err != nil {
 		return fmt.Errorf("构造换票凭证失败：%w", err)
 	}
-	target := "https://" + host + "/iap/login"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", casUserAgent)
-	req.Header.Set("TGC", tgcHeader)
-	req.Header.Set("Cookie", "AUTHTGC="+tgc+"; CASTGC="+tgc)
-	// 复用短信登录的设备头，但 Cookie 要换成 CAS 票
-	for k, v := range appSMSHeaders(device, tenantID) {
-		switch k {
-		case "Cookie", "Content-Type":
-			continue
+	target := iapLoginURL(host)
+
+	jar := map[string]string{"AUTHTGC": tgc, "CASTGC": tgc}
+	cookieHeader := func() string {
+		parts := make([]string, 0, len(jar))
+		for k, v := range jar {
+			parts = append(parts, k+"="+v)
 		}
-		req.Header.Set(k, v)
+		return strings.Join(parts, "; ")
 	}
+
 	noRedirect := &http.Client{
 		Timeout: 20 * time.Second,
 		Transport: &http.Transport{
@@ -274,28 +283,52 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 			return http.ErrUseLastResponse
 		},
 	}
-	resp, err := noRedirect.Do(req)
-	if err != nil {
-		return fmt.Errorf("换取业务会话失败：%w", err)
-	}
-	defer resp.Body.Close()
-	client.absorb(resp)
-	if _, ok := client.Cookies()["MOD_AUTH_CAS"]; ok {
-		return nil
-	}
-	// 部分部署会把会话种在 302 目标上：手动跟一次，且不自动跟随，
-	// 否则未登录时业务域会和门户互相跳转，直到触发 10 次重定向上限。
-	if loc := resp.Header.Get("Location"); loc != "" {
-		followReq, ferr := http.NewRequestWithContext(ctx, http.MethodGet, loc, nil)
-		if ferr == nil {
-			followReq.Header.Set("User-Agent", casUserAgent)
-			followReq.Header.Set("Cookie", client.CookieString())
-			if follow, ferr2 := noRedirect.Do(followReq); ferr2 == nil {
-				client.absorb(follow)
-				follow.Body.Close()
+
+	for hop := 0; hop < 6; hop++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", casUserAgent)
+		req.Header.Set("TGC", tgcHeader)
+		req.Header.Set("Cookie", cookieHeader())
+		// 复用短信登录的设备头，但 Cookie 要换成 CAS 票
+		for k, v := range appSMSHeaders(device, tenantID) {
+			switch k {
+			case "Cookie", "Content-Type":
+				continue
+			}
+			req.Header.Set(k, v)
+		}
+
+		resp, err := noRedirect.Do(req)
+		if err != nil {
+			return fmt.Errorf("换取业务会话失败：%w", err)
+		}
+		client.absorb(resp)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		for _, ck := range resp.Cookies() {
+			if ck.Name != "" && ck.MaxAge >= 0 {
+				jar[ck.Name] = ck.Value
 			}
 		}
+		loc := resp.Header.Get("Location")
+		resp.Body.Close()
+
+		if _, ok := client.Cookies()["MOD_AUTH_CAS"]; ok {
+			return nil
+		}
+		if loc == "" {
+			break
+		}
+		if u, perr := url.Parse(loc); perr == nil && !u.IsAbs() {
+			if base, berr := url.Parse(target); berr == nil {
+				loc = base.ResolveReference(u).String()
+			}
+		}
+		target = loc
 	}
+
 	if _, ok := client.Cookies()["MOD_AUTH_CAS"]; !ok {
 		return errors.New("登录已通过，但未拿到业务会话（MOD_AUTH_CAS），请重试")
 	}
