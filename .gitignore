@@ -21,3 +21,4 @@ Thumbs.db
 # 编辑器与计划文件
 .zcode/
 *.tsbuildinfo
+release/
