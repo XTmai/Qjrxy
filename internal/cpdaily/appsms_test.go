@@ -2,6 +2,7 @@ package cpdaily
 
 import (
 	"encoding/json"
+	"net/url"
 	"testing"
 )
 
@@ -55,5 +56,20 @@ func TestAppLoginResultParse(t *testing.T) {
 	}
 	if res.TGC == "" || res.SessionToken == "" || res.OpenID != "2024000001" {
 		t.Fatalf("字段解析异常：%+v", res)
+	}
+}
+
+func TestIAPLoginURLCarriesService(t *testing.T) {
+	raw := iapLoginURL("nut.campusphere.net")
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if got, want := u.Path, "/iap/login"; got != want {
+		t.Fatalf("路径应为 %s，得到 %s", want, got)
+	}
+	// CAS 需要 service 才知道把票据签给哪个业务域，缺了它换票永远失败。
+	if got, want := u.Query().Get("service"), "https://nut.campusphere.net/portal/login"; got != want {
+		t.Fatalf("service 应为 %q，得到 %q", want, got)
 	}
 }
