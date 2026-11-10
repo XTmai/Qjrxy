@@ -15,7 +15,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-import { Bot, Check, ChevronRight, ImageIcon, Loader2, LogIn, MapPin, QrCode } from "lucide-react";
+import { Bot, Check, ChevronRight, ImageIcon, Loader2, LogIn, MapPin, MessageSquare, QrCode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime, relativeTime, taskState, taskTime } from "@/lib/task";
 import { api } from "@/api";
@@ -23,6 +23,7 @@ import type { Account, RunLog, RunOutcome, Task } from "@/lib/types";
 import { LoginBadge, RunStatusBadge, TaskStateBadge } from "@/components/status-badge";
 import { PlansTab } from "./plans";
 import { DeviceScanDialog } from "./device-scan-dialog";
+import { SmsLoginDialog } from "./sms-login-dialog";
 
 interface Props {
   account: Account;
@@ -419,6 +420,7 @@ function DeviceTab({
   const { toast } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
   const [showScan, setShowScan] = useState(false);
+  const [showSMS, setShowSMS] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [photoVersion, setPhotoVersion] = useState(Date.now());
@@ -499,6 +501,14 @@ function DeviceTab({
       icon: LogIn,
       done: account.loginStatus === "authorized",
       run: () => void relLogin(),
+    },
+    {
+      key: "sms",
+      title: "短信验证码登录",
+      desc: "用绑定的手机号 + 验证码登录，支持所有学校",
+      icon: MessageSquare,
+      done: false,
+      run: () => setShowSMS(true),
     },
     {
       key: "range",
@@ -595,6 +605,19 @@ function DeviceTab({
       >
         删除账号
       </Button>
+
+      {showSMS && (
+        <SmsLoginDialog
+          accountId={account.id}
+          onClose={(loggedIn) => {
+            setShowSMS(false);
+            if (loggedIn) {
+              toast({ title: "登录成功" });
+              onChanged();
+            }
+          }}
+        />
+      )}
 
       {showScan && (
         <DeviceScanDialog
