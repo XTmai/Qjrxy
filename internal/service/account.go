@@ -148,26 +148,45 @@ type AccountInput struct {
 }
 
 // CreateAccount 解析学校并保存账号（不执行登录）。
-func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInput) (*store.Account, error) {
+//
+// 同一学校下学号已存在时不再当成失败：直接复用该账号，把本次填写的密码/别名/
+// 设备信息更新进去后返回 existed=true。这样「保存即登录」重试、双击重复提交、
+// 或创建成功但紧接着登录失败后用户再点一次，都不会再看到「已绑定」的死胡同，
+// 也不会出现「提示已存在、账号确实已添加、但列表要刷新才看得到」的错位。
+func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInput) (*store.Account, bool, error) {
 	if strings.TrimSpace(in.SchoolName) == "" {
-		return nil, errors.New("请填写学校全称")
+		return nil, false, errors.New("请填写学校全称")
 	}
 	if strings.TrimSpace(in.Username) == "" {
-		return nil, errors.New("请填写学号")
+		return nil, false, errors.New("请填写学号")
 	}
 	tenant, err := cpdaily.ResolveTenant(ctx, in.SchoolName)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	passwordEnc, err := secure.Encrypt(s.cfg.SecretKey, in.Password)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
+	username := strings.TrimSpace(in.Username)
+
+	// 先查一次：已绑定则更新密码/设备信息后返回，不报 UNIQUE。
+	existing, err := s.db.AccountBySchoolUsername(ctx, userID, tenant.Name, username)
+	if err == nil {
+		if err := s.rebindAccount(ctx, existing, in, tenant, passwordEnc); err != nil {
+			return nil, false, err
+		}
+		return existing, true, nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return nil, false, err
+	}
+
 	account := &store.Account{
 		UserID:        userID,
 		Alias:         firstNonEmpty(in.Alias, in.Username),
 		SchoolName:    tenant.Name,
-		Username:      strings.TrimSpace(in.Username),
+		Username:      username,
 		PasswordEnc:   passwordEnc,
 		TenantID:      tenant.ID,
 		Host:          tenant.Host,
@@ -187,7 +206,74 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 		Abnormal:      defaultIfEmpty(in.Abnormal, "在校"),
 		LoginStatus:   "unknown",
 	}
-	return s.db.CreateAccount(ctx, account)
+	created, err := s.db.CreateAccount(ctx, account)
+	if errors.Is(err, store.ErrDuplicateAccount) {
+		// 并发下被另一个请求抢先插入：取回它并按「已存在」处理。
+		existing, lookupErr := s.db.AccountBySchoolUsername(ctx, userID, tenant.Name, username)
+		if lookupErr != nil {
+			return nil, false, err
+		}
+		if err := s.rebindAccount(ctx, existing, in, tenant, passwordEnc); err != nil {
+			return nil, false, err
+		}
+		return existing, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return created, false, nil
+}
+
+// rebindAccount 把本次输入合并进已存在的账号并落库。
+// 密码只在本次确实填写时覆盖，避免空密码把可用凭据清空。
+func (s *Service) rebindAccount(ctx context.Context, a *store.Account, in AccountInput, tenant *cpdaily.Tenant, passwordEnc string) error {
+	if v := strings.TrimSpace(in.Alias); v != "" {
+		a.Alias = v
+	}
+	a.Username = strings.TrimSpace(in.Username)
+	a.SchoolName = tenant.Name
+	a.TenantID = tenant.ID
+	a.Host = tenant.Host
+	a.IDSURL = tenant.IDSURL
+	a.JoinType = defaultIfEmpty(tenant.JoinType, "CAS")
+	if strings.TrimSpace(in.Password) != "" {
+		a.PasswordEnc = passwordEnc
+		a.LoginStatus = "unknown"
+	}
+	if v := strings.TrimSpace(in.DeviceID); v != "" {
+		a.DeviceID = v
+	}
+	if v := strings.TrimSpace(in.DeviceModel); v != "" {
+		a.DeviceModel = v
+	}
+	if v := strings.TrimSpace(in.SystemVersion); v != "" {
+		a.SystemVersion = v
+	}
+	if v := strings.TrimSpace(in.Platform); v != "" {
+		a.Platform = normalizePlatform(v)
+	}
+	if v := strings.TrimSpace(in.WisDeviceID); v != "" {
+		a.WisDeviceID = v
+	}
+	if v := strings.TrimSpace(in.UserAgent); v != "" {
+		a.UserAgent = v
+	}
+	if v := strings.TrimSpace(in.AppVersion); v != "" {
+		a.AppVersion = v
+	}
+	if v := strings.TrimSpace(in.BuildID); v != "" {
+		a.BuildID = v
+	}
+	if v := strings.TrimSpace(in.Address); v != "" {
+		a.Address = v
+	}
+	if in.Lon != 0 || in.Lat != 0 {
+		a.Lon, a.Lat = in.Lon, in.Lat
+	}
+	if v := strings.TrimSpace(in.Abnormal); v != "" {
+		a.Abnormal = v
+	}
+	return s.db.UpdateAccount(ctx, a)
 }
 
 // UpdateAccount 更新账号信息（密码留空表示不变）。

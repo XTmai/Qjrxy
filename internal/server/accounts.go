@@ -58,12 +58,18 @@ func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	account, err := s.svc.CreateAccount(r.Context(), user.ID, in)
+	account, existed, err := s.svc.CreateAccount(r.Context(), user.ID, in)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeData(w, http.StatusCreated, map[string]any{"account": toAccountView(account)})
+	// existed=true 表示该学校下学号本来就已绑定，本次只是更新了密码/设备信息。
+	// 返回 200 而不是 201，前端据此提示「账号已存在」并继续登录。
+	status := http.StatusCreated
+	if existed {
+		status = http.StatusOK
+	}
+	writeData(w, status, map[string]any{"account": toAccountView(account), "existed": existed})
 }
 
 func (s *Server) handleGetAccount(w http.ResponseWriter, r *http.Request) {

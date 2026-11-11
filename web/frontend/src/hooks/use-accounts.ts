@@ -12,17 +12,20 @@ export function useAccounts() {
   });
 }
 
-/** 创建账号 → 自动登录 → 自动获取签到点。任一环节失败都会抛出，由调用方提示。 */
+/**
+ * 创建账号。只负责入库 + 刷新列表，登录由调用方单独发起——
+ * 之前把「创建」和「登录」串在同一个 mutation 里，登录一失败整个 mutation 就 reject：
+ * 账号其实已经写入数据库，弹窗却退回表单报错，用户重试又撞上「已绑定」，
+ * 列表还得手动刷新才看得到新账号。
+ *
+ * 已存在（同学校 + 学号）时后端复用并更新密码/设备信息，返回 existed=true，不再报错。
+ */
 export function useCreateAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: AccountInput) => {
-      const { account } = await api.createAccount(input);
-      // 保存即登录
-      const ch = await api.accountLogin(account.id);
-      return { account, challenge: ch };
-    },
+    mutationFn: (input: AccountInput) => api.createAccount(input),
     onSuccess: () => {
+      // 账号已入库就先把列表刷新出来，后续登录成败都不影响可见性。
       void qc.invalidateQueries({ queryKey: queryKeys.accounts.all() });
     },
   });

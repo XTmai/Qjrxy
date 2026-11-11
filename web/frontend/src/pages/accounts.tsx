@@ -525,6 +525,7 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
   }, [school]);
 
   const save = async () => {
+    if (busy) return;
     setError("");
     if (!school.trim()) return setError("请填写学校全称");
     if (!username.trim()) return setError("请填写学号");
@@ -533,46 +534,67 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
     try {
       setStep("logging");
       setLogLabel("正在创建账号…");
-      const { account, challenge: ch } = await create.mutateAsync({
+      const created = await create.mutateAsync({
         schoolName: school.trim(),
         username: username.trim(),
         password,
       });
+      const accountId = created.account.id;
+      const existed = !!created.existed;
+      setCreatedId(accountId);
 
-      // 保存即登录；学校要验证码时挂起流程，等 CaptchaDialog 回传。
-      // 注意：challenge 必须来自 mutateAsync 的返回值。读 create.data 拿到的是
-      // 本次 render 的旧快照（恒为 undefined），会导致下面的 Promise 永不 resolve。
+      // 账号已经入库，后面登录失败只能提示「登录未完成」，不能再报成「创建失败」：
+      // 那样用户以为没保存，重试又撞上「已绑定」，列表也没刷新，看起来就像白添加了一次。
       setLogLabel("正在登录…");
-      const loginOk = await new Promise<boolean>((resolve) => {
-        if (!ch || ch.done) {
-          resolve(true);
-          return;
-        }
-        captchaResolve.current = resolve;
-        setCreatedId(account.id);
-        setChallenge(ch);
-        // 兜底：验证码始终没有回传时也不能把弹窗永久锁死
-        window.setTimeout(() => {
-          if (captchaResolve.current === resolve) {
-            captchaResolve.current = null;
-            setChallenge(null);
-            resolve(false);
+      let loginErr = "";
+      try {
+        const ch = await api.accountLogin(accountId);
+        // 学校要验证码时挂起流程，等 CaptchaDialog 回传。
+        // 注意：challenge 必须来自本次请求的返回值，不能读 create.data（旧快照，恒为 undefined），
+        // 否则下面的 Promise 永不 resolve。
+        const loginOk = await new Promise<boolean>((resolve) => {
+          if (!ch || ch.done) {
+            resolve(true);
+            return;
           }
-        }, 5 * 60_000);
-      });
-      if (loginOk) toast({ title: "登录成功" });
+          captchaResolve.current = resolve;
+          setChallenge(ch);
+          // 兜底：验证码始终没有回传时也不能把弹窗永久锁死
+          window.setTimeout(() => {
+            if (captchaResolve.current === resolve) {
+              captchaResolve.current = null;
+              setChallenge(null);
+              resolve(false);
+            }
+          }, 5 * 60_000);
+        });
+        if (!loginOk) loginErr = "验证码未完成";
+      } catch (e) {
+        loginErr = e instanceof Error ? e.message : "登录失败";
+      }
+
+      const okTitle = existed ? "账号已存在，信息已更新" : "账号已添加";
+      if (loginErr) {
+        // 账号已经入库，不能报「创建失败」让用户以为没保存。
+        // 留在表单里说明清楚：直接改密码/验证码后重试即可，
+        // 重试会复用同一个账号（后端不再报「已绑定」），列表也已经刷新。
+        setError(`${okTitle}，但自动登录未完成：${loginErr}。修改后可再次点「保存并登录」重试。`);
+        setStep("form");
+        return;
+      }
 
       // 自动按学校签到点设置位置（需要登录态；失败不阻塞）
       try {
-        const res = await api.applySignRange(account.id);
+        const res = await api.applySignRange(accountId);
         toast({ title: "位置已设置", description: res.range.address || undefined });
       } catch {
         toast({ title: "位置未设置", description: "可在账号详情里点「自动获取位置」重试" });
       }
 
-      toast({ title: "账号已添加" });
+      toast({ title: existed ? "账号已存在，已重新登录" : "登录成功" });
       onClose(true);
     } catch (e) {
+      // 只有创建本身失败（学校解析不到、网络断了）才留在表单让用户改。
       setError(e instanceof Error ? e.message : "创建失败");
       setStep("form");
     } finally {
@@ -650,7 +672,7 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
               取消
             </Button>
             {step === "form" && (
-              <Button variant="default" onClick={() => void save()}>
+              <Button variant="default" disabled={busy} onClick={() => void save()}>
                 保存并登录
               </Button>
             )}

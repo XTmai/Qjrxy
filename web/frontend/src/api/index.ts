@@ -43,7 +43,9 @@ export const api = {
   // ---- 账号 ----
   listAccounts: () => http.get<{ accounts: Account[] }>('/accounts'),
   account: (id: number) => http.get<{ account: Account; tasks?: Task[] }>(`/accounts/${id}`),
-  createAccount: (data: AccountInput) => http.post<{ account: Account }>('/accounts', data),
+  // existed=true：该学校下学号本来就已绑定，后端复用并更新了密码/设备信息，并未新建。
+  createAccount: (data: AccountInput) =>
+    http.post<{ account: Account; existed?: boolean }>('/accounts', data),
   updateAccount: (id: number, data: Partial<AccountInput>) =>
     http.patch<{ account: Account }>(`/accounts/${id}`, data),
   deleteAccount: (id: number) => http.del<{ message: string }>(`/accounts/${id}`),

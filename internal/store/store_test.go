@@ -138,11 +138,17 @@ func TestAccountCRUD(t *testing.T) {
 		t.Error("设备指纹应有默认值")
 	}
 
-	// 同学校同学号不允许重复
+	// 同学校同学号不允许重复（返回可识别的 ErrDuplicateAccount，便于上层复用已有账号）
 	if _, err := db.CreateAccount(ctx, &Account{
 		UserID: u.ID, SchoolName: "测试大学", Username: "20230001", Host: "h",
-	}); err == nil {
-		t.Error("重复账号应报错")
+	}); !errors.Is(err, ErrDuplicateAccount) {
+		t.Errorf("重复账号应返回 ErrDuplicateAccount，实际：%v", err)
+	}
+	if found, err := db.AccountBySchoolUsername(ctx, u.ID, "测试大学", "20230001"); err != nil || found.ID != acc.ID {
+		t.Errorf("按学校+学号反查失败：%v %+v", err, found)
+	}
+	if _, err := db.AccountBySchoolUsername(ctx, u.ID, "测试大学", "99999999"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("不存在的学号应返回 ErrNotFound，实际：%v", err)
 	}
 
 	acc.Alias = "主账号"

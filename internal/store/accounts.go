@@ -45,6 +45,10 @@ type Account struct {
 	UpdatedAt  string  `json:"updatedAt"`
 }
 
+// ErrDuplicateAccount 表示同一学校下该学号已绑定。
+// 调用方据此区分「重复添加」与真正的写入失败，避免把已成功的账号报成失败。
+var ErrDuplicateAccount = errors.New("该学校下已绑定这个账号")
+
 // HasCookie 表示账号是否保存了登录态。
 func (a Account) HasCookie() bool {
 	return strings.TrimSpace(a.Cookies) != ""
@@ -107,7 +111,7 @@ func (db *DB) CreateAccount(ctx context.Context, a *Account) (*Account, error) {
 		a.Abnormal, a.PhotoPath, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
-			return nil, errors.New("该学校下已绑定这个账号")
+			return nil, ErrDuplicateAccount
 		}
 		return nil, err
 	}
@@ -145,6 +149,14 @@ func (db *DB) AccountByID(ctx context.Context, userID, id int64) (*Account, erro
 // AccountByIDInternal 不校验归属（调度器使用）。
 func (db *DB) AccountByIDInternal(ctx context.Context, id int64) (*Account, error) {
 	row := db.QueryRowContext(ctx, `SELECT `+accountColumns+` FROM accounts WHERE id = ?`, id)
+	return scanAccount(row)
+}
+
+// AccountBySchoolUsername 按「用户 + 学校 + 学号」查询账号，用于重复添加时的复用。
+func (db *DB) AccountBySchoolUsername(ctx context.Context, userID int64, schoolName, username string) (*Account, error) {
+	row := db.QueryRowContext(ctx,
+		`SELECT `+accountColumns+` FROM accounts WHERE user_id = ? AND school_name = ? AND username = ?`,
+		userID, schoolName, username)
 	return scanAccount(row)
 }
 
