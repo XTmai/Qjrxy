@@ -254,7 +254,8 @@ export function SettingsPage() {
               </div>
               {info && (
                 <p className="text-muted-foreground text-xs">
-                  客户端协议 {info.appVersion} · API {info.apiVersion} · 会话 {info.tokenTTLDay} 天
+                  API {info.apiVersion} · 会话 {info.tokenTTLDay} 天
+                  {info.clientVersion ? ` · 模拟客户端 ${info.clientVersion}` : ""}
                 </p>
               )}
               {info && (

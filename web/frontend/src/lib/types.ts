@@ -206,7 +206,10 @@ export interface ProbeResult {
 }
 
 export interface SystemInfo {
+  /** 产品版本（Qjrxy 自身），页脚与关于页展示 */
   appVersion: string;
+  /** 模拟的今日校园客户端版本，仅用于协议请求头 */
+  clientVersion?: string;
   apiVersion: string;
   serverTime: string;
   tokenTTLDay: number;

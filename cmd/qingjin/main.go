@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"qjrxy/internal/buildinfo"
 	"qjrxy/internal/config"
 	"qjrxy/internal/scheduler"
 	"qjrxy/internal/secure"
@@ -34,7 +35,7 @@ func main() {
 	flag.Parse()
 
 	if *version {
-		fmt.Println("qjrxy", appVersion)
+		fmt.Println("qjrxy", buildinfo.Version)
 		return
 	}
 
@@ -189,4 +190,3 @@ func openBrowser(url string) error {
 	}
 }
 
-const appVersion = "1.2.1"

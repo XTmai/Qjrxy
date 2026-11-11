@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"qjrxy/internal/buildinfo"
 	"qjrxy/internal/cpdaily"
 	"qjrxy/internal/secure"
 )
@@ -19,7 +20,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleSelfTest 校验加密链路与数据库连通性，便于部署后自检。
 func (s *Server) handleSelfTest(w http.ResponseWriter, r *http.Request) {
-	result := map[string]any{"crypto": "ok", "database": "ok", "appVersion": cpdaily.AppVersion}
+	result := map[string]any{
+		"crypto": "ok", "database": "ok",
+		"appVersion": buildinfo.Version, "clientVersion": cpdaily.AppVersion,
+	}
 	if err := cpdaily.CryptoSelfTest(); err != nil {
 		result["crypto"] = err.Error()
 	}
@@ -163,7 +167,10 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		features = append(features, "quota")
 	}
 	writeData(w, http.StatusOK, map[string]any{
-		"appVersion":   cpdaily.AppVersion,
+		// appVersion 是产品版本（页脚/关于页展示），clientVersion 才是模拟的
+		// 今日校园客户端版本；两者混用会把 9.9.24 当成 Qjrxy 的版本号。
+		"appVersion":    buildinfo.Version,
+		"clientVersion": cpdaily.AppVersion,
 		"apiVersion":   "v1",
 		"serverTime":   time.Now().Format(time.RFC3339),
 		"tokenTTLDay":  s.tokenTTL,
