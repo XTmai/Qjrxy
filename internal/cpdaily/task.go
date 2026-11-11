@@ -201,6 +201,12 @@ func (f FlexFloat) Float() float64 { return float64(f) }
 
 // listTasks 查询某类任务的未完成列表。
 func (c *Client) listTasks(ctx context.Context, host string, kind TaskKind) ([]Task, error) {
+	// host 可能是用户手填的（带 scheme/路径），拼上 "https://" 就会变成
+	// https://https://…；这里统一成纯域名，所有任务请求都经过这一处。
+	host = NormalizeHost(host)
+	if host == "" {
+		return nil, errors.New("学校域名无效，请检查账号的 host 设置")
+	}
 	endpoints := EndpointsFor(kind)
 	// 第一次请求用于获取 cookie（部分学校需要），忽略结果。
 	if _, err := c.postJSON(ctx, "https://"+host+endpoints.List, nil, nil); err != nil {

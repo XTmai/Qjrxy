@@ -38,6 +38,8 @@ type AppLoginResult struct {
 	TenantName   string `json:"tenantName"`
 	Name         string `json:"name"`
 	Status       string `json:"status"`
+	// TGCStatus 只在部分学校出现；不是 tgcValidate 时说明票据还要二次校验。
+	TGCStatus string `json:"tgcStatus"`
 }
 
 // appSMSEncrypt 加密登录体：AES-128-CBC + PKCS7，输出标准 base64。
@@ -228,9 +230,20 @@ func AppMobileLogin(ctx context.Context, device DeviceProfile, tenantID, phone, 
 		return nil, fmt.Errorf("解析登录响应失败：%w", err)
 	}
 	if res.TGC == "" && res.SessionToken == "" {
-		return nil, errors.New("登录未返回有效凭证")
+		// 把服务端的状态码带上：不同学校的失败形态不一样（选租户、待绑定、
+		// 票据二次校验），没有这两个字段只能看到一句「没凭证」，无从排查。
+		return nil, fmt.Errorf("登录未返回有效凭证（status=%s, tgcStatus=%s）",
+			orDash(res.Status), orDash(res.TGCStatus))
 	}
 	return &res, nil
+}
+
+// orDash 空串显示为 "-"，便于日志与错误信息阅读。
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }
 
 // iapLoginURL 构造换票入口。
@@ -252,8 +265,14 @@ func iapLoginURL(host string) string {
 // 设备头（CpdailyInfo / wisDeviceId）一并带上，兼容要求校验设备的部署。
 func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device DeviceProfile, tenantID string) error {
 	tgc = strings.TrimSpace(tgc)
-	if tgc == "" || host == "" {
-		return errors.New("缺少换票参数")
+	host = NormalizeHost(host)
+	// 两个参数缺失的原因完全不同，分开报：混成一句「缺少换票参数」时，
+	// 用户和我们都无法判断是该换学校名，还是该校根本不发 CAS 票。
+	if host == "" {
+		return errors.New("未识别到学校门户域名（host），请填写今日校园里的学校全称后重试")
+	}
+	if tgc == "" {
+		return errors.New("该校登录未下发换票票据（tgc），无法换取业务会话；请改用扫码授权或账密登录")
 	}
 	// TGC 头是 tgc 经 DES-CBC（XCE927== / IV 0102030405060708）加密后的 base64，
 	// 直接塞明文 CAS 票服务端不认，会跳回 portal/login 形成重定向循环。

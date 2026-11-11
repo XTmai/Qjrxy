@@ -62,6 +62,108 @@ func ListSchools(ctx context.Context) ([]School, error) {
 	return out, nil
 }
 
+// tenantEntry 是租户信息接口返回的入口字段（只取用得到的部分）。
+type tenantEntry struct {
+	AmpURL    string `json:"ampUrl"`
+	AmpURL2   string `json:"ampUrl2"`
+	IDSURL    string `json:"idsUrl"`
+	JoinType  string `json:"joinType"`
+	TenantID  string `json:"id"`
+	LcukeyURL string `json:"lcukeyUrl"`
+}
+
+// fetchTenantEntry 按租户 ID 拉取入口信息。
+func fetchTenantEntry(ctx context.Context, tenantID string) (*tenantEntry, error) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return nil, fmt.Errorf("缺少租户 ID")
+	}
+	var info struct {
+		Data []tenantEntry `json:"data"`
+	}
+	if err := httpGetJSON(ctx, tenantInfoURL+"?ids="+url.QueryEscape(tenantID), &info); err != nil {
+		return nil, err
+	}
+	if len(info.Data) == 0 {
+		return nil, fmt.Errorf("获取学校入口信息失败，请稍后重试")
+	}
+	return &info.Data[0], nil
+}
+
+// hostFromEntry 从 ampUrl/ampUrl2 里挑出门户域名。
+// 优先 campusphere/cpdaily 域名，其次第一个能解析的地址。
+func hostFromEntry(entry *tenantEntry) string {
+	host := ""
+	for _, amp := range []string{entry.AmpURL, entry.AmpURL2} {
+		if amp == "" {
+			continue
+		}
+		u, err := url.Parse(amp)
+		if err != nil || u.Host == "" {
+			continue
+		}
+		isCampus := strings.Contains(amp, "campusphere") || strings.Contains(amp, "cpdaily")
+		if isCampus || host == "" {
+			host = u.Host
+		}
+		if isCampus {
+			break
+		}
+	}
+	return host
+}
+
+// NormalizeHost 把用户可能填进来的各种形式（带 scheme / 带路径 / 前后空格）
+// 统一成纯域名。换票地址是 "https://" + host 拼出来的，带 scheme 会拼成
+// https://https://… 直接请求失败。
+func NormalizeHost(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	// 先剥 scheme 再截路径：反过来的话 "https://host" 会被 "/" 截成 "https:"。
+	if i := strings.Index(s, "://"); i >= 0 {
+		s = s[i+3:]
+	}
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if s == "" {
+		return ""
+	}
+	if u, err := url.Parse("https://" + s); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return ""
+}
+
+// ResolveTenantByID 用租户 ID 解析入口。
+//
+// 短信登录的响应自带 tenantId，它才是这次登录真正落在哪个租户——比账号上
+// 久存的 tenantId 或用户手填的学校名都可信。部分学校「缺少换票参数」就是
+// 因为账号没存 host，而按学校名匹配不到租户。
+func ResolveTenantByID(ctx context.Context, tenantID string) (*Tenant, error) {
+	entry, err := fetchTenantEntry(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	host := hostFromEntry(entry)
+	if host == "" {
+		return nil, fmt.Errorf("该校门户地址解析失败（学校未提供入口域名），请联系开发者补充支持")
+	}
+	ids := entry.IDSURL
+	if ids == "" {
+		ids = "https://" + host + "/iap"
+	}
+	return &Tenant{
+		ID:       tenantID,
+		Host:     host,
+		IDSURL:   ids,
+		JoinType: entry.JoinType,
+		AmpURL:   entry.AmpURL,
+	}, nil
+}
+
 // ResolveTenant 按学校名称解析租户与登录入口。
 func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 	schoolName = strings.TrimSpace(schoolName)
@@ -105,41 +207,13 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 		return nil, fmt.Errorf("「%s」未开通今日校园", matched.Name)
 	}
 
-	infoURL := tenantInfoURL + "?ids=" + url.QueryEscape(matched.ID)
-	var info struct {
-		Data []struct {
-			AmpURL    string `json:"ampUrl"`
-			AmpURL2   string `json:"ampUrl2"`
-			IDSURL    string `json:"idsUrl"`
-			JoinType  string `json:"joinType"`
-			TenantID  string `json:"id"`
-			LcukeyURL string `json:"lcukeyUrl"`
-		} `json:"data"`
-	}
-	if err := httpGetJSON(ctx, infoURL, &info); err != nil {
+	entry, err := fetchTenantEntry(ctx, matched.ID)
+	if err != nil {
 		return nil, err
 	}
-	if len(info.Data) == 0 {
-		return nil, fmt.Errorf("获取学校入口信息失败，请稍后重试")
-	}
-	entry := info.Data[0]
-
-	host := ""
-	for _, amp := range []string{entry.AmpURL, entry.AmpURL2} {
-		if amp == "" {
-			continue
-		}
-		if u, err := url.Parse(amp); err == nil && u.Host != "" {
-			if strings.Contains(amp, "campusphere") || strings.Contains(amp, "cpdaily") || host == "" {
-				host = u.Host
-			}
-			if strings.Contains(amp, "campusphere") || strings.Contains(amp, "cpdaily") {
-				break
-			}
-		}
-	}
+	host := hostFromEntry(entry)
 	if host == "" {
-		return nil, fmt.Errorf("该校暂不支持自动解析入口，请手动填写 host")
+		return nil, fmt.Errorf("该校门户地址解析失败（学校未提供入口域名），请联系开发者补充支持")
 	}
 
 	ids := entry.IDSURL

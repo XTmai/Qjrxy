@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -116,10 +117,22 @@ func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, ph
 	}
 	device := deviceProfile(account, account.Lon, account.Lat)
 	tenantID := strings.TrimSpace(account.TenantID)
-	if tenantID == "" || account.Host == "" {
-		// 老数据可能没存租户信息，用学校名重新解析一次
+	if tenantID == "" || cpdaily.NormalizeHost(account.Host) == "" {
+		// 老数据可能没存租户信息，用学校名重新解析一次并写回：
+		// tenantId/host 之后要用于发码头、换票入口和任务接口，只改局部变量
+		// 会让下一次登录又回到同样的缺失状态。
 		if tenant, terr := cpdaily.ResolveTenant(ctx, account.SchoolName); terr == nil {
 			tenantID = tenant.ID
+			account.TenantID = tenant.ID
+			account.Host = tenant.Host
+			account.IDSURL = tenant.IDSURL
+			account.JoinType = tenant.JoinType
+			if account.SchoolName == "" {
+				account.SchoolName = tenant.Name
+			}
+			if err := s.db.UpdateAccount(ctx, account); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if err := cpdaily.SendAppSMSCode(ctx, device, tenantID, phone); err != nil {
@@ -187,23 +200,99 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	if err != nil {
 		return nil, err
 	}
+	// 一行诊断：线上反馈基本说不清是「该校不发票」还是「租户没解析出来」，
+	// 这行日志（不含手机号/学号/票值）能把两类原因分开。
+	log.Printf("短信登录 %s", describeLoginResult(result))
+
+	// 登录响应里的 tenantId 才是这次登录真正落在的租户；账号上存的是创建时的，
+	// 可能是空的或旧的（学校合并/换域名）。以响应为准反查门户域名，比用学校名模糊
+	// 匹配可靠——「缺少换票参数」的反馈基本都出在这一步。
+	tenantChanged := result.TenantID != "" && result.TenantID != account.TenantID
+	if tenantChanged {
+		account.TenantID = result.TenantID
+	}
+	host := ""
+	if !tenantChanged {
+		host = cpdaily.NormalizeHost(account.Host)
+	}
+	if host == "" && result.TenantID != "" {
+		if tenant, terr := cpdaily.ResolveTenantByID(ctx, result.TenantID); terr == nil {
+			host = tenant.Host
+			if account.SchoolName == "" {
+				account.SchoolName = tenant.Name
+			}
+		}
+	}
+	if host == "" {
+		host = cpdaily.NormalizeHost(account.Host)
+	}
+	if host == "" && account.SchoolName != "" {
+		if tenant, terr := cpdaily.ResolveTenant(ctx, account.SchoolName); terr == nil {
+			host = tenant.Host
+		}
+	}
+	if host == "" {
+		return nil, errors.New("未识别到学校门户域名，请确认账号所选的学校是否正确（学校名需与今日校园里一致）")
+	}
+	if host != cpdaily.NormalizeHost(account.Host) || account.SchoolName == "" {
+		account.Host = host
+		if err := s.db.UpdateAccount(ctx, account); err != nil {
+			return nil, err
+		}
+	}
 
 	client := cpdaily.NewClient(s.opts, nil)
-	host := account.Host
-	if host == "" {
-		tenant, terr := cpdaily.ResolveTenant(ctx, account.SchoolName)
-		if terr != nil {
-			return nil, terr
-		}
-		host = tenant.Host
+	// App 登录成功后本来就是带 sessionToken 的，部分学校（不下发 CAS 票）只有它。
+	// 先种进去，任务接口的 sessionToken/sessionTokenKey 才拿得到值。
+	if token := strings.TrimSpace(result.SessionToken); token != "" {
+		client.SetCookies(map[string]string{
+			"sessionToken": token,
+			"tenantId":     account.TenantID,
+		})
 	}
-	if err := cpdaily.ExchangeTGC(ctx, client, host, result.TGC, device, account.TenantID); err != nil {
-		return nil, err
+
+	// tgc 为空说明该校不走 IAP CAS 换票（账号体系会话直接可用），
+	// 这时不该拦在「缺少换票参数」上，交给 finishSession 实测会话是否有效。
+	tgc := strings.TrimSpace(result.TGC)
+	var exchangeErr error
+	if tgc != "" {
+		exchangeErr = cpdaily.ExchangeTGC(ctx, client, host, tgc, device, account.TenantID)
 	}
+
 	if _, err := s.finishSession(ctx, account, client); err != nil {
+		if exchangeErr != nil {
+			return nil, exchangeErr
+		}
 		return nil, err
 	}
-	return s.db.AccountByID(ctx, userID, accountID)
+	fresh, err := s.db.AccountByID(ctx, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	// 换票失败但会话实测可用 → 照常算登录成功（部分学校业务域不需要 MOD_AUTH_CAS）。
+	if exchangeErr != nil && fresh.LoginStatus != "authorized" {
+		return nil, exchangeErr
+	}
+	// 没有票据、sessionToken 也访问不了业务接口：这次登录实际是失败的，
+	// 不能因为 finishSession 已经把 cookies 落库就报成功。
+	if tgc == "" && fresh.LoginStatus != "authorized" {
+		return nil, errors.New("该校登录未下发换票票据，且账号会话无法访问业务接口；请改用扫码授权或账密登录")
+	}
+	return fresh, nil
+}
+
+// describeLoginResult 把登录响应的关键状态拼成一行，供日志排查使用（不含票值）。
+func describeLoginResult(res *cpdaily.AppLoginResult) string {
+	pick := func(v string, ok bool) string {
+		if ok {
+			return "有"
+		}
+		return "无"
+	}
+	return fmt.Sprintf("tenant=%s status=%s tgcStatus=%s tgc=%s session=%s",
+		res.TenantID, res.Status, res.TGCStatus,
+		pick(res.TGC, strings.TrimSpace(res.TGC) != ""),
+		pick(res.SessionToken, strings.TrimSpace(res.SessionToken) != ""))
 }
 
 // maskPhone 保留前 3 后 2 位。
