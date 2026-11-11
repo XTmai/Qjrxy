@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useInfo, useUser } from "@/hooks/use-auth";
 import { useTheme } from "@/lib/theme";
+import { QQ_GROUP_URL } from "@/lib/links";
 import { api } from "@/api";
 import { useToast } from "@/hooks/use-toast";
 import { PageHeader } from "@/components/page-header";
@@ -237,7 +238,20 @@ export function SettingsPage() {
             <CardHeader>
               <CardTitle className="text-base">关于</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
+            <CardContent className="space-y-4 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-muted-foreground tracking-label text-[10px] font-medium uppercase">当前版本</p>
+                  <p className="tracking-headline font-mono text-lg font-semibold tabular-nums">
+                    {info ? `v${info.appVersion}` : "v—"}
+                  </p>
+                </div>
+                <Button variant="outline" size="sm" asChild>
+                  <a href={QQ_GROUP_URL} target="_blank" rel="noopener noreferrer">
+                    加入反馈群
+                  </a>
+                </Button>
+              </div>
               {info && (
                 <p className="text-muted-foreground text-xs">
                   客户端协议 {info.appVersion} · API {info.apiVersion} · 会话 {info.tokenTTLDay} 天

@@ -1,0 +1,3 @@
+// 外部链接：侧边栏页脚与设置页「关于」共用，避免两处各写一份。
+export const QQ_GROUP_URL =
+  "https://qun.qq.com/universal-share/share?ac=1&authKey=%2FLbzUcBLshAumjEZaqDqBxDKuy%2BoJDanSX4ivE9h4gH8frukeVkgsfo72%2FOrECDv&busi_data=eyJncm91cENvZGUiOiIxMTMyMTc0NTg0IiwidG9rZW4iOiJlVFlqY3UrQ280MkxRZzlpMTNUTlR6Ujk0WU5EcUh1UDdRWnVPZzNtRTVWcEZRMjRnWnNYcXUxUHlhNnBjdUNkIiwidWluIjoiMjM5NTk3OTMyOSJ9&data=4uPkOPujKCgj8-HMEuojDFvQBnaKFPcBMTg0zGIoPaIFH3IgrUPZFif4ou14ZfTiNR6DfupYs9iSK9Odz4HRvg&svctype=4&tempid=h5_group_info";

@@ -12,6 +12,7 @@ import {
   Github,
   House,
   LogOut,
+  MessagesSquare,
   Moon,
   Plus,
   RefreshCw,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import { api } from "@/api";
 import { useTheme } from "@/lib/theme";
+import { QQ_GROUP_URL } from "@/lib/links";
 import {
   Sidebar,
   SidebarContent,
@@ -193,6 +195,30 @@ function DaemonCard() {
   );
 }
 
+// 页脚：版本号 + 反馈群入口。用户排障时第一句往往是「你用的哪个版本」，
+// 把版本号放在常驻位置，比藏在关于页里省一次来回。
+function VersionFooter() {
+  const { open } = useSidebar();
+  const { data: info } = useInfo();
+  if (!open) return null;
+  return (
+    <div className="text-muted-foreground flex items-center justify-between px-3 pb-1 text-[10px]">
+      <span className="font-mono tabular-nums">
+        {info?.appVersion ? `v${info.appVersion}` : "v—"}
+      </span>
+      <a
+        href={QQ_GROUP_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="hover:text-foreground flex items-center gap-1 transition-colors"
+      >
+        <MessagesSquare className="size-3" />
+        反馈群
+      </a>
+    </div>
+  );
+}
+
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -281,6 +307,7 @@ export function Layout() {
 
         <SidebarFooter>
           <DaemonCard />
+          <VersionFooter />
           <SidebarMenu>
             <SidebarMenuItem>
               <DropdownMenu>
