@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"qjrxy/internal/events"
 	"qjrxy/internal/service"
 	"qjrxy/internal/store"
 )
@@ -192,6 +193,7 @@ func (s *Server) handleCreatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicPlans)
 	writeData(w, http.StatusCreated, map[string]any{"plan": created})
 }
 
@@ -220,6 +222,7 @@ func (s *Server) handleUpdatePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicPlans)
 	writeData(w, http.StatusOK, map[string]any{"plan": plan})
 }
 
@@ -238,6 +241,7 @@ func (s *Server) handleDeletePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicPlans)
 	writeData(w, http.StatusOK, map[string]any{"message": "计划已删除"})
 }
 
@@ -263,6 +267,7 @@ func (s *Server) handleTogglePlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicPlans)
 	writeData(w, http.StatusOK, map[string]any{"enabled": req.Enabled})
 }
 
@@ -282,6 +287,7 @@ func (s *Server) handleResetPlanRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicPlans)
 	writeData(w, http.StatusOK, map[string]any{"message": "已重置，计划将在下个周期重新检查"})
 }
 

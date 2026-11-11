@@ -21,6 +21,7 @@ type testEnv struct {
 	srv   *httptest.Server
 	token string
 	db    *store.DB
+	svc   *service.Service
 }
 
 func newEnv(t *testing.T) *testEnv {
@@ -44,7 +45,7 @@ func newEnv(t *testing.T) *testEnv {
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	env := &testEnv{srv: srv, db: db}
+	env := &testEnv{srv: srv, db: db, svc: svc}
 	env.register(t, "apiuser", "secret123")
 	return env
 }
@@ -354,9 +355,10 @@ func TestRegisterClosedByDefault(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	srv := httptest.NewServer(server.New(service.New(cfg, db)).Handler(nil))
+	svc := service.New(cfg, db)
+	srv := httptest.NewServer(server.New(svc).Handler(nil))
 	t.Cleanup(srv.Close)
-	env := &testEnv{srv: srv, db: db}
+	env := &testEnv{srv: srv, db: db, svc: svc}
 
 	// 库里没有用户：允许创建第一个账号
 	env.register(t, "firstuser", "secret123")
@@ -445,7 +447,7 @@ func newSingleEnv(t *testing.T) *testEnv {
 	svc := service.New(cfg, db)
 	srv := httptest.NewServer(server.New(svc).Handler(nil))
 	t.Cleanup(srv.Close)
-	return &testEnv{srv: srv, db: db}
+	return &testEnv{srv: srv, db: db, svc: svc}
 }
 
 // TestSingleUserMode 校验单用户模式：无 token 直用、注册口关闭、老库用户无缝复用。

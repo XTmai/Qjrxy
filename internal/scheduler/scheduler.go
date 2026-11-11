@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"qjrxy/internal/events"
 	"qjrxy/internal/service"
 	"qjrxy/internal/store"
 )
@@ -331,7 +332,7 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 
 	account, err := s.db.AccountByIDInternal(ctx, plan.AccountID)
 	if err != nil {
-		_ = s.db.RecordPlanRun(ctx, plan.ID, "账号不存在："+err.Error())
+		s.recordPlanRun(ctx, plan, "账号不存在："+err.Error())
 		return
 	}
 	kind := plan.Kind
@@ -388,13 +389,13 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 			log.Printf("计划 %d 临时失败，稍后重试：%v", plan.ID, err)
 			return
 		}
-		_ = s.db.RecordPlanRun(ctx, plan.ID, "执行失败："+err.Error())
+		s.recordPlanRun(ctx, plan, "执行失败："+err.Error())
 		log.Printf("计划 %d 执行失败：%v", plan.ID, err)
 		return
 	}
 	result := fmt.Sprintf("%s：%s", outcome.Task, outcome.Message)
 	if outcome.Status == store.StatusSuccess {
-		_ = s.db.RecordPlanRun(ctx, plan.ID, result)
+		s.recordPlanRun(ctx, plan, result)
 		log.Printf("计划 %d 执行完成：%s", plan.ID, result)
 		return
 	}
@@ -402,7 +403,7 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 	// 重试注定失败，还会给学校风控累积失败提交记录。停止当天自动重试，
 	// 结果里给出指引；用户授权后在计划卡片点「重置今日」或手动执行恢复。
 	if service.IsDeviceAuthRequired("", outcome.Message) {
-		_ = s.db.RecordPlanRun(ctx, plan.ID, "需人工处理（设备需辅导员授权）："+outcome.Message)
+		s.recordPlanRun(ctx, plan, "需人工处理（设备需辅导员授权）："+outcome.Message)
 		log.Printf("计划 %d 需人工处理：设备需授权，已停止当天自动重试", plan.ID)
 		return
 	}
@@ -413,8 +414,16 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 		log.Printf("计划 %d 本次未完成，保留当天机会：%s", plan.ID, result)
 		return
 	}
-	_ = s.db.RecordPlanRun(ctx, plan.ID, result)
+	s.recordPlanRun(ctx, plan, result)
 	log.Printf("计划 %d 执行结束（不再重试）：%s", plan.ID, result)
+}
+
+// recordPlanRun 写入计划执行结果并通知在线页面。
+// 计划卡片的「上次执行/上次结果」来自 plans 表，不在 RunTask 的日志事件里，
+// 单独广播 plans 主题，首页与日程页才能同步变化。
+func (s *Scheduler) recordPlanRun(ctx context.Context, plan store.Plan, result string) {
+	_ = s.db.RecordPlanRun(ctx, plan.ID, result)
+	s.svc.Events().Publish(plan.UserID, events.TopicPlans)
 }
 
 // isTransientMessage 判断执行结果的文案是否属于可重试的临时情况。

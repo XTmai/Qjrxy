@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/events"
 	"qjrxy/internal/secure"
 	"qjrxy/internal/store"
 )
@@ -62,6 +63,8 @@ func (s *Service) BeginLogin(ctx context.Context, userID, accountID int64) (*Log
 	challenge, client, err := cpdaily.StartLogin(ctx, s.opts, tenant, account.Username, password)
 	if err != nil {
 		_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
+		// 登录失败会把账号标成 expired，账号页的「需重新登录」标签应立刻出现。
+		s.notify(userID, events.TopicAccounts)
 		return nil, err
 	}
 	_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, account.LoginStatus)
@@ -375,6 +378,7 @@ func (s *Service) finishSession(ctx context.Context, account *store.Account, cli
 	if err := s.db.UpdateAccountSession(ctx, account.ID, encoded, status); err != nil {
 		return nil, err
 	}
+	s.notify(account.UserID, events.TopicAccounts)
 	return &LoginTicket{ID: "", AccountID: account.ID}, nil
 }
 
@@ -393,11 +397,13 @@ func (s *Service) VerifySession(ctx context.Context, userID, accountID int64) (s
 			// 存 client 的快照而不是 account.Cookies：这一轮请求可能已经
 			// 带回续期用的 Set-Cookie，存旧值等于把续期丢掉。
 			_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
+			s.notify(userID, events.TopicAccounts)
 			return "expired", nil
 		}
 		return account.LoginStatus, err
 	}
 	_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "authorized")
+	s.notify(userID, events.TopicAccounts)
 	return "authorized", nil
 }
 
@@ -442,6 +448,10 @@ type ProbeResult struct {
 // 全程不会因为某一步失败而中断其他账号的探测。
 func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) ProbeResult {
 	res := ProbeResult{AccountID: account.ID, AccountName: account.Alias}
+	// 每条探测分支都会写登录态/探测时间，统一在返回时通知一次，
+	// 免得在每个 return 前重复加。参数在 defer 时求值，账号指针后续被
+	// 替换也不影响用户归属。
+	defer s.notify(account.UserID, events.TopicAccounts)
 
 	// 情况一：从未登录过 / 已标记失效 → 直接尝试自动登录
 	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
@@ -590,6 +600,7 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 	if err != nil {
 		if cpdaily.IsAuthExpired(err) {
 			_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
+			s.notify(userID, events.TopicAccounts)
 			return nil, fmt.Errorf("拉取任务失败：%w", err)
 		}
 		// 部分成功：某一类任务失败（如学校未开通信息收集），但其余已拿到。
@@ -630,5 +641,6 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 	if err := s.db.ReplaceTasks(ctx, account.ID, cached); err != nil {
 		return nil, err
 	}
+	s.notify(userID, events.TopicTasks)
 	return s.db.TasksByAccount(ctx, account.ID)
 }

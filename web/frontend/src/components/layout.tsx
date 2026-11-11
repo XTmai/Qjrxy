@@ -4,7 +4,9 @@ import { Outlet, useNavigate, Link, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useUser, useInfo } from "@/hooks/use-auth";
 import { useAccounts } from "@/hooks/use-accounts";
+import { useLiveUpdates } from "@/hooks/use-live-updates";
 import { useAuthStore } from "@/stores/auth-store";
+import { useLiveStore } from "@/stores/live-store";
 import {
   Bot,
   CalendarClock,
@@ -183,14 +185,28 @@ function TopBar() {
 
 function DaemonCard() {
   const { open } = useSidebar();
+  const status = useLiveStore((s) => s.status);
   if (!open) return null;
+  // 把「服务端变了页面会自己更新」做成可见状态：
+  // 用户不用再怀疑数据是不是旧的，排障时也能一眼看出推送是否断开。
+  const meta = {
+    live: { dot: "bg-success pulse-dot", label: "实时同步", hint: "数据变化会自动更新" },
+    connecting: { dot: "bg-warning animate-pulse", label: "连接中", hint: "正在建立推送通道" },
+    offline: { dot: "bg-muted-foreground/50", label: "轮询兜底", hint: "推送已断开，每 30 秒自动刷新" },
+  }[status];
   return (
     <div className="border-border/70 bg-background shadow-l1 mx-2 mb-1 rounded-lg border p-2.5">
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground tracking-label text-[10px] font-medium uppercase">Task Daemon</span>
-        <span className="bg-success pulse-dot size-1.5 rounded-full" />
+        <span className={`size-1.5 rounded-full ${meta.dot}`} title={meta.hint} />
       </div>
       <p className="text-muted-foreground mt-1 font-mono text-[10px]">扫描 30s · 探测 1h</p>
+      <div className="border-border/60 mt-1.5 flex items-center justify-between border-t pt-1.5">
+        <span className="text-muted-foreground text-[10px]">推送</span>
+        <span className="text-foreground text-[10px] font-medium" title={meta.hint}>
+          {meta.label}
+        </span>
+      </div>
     </div>
   );
 }
@@ -225,6 +241,8 @@ export function Layout() {
   const { data: user, isError } = useUser();
   const { data: info } = useInfo();
   const { data: accounts = [] } = useAccounts();
+  // 订阅服务端变更：任务执行、登录态探测、计划变更等都会让页面自动更新。
+  useLiveUpdates();
   // 单用户模式没有账号体系：不显示退出/账号设置
   const single = info !== undefined && !info.multiUser;
 

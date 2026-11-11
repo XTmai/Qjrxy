@@ -128,3 +128,16 @@ func (s *statusWriter) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
 }
+
+// Flush 透传给底层 ResponseWriter。
+// 没有它，日志包装层会把 http.Flusher 能力吞掉，SSE 只能等响应结束才下发。
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap 供 http.ResponseController 逐层取回原始 ResponseWriter。
+func (s *statusWriter) Unwrap() http.ResponseWriter {
+	return s.ResponseWriter
+}

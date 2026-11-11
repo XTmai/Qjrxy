@@ -397,7 +397,7 @@ export function HomePage() {
                 </p>
                 <p className="flex justify-between">
                   <span>偏移范围</span>
-                  <span className="text-foreground">± 50 米</span>
+                  <span className="text-foreground">≤ 10 米</span>
                 </p>
               </div>
             </CardContent>

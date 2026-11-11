@@ -28,6 +28,10 @@ type Server struct {
 	singleOnce sync.Once
 	singleUser *store.User
 	singleErr  error
+
+	// done 在进程退出时关闭，用来结束长连接的 SSE 推送。
+	done     chan struct{}
+	doneOnce sync.Once
 }
 
 // New 创建 HTTP 服务。
@@ -37,7 +41,13 @@ func New(svc *service.Service) *Server {
 		tokenTTL:        30,
 		loginLimiter:    newRateLimiter(5, time.Minute),
 		registerLimiter: newRateLimiter(3, time.Hour),
+		done:            make(chan struct{}),
 	}
+}
+
+// Close 结束所有 SSE 长连接，让优雅退出不必等满超时。
+func (s *Server) Close() {
+	s.doneOnce.Do(func() { close(s.done) })
 }
 
 // Handler 返回配置好的路由。
@@ -53,6 +63,8 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/auth/me", s.handleMe)
 	mux.HandleFunc("GET /api/schools", s.withUser(s.handleSchools))
 	mux.HandleFunc("GET /api/system/info", s.withUser(s.handleSystemInfo))
+	// 实时变更推送（SSE）：页面靠它做到「数据变了不用刷新」。
+	mux.HandleFunc("GET /api/events", s.withUser(s.handleEvents))
 	mux.HandleFunc("POST /api/auth/password", s.withUser(s.handleChangePassword))
 	mux.HandleFunc("POST /api/device/submit", s.handleDeviceSubmit)
 

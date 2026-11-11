@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"qjrxy/internal/events"
 	"qjrxy/internal/service"
 	"qjrxy/internal/store"
 )
@@ -136,6 +137,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicAccounts)
 	writeData(w, http.StatusOK, map[string]any{"message": "账号已删除"})
 }
 
@@ -368,6 +370,7 @@ func (s *Server) handleUploadPhoto(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.svc.Events().Publish(user.ID, events.TopicAccounts)
 	writeData(w, http.StatusOK, map[string]any{"account": toAccountView(account)})
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/events"
 	"qjrxy/internal/store"
 )
 
@@ -89,12 +91,15 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	if err != nil {
 		return nil, err
 	}
+	// 从落库那一刻起，这次执行在审计页就该以「执行中」出现；
+	// 提交可能耗时几十秒，不该等接口返回才让用户看到。
+	defer s.notify(opts.UserID, events.TopicLogs)
 
 	photoPath := s.PhotoAbsPath(account.PhotoPath)
 	hasPhoto := photoPath != "" && fileExists(photoPath)
 
 	client := s.clientFor(account)
-	// 坐标加入小幅随机偏移（约 ±50 米），避免每天同一坐标值过于规律；
+	// 坐标加入 10 米以内的随机偏移，避免每天同一坐标值过于规律；
 	// 偏移量远小于签到点半径（通常 300~1500 米），不影响范围判定。
 	lon, lat := jitterCoord(account.Lon, account.Lat)
 	device := deviceProfile(account, lon, lat)
@@ -159,6 +164,8 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 
 		_ = s.db.UpdateLog(ctx, logID, store.StatusSuccess, defaultIfEmpty(result.Message, "已完成"), detailJSON)
 		_ = s.db.MarkTaskDone(ctx, account.ID, task.Kind, task.SignInstanceWID)
+		// 任务变成「已处理」、会话 cookie 也已续期，列表与账号卡片一起刷新。
+		s.notify(opts.UserID, events.TopicTasks, events.TopicAccounts)
 		return &RunOutcome{LogID: logID, Status: store.StatusSuccess,
 			Message: defaultIfEmpty(result.Message, "已完成"), Task: task.TaskName}, nil
 	}
@@ -170,6 +177,7 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	_ = s.db.UpdateLog(ctx, logID, status, defaultIfEmpty(result.Message, "提交失败"), detailJSON)
 	if cpdaily.IsAuthExpired(errors.New(result.Message)) {
 		_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
+		s.notify(opts.UserID, events.TopicAccounts)
 	}
 	hint := result.Hint
 	if IsDeviceAuthRequired(result.Code, result.Message) {
@@ -540,17 +548,30 @@ func checkTaskWindowByClock(task *store.Task, now time.Time) error {
 	return nil
 }
 
-// jitterCoord 给坐标加 ±0.0005 度（约 50 米）的随机偏移。
+// jitterCoord 在原始坐标附近 10 米内随机取一个点。
 //
 // 目的不是规避定位校验，而是避免长期使用完全相同的坐标值，
-// 让提交看起来更接近真实用户的手动定位。偏移远小于签到点半径，
+// 让提交看起来更接近真实用户的手动定位。10 米仍远小于签到点半径，
 // 不会导致范围判定失败；坐标为 0（未设置）时不偏移。
 func jitterCoord(lon, lat float64) (float64, float64) {
 	if lon == 0 && lat == 0 {
 		return lon, lat
 	}
-	const span = 0.0005
-	return lon + (rand.Float64()*2-1)*span, lat + (rand.Float64()*2-1)*span
+	const (
+		maxOffsetM  = 10.0
+		earthRadius = 6371393.0
+	)
+	// 圆盘内均匀采样：半径开方，避免点聚集在圆心。
+	r := maxOffsetM * math.Sqrt(rand.Float64())
+	theta := rand.Float64() * 2 * math.Pi
+	metersPerDeg := earthRadius * math.Pi / 180
+	cosLat := math.Cos(lat * math.Pi / 180)
+	if math.Abs(cosLat) < 1e-6 {
+		cosLat = 1e-6 // 极点附近经度收缩，避免除零
+	}
+	dLat := r * math.Cos(theta) / metersPerDeg
+	dLon := r * math.Sin(theta) / (metersPerDeg * cosLat)
+	return lon + dLon, lat + dLat
 }
 
 // TodayLabel 返回用于展示的当前时间文本。

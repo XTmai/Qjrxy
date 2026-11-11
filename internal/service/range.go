@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/events"
 	"qjrxy/internal/store"
 )
 
@@ -98,6 +99,7 @@ func (s *Service) ApplySignRange(ctx context.Context, userID, accountID int64) (
 	if err := s.db.UpdateAccount(ctx, account); err != nil {
 		return nil, nil, err
 	}
+	s.notify(userID, events.TopicAccounts)
 	rng.Applied = true
 	return account, rng, nil
 }

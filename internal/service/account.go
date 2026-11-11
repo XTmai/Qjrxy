@@ -13,6 +13,7 @@ import (
 
 	"qjrxy/internal/config"
 	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/events"
 	"qjrxy/internal/secure"
 	"qjrxy/internal/store"
 )
@@ -22,6 +23,8 @@ type Service struct {
 	cfg  *config.Config
 	db   *store.DB
 	opts cpdaily.ClientOptions
+	// hub 把数据变更推给在线页面；没有订阅者时发布是空操作。
+	hub *events.Hub
 
 	mu    sync.RWMutex
 	state map[string]*cpdaily.LoginState // loginTicket -> 登录中间态
@@ -37,6 +40,7 @@ func New(cfg *config.Config, db *store.DB) *Service {
 	return &Service{
 		cfg:   cfg,
 		db:    db,
+		hub:   events.New(),
 		state: map[string]*cpdaily.LoginState{},
 		opts: cpdaily.ClientOptions{
 			Timeout:       40 * time.Second,
@@ -50,6 +54,21 @@ func (s *Service) DB() *store.DB { return s.db }
 
 // Config 暴露配置。
 func (s *Service) Config() *config.Config { return s.cfg }
+
+// Events 暴露变更广播中心（SSE 与调度器共用）。
+func (s *Service) Events() *events.Hub { return s.hub }
+
+// notify 广播数据变更；请求协程与后台调度协程都可以安全调用。
+func (s *Service) notify(userID int64, topics ...string) {
+	if s.hub != nil {
+		s.hub.Publish(userID, topics...)
+	}
+}
+
+// validCoord 校验经纬度范围。0,0 表示未设置，由调用方决定是否写入。
+func validCoord(lon, lat float64) bool {
+	return lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90
+}
 
 // ---------- 认证 ----------
 
@@ -160,6 +179,9 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 	if strings.TrimSpace(in.Username) == "" {
 		return nil, false, errors.New("请填写学号")
 	}
+	if (in.Lon != 0 || in.Lat != 0) && !validCoord(in.Lon, in.Lat) {
+		return nil, false, errors.New("经纬度超出有效范围")
+	}
 	tenant, err := cpdaily.ResolveTenant(ctx, in.SchoolName)
 	if err != nil {
 		return nil, false, err
@@ -176,6 +198,7 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 		if err := s.rebindAccount(ctx, existing, in, tenant, passwordEnc); err != nil {
 			return nil, false, err
 		}
+		s.notify(userID, events.TopicAccounts)
 		return existing, true, nil
 	}
 	if !errors.Is(err, store.ErrNotFound) {
@@ -216,11 +239,13 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 		if err := s.rebindAccount(ctx, existing, in, tenant, passwordEnc); err != nil {
 			return nil, false, err
 		}
+		s.notify(userID, events.TopicAccounts)
 		return existing, true, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
+	s.notify(userID, events.TopicAccounts)
 	return created, false, nil
 }
 
@@ -268,6 +293,9 @@ func (s *Service) rebindAccount(ctx context.Context, a *store.Account, in Accoun
 		a.Address = v
 	}
 	if in.Lon != 0 || in.Lat != 0 {
+		if !validCoord(in.Lon, in.Lat) {
+			return errors.New("经纬度超出有效范围")
+		}
 		a.Lon, a.Lat = in.Lon, in.Lat
 	}
 	if v := strings.TrimSpace(in.Abnormal); v != "" {
@@ -336,6 +364,9 @@ func (s *Service) UpdateAccount(ctx context.Context, userID, id int64, in Accoun
 		account.Address = in.Address
 	}
 	if in.Lon != 0 || in.Lat != 0 {
+		if !validCoord(in.Lon, in.Lat) {
+			return nil, errors.New("经纬度超出有效范围")
+		}
 		account.Lon, account.Lat = in.Lon, in.Lat
 	}
 	if in.Abnormal != "" {
@@ -344,6 +375,7 @@ func (s *Service) UpdateAccount(ctx context.Context, userID, id int64, in Accoun
 	if err := s.db.UpdateAccount(ctx, account); err != nil {
 		return nil, err
 	}
+	s.notify(userID, events.TopicAccounts)
 	return account, nil
 }
 

@@ -79,9 +79,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("加载前端资源失败：%v", err)
 	}
+	api := server.New(svc)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           server.New(svc).Handler(static),
+		Handler:           api.Handler(static),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
@@ -132,6 +133,9 @@ func main() {
 
 	log.Println("正在关闭服务……")
 	sched.Stop()
+	// 先结束 SSE 长连接，否则 http.Server.Shutdown 会一直等它们自然断开，
+	// 每次退出都要耗满超时时间。
+	api.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(ctx); err != nil {

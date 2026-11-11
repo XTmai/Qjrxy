@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"qjrxy/internal/events"
 	"qjrxy/internal/secure"
 	"qjrxy/internal/store"
 )
@@ -159,6 +160,8 @@ func (s *Service) CollectDeviceInfo(ctx context.Context, userID int64, ticket st
 	if err := s.db.UpdateAccount(ctx, account); err != nil {
 		return nil, err
 	}
+	// 扫码授权常在手机端完成：桌面端账号卡片应立刻从「未绑定设备」变成已绑定。
+	s.notify(userID, events.TopicAccounts)
 	return account, nil
 }
 

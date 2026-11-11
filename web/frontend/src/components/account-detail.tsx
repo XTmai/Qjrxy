@@ -24,6 +24,7 @@ import { LoginBadge, RunStatusBadge, TaskStateBadge } from "@/components/status-
 import { PlansTab } from "./plans";
 import { DeviceScanDialog } from "./device-scan-dialog";
 import { SchoolLoginDialog } from "./school-login-dialog";
+import { LocationDialog } from "./location-dialog";
 
 interface Props {
   account: Account;
@@ -421,22 +422,10 @@ function DeviceTab({
   const { confirm, ConfirmDialog } = useConfirm();
   const [showScan, setShowScan] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [showLocation, setShowLocation] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [photoVersion, setPhotoVersion] = useState(Date.now());
-
-  const applyRange = async () => {
-    setBusy(true);
-    try {
-      const res = await api.applySignRange(account.id);
-      toast({ title: "位置已设置", description: res.range.address || undefined });
-      onChanged();
-    } catch (e) {
-      toast({ title: "获取位置失败", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const uploadPhoto = async (file: File) => {
     setBusy(true);
@@ -490,11 +479,15 @@ function DeviceTab({
     },
     {
       key: "range",
-      title: "自动获取位置",
-      desc: account.address || "从学校签到任务读取签到点",
+      title: "设置签到位置",
+      desc: account.address
+        ? account.address
+        : account.lon && account.lat
+          ? `${account.lon.toFixed(6)}, ${account.lat.toFixed(6)}`
+          : "填写高德坐标，或从学校签到任务读取",
       icon: MapPin,
-      done: Boolean(account.address),
-      run: () => void applyRange(),
+      done: Boolean(account.address || (account.lon && account.lat)),
+      run: () => setShowLocation(true),
     },
     {
       key: "photo",
@@ -591,6 +584,19 @@ function DeviceTab({
             setShowLogin(false);
             if (loggedIn) {
               toast({ title: "登录成功" });
+              onChanged();
+            }
+          }}
+        />
+      )}
+
+      {showLocation && (
+        <LocationDialog
+          account={account}
+          onClose={(saved) => {
+            setShowLocation(false);
+            if (saved) {
+              toast({ title: "位置已保存" });
               onChanged();
             }
           }}
