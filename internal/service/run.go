@@ -138,6 +138,9 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 
 	detailJSON := marshalDetail(buildLogDetail(detail, result, account, lon, lat, task, traceID, time.Since(startedAt)))
 	if result.Success {
+		// 提交成功说明会话有效；顺手把这一轮拿到的续期 cookie 落库，
+		// 免得到下次重建 client 时又退回登录时那份旧票。
+		_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "authorized")
 		// 事后核对：服务端在「任务还没到签到时间」时也会返回 code=0 SUCCESS，
 		// 靠响应字段无法区分。这里回查一次任务列表，确认该任务确实从
 		//「未签到」里消失了，才算真成功。
@@ -166,7 +169,7 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	}
 	_ = s.db.UpdateLog(ctx, logID, status, defaultIfEmpty(result.Message, "提交失败"), detailJSON)
 	if cpdaily.IsAuthExpired(errors.New(result.Message)) {
-		_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
+		_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
 	}
 	hint := result.Hint
 	if IsDeviceAuthRequired(result.Code, result.Message) {

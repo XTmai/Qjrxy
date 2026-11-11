@@ -359,9 +359,7 @@ func (s *Service) SubmitCaptcha(ctx context.Context, userID, accountID int64, ti
 
 // finishSession 保存 cookie 并验证会话可用。
 func (s *Service) finishSession(ctx context.Context, account *store.Account, client *cpdaily.Client) (*LoginTicket, error) {
-	cookies := client.Cookies()
-	encoded := encodeCookies(cookies)
-	if len(cookies) == 0 {
+	if len(client.Cookies()) == 0 {
 		return nil, errors.New("登录未返回会话，请稍后重试")
 	}
 	status := "authorized"
@@ -371,6 +369,9 @@ func (s *Service) finishSession(ctx context.Context, account *store.Account, cli
 			status = "expired"
 		}
 	}
+	// 验证请求本身也可能带回 Set-Cookie（续期），所以快照要取在验证之后；
+	// 并且与旧 cookie 合并，保留本次登录没有下发但可续期的那张 CAS 票。
+	encoded := encodeCookies(mergeCookies(account.Cookies, client.Cookies()))
 	if err := s.db.UpdateAccountSession(ctx, account.ID, encoded, status); err != nil {
 		return nil, err
 	}
@@ -389,12 +390,14 @@ func (s *Service) VerifySession(ctx context.Context, userID, accountID int64) (s
 	client := s.clientFor(account)
 	if _, err := client.ListAllTasks(ctx, account.Host, []cpdaily.TaskKind{cpdaily.KindSign}); err != nil {
 		if cpdaily.IsAuthExpired(err) {
-			_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
+			// 存 client 的快照而不是 account.Cookies：这一轮请求可能已经
+			// 带回续期用的 Set-Cookie，存旧值等于把续期丢掉。
+			_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
 			return "expired", nil
 		}
 		return account.LoginStatus, err
 	}
-	_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "authorized")
+	_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "authorized")
 	return "authorized", nil
 }
 
@@ -586,7 +589,7 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 	}
 	if err != nil {
 		if cpdaily.IsAuthExpired(err) {
-			_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
+			_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
 			return nil, fmt.Errorf("拉取任务失败：%w", err)
 		}
 		// 部分成功：某一类任务失败（如学校未开通信息收集），但其余已拿到。

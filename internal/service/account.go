@@ -428,6 +428,35 @@ func decodeCookies(raw string) map[string]string {
 	return out
 }
 
+// inheritableCookies 是跨登录方式仍然值得保留的键。
+//
+// CASTGC 是 CAS 的 TGT，可反复换 service ticket，是“静默续期”的唯一凭据；
+// CONVERSATION 是同一 CAS 会话的标识。两者与用哪种因子登录无关。
+// MOD_AUTH_CAS / sessionToken / tenantId 属于本次登录的结果，不能让旧值盖过新值。
+var inheritableCookies = []string{"CASTGC", "CONVERSATION"}
+
+// mergeCookies 用新会话覆盖旧 cookie，但保留可继承的 CAS 票据。
+//
+// 短信登录只换回 MOD_AUTH_CAS（不带 CASTGC）。如果整体替换旧 cookie，
+// 一个原本用账密登录、持有 TGT 的账号，改走短信重登后反而丢掉了可续期的票据——
+// 登录方式切换不该以“降级成短命会话”为代价。
+func mergeCookies(oldRaw string, fresh map[string]string) map[string]string {
+	out := make(map[string]string, len(fresh)+2)
+	for k, v := range fresh {
+		if strings.TrimSpace(v) == "" {
+			continue
+		}
+		out[k] = v
+	}
+	old := decodeCookies(oldRaw)
+	for _, k := range inheritableCookies {
+		if out[k] == "" && old[k] != "" {
+			out[k] = old[k]
+		}
+	}
+	return out
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
