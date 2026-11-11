@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"qjrxy/internal/captcha"
 	"qjrxy/internal/config"
 	"qjrxy/internal/cpdaily"
 	"qjrxy/internal/diag"
@@ -28,6 +29,8 @@ type Service struct {
 	opts cpdaily.ClientOptions
 	// hub 把数据变更推给在线页面；没有订阅者时发布是空操作。
 	hub *events.Hub
+	// captchas 保存「等用户手点」的签到验证码会话，进程内有效。
+	captchas *captcha.Broker
 
 	mu    sync.RWMutex
 	state map[string]*cpdaily.LoginState // loginTicket -> 登录中间态
@@ -41,10 +44,11 @@ func New(cfg *config.Config, db *store.DB) *Service {
 	// 这条链路承载学号与密码，不能再按早期版本全局关闭校验。
 	cpdaily.ConfigureTLSInsecureHosts(cfg.TLSInsecureHosts)
 	svc := &Service{
-		cfg:   cfg,
-		db:    db,
-		hub:   events.New(),
-		state: map[string]*cpdaily.LoginState{},
+		cfg:      cfg,
+		db:       db,
+		hub:      events.New(),
+		captchas: captcha.NewBroker(captcha.DefaultTTL),
+		state:    map[string]*cpdaily.LoginState{},
 		opts: cpdaily.ClientOptions{
 			Timeout:       40 * time.Second,
 			InsecureHosts: cfg.TLSInsecureHosts,

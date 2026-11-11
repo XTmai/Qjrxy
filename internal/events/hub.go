@@ -16,6 +16,9 @@ const (
 	TopicTasks    = "tasks"
 	TopicPlans    = "plans"
 	TopicLogs     = "logs"
+	// TopicCaptcha 表示「有验证码在等用户点」。前端收到后拉一次待处理列表，
+	// 不把题目数据塞进事件体——它可能是一百多 KB 的图片。
+	TopicCaptcha = "captcha"
 
 	// TopicAll 是订阅端缓冲溢出时的兜底主题：前端收到后全量失效。
 	TopicAll = "all"

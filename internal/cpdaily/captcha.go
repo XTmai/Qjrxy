@@ -44,9 +44,7 @@ const (
 	// 服务端按固定 boundary 解析 multipart（与 App 的 WebKit boundary 一致），
 	// 用自定义 Content-Type 时保持一致最稳。
 	captchaBoundary = "----WebKitFormBoundaryBlRdUZvbYBzP5FaF"
-	// validate 失败后服务端要求等 15s 才能刷新验证码。
-	captchaRetryWait = 16 * time.Second
-	captchaMaxTry    = 3
+	captchaMaxTry   = 3
 	// captchaRequiredCode 是服务端「验证码验签失败」的业务码。
 	captchaRequiredCode = "2210060000"
 	// 九宫格单格边长与并发下载数。720×720 的 JPEG 约 100KB，
@@ -55,6 +53,10 @@ const (
 	captchaFetchLimit = 4
 	captchaImageMax   = 400 << 10
 )
+
+// captchaRetryWait 是服务端要求的最小刷新间隔（15s，留 1s 余量）。
+// 声明为变量只为让测试把它压到毫秒级，业务代码不应改写。
+var captchaRetryWait = 16 * time.Second
 
 // checkValidationURL 按任务类型返回验证码检查接口。
 func checkValidationURL(host string, kind TaskKind) string {
@@ -67,6 +69,42 @@ func checkValidationURL(host string, kind TaskKind) string {
 		return "https://" + host + "/wec-counselor-sign-apps/stu/sign/checkValidation"
 	}
 }
+
+// ManualCaptchaRequest 是交给用户人工判定的验证码题目。
+type ManualCaptchaRequest struct {
+	// Name 是要找的目标物，如「自行车」。
+	Name string
+	// Grid 是 3×3 九宫格的 data URL。直接给拼好的图而不是 9 个外链：
+	// 图片服务器要求带 Cookie 与 Referer，浏览器直连大概率 403。
+	Grid string
+	// Cells 是格子总数（恒为 9，按接口下发值给）。
+	Cells int
+}
+
+// ManualCaptchaFunc 在自动识别不可用时把题目交给用户。
+// 返回 1 基的格子序号；返回 ErrManualCaptchaAborted 表示用户放弃，
+// 调用方应立即结束整条验证码链路，而不是重试。
+type ManualCaptchaFunc func(ctx context.Context, req ManualCaptchaRequest) ([]int, error)
+
+// ErrManualCaptchaAborted 表示用户主动取消或等待超时。
+var ErrManualCaptchaAborted = errors.New("已放弃手动验证")
+
+// manualAbortError 带一句给人看的原因，同时能被 errors.Is 认成
+// ErrManualCaptchaAborted —— 上层据此决定「不要再弹第二次」，
+// 界面则能显示「你取消了」还是「等太久了」。
+type manualAbortError struct{ reason string }
+
+func (e *manualAbortError) Error() string { return e.reason }
+
+func (e *manualAbortError) Is(target error) bool { return target == ErrManualCaptchaAborted }
+
+// AbortManualCaptcha 构造一条带原因的放弃信号，交给上层作为最终提示。
+func AbortManualCaptcha(reason string) error {
+	return &manualAbortError{reason: reason}
+}
+
+// ErrManualCaptchaSkip 表示用户要求换一张（当前这张看不清 / 没有目标物）。
+var ErrManualCaptchaSkip = errors.New("请求更换验证码")
 
 // CaptchaChallenge 是 checkValidation 返回的验证码会话参数。
 type CaptchaChallenge struct {
@@ -343,7 +381,11 @@ func encodeJPEG(img image.Image) (string, error) {
 }
 
 // solveCaptcha 走完整验证码链路，返回可随提交体携带的 ticket。
-func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChallenge, deviceID string) (string, error) {
+//
+// manual 非空时作为兜底：模型没配置、调用失败或没找到目标物，就把
+// 同一张九宫格交给用户点选。走到人工这一步说明自动识别已经尽力，
+// 不再重复调模型——省一次必然失败的请求，也让用户少等一轮。
+func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChallenge, deviceID string, manual ManualCaptchaFunc) (string, bool, error) {
 	base := "https://" + host + "/captcha-open-api/v1/captcha/"
 	baseFields := [][2]string{
 		{"accountKey", ch.AccountKey},
@@ -352,6 +394,7 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 		{"userId", ch.UserID},
 	}
 	var lastErr error
+	usedManual := false
 	for try := 0; try < captchaMaxTry; try++ {
 		if try > 0 {
 			// 服务端要求刷新间隔 ≥15s；固定值容易被判定为脚本，
@@ -359,7 +402,7 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 			wait := captchaRetryWait + time.Duration(try*1500)*time.Millisecond
 			select {
 			case <-ctx.Done():
-				return "", ctx.Err()
+				return "", usedManual, ctx.Err()
 			case <-time.After(wait):
 			}
 		}
@@ -379,17 +422,40 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 			lastErr = errors.New("验证码接口未返回会话码：" + flattenJSON(createOut))
 			continue
 		}
-		// ② 识别：九图选择，返回的是「哪几格命中」，不是图片内容描述
-		codes, err := c.pickCaptchaCodes(ctx, cr)
+		// ② 取图：拼成九宫格，自动与人工共用同一张
+		grid, total, err := c.buildCaptchaGrid(ctx, cr)
 		if err != nil {
 			lastErr = err
 			continue
 		}
+		// ③ 识别：先让模型挑，挑不出来再交给用户
+		cells, vErr := c.pickByVision(ctx, grid, cr.Name, total)
+		if vErr != nil || len(cells) == 0 {
+			if manual == nil {
+				if vErr != nil {
+					lastErr = vErr
+				} else {
+					lastErr = errors.New("自动识别未在九张图中找到目标物")
+				}
+				continue
+			}
+			usedManual = true
+			cells, err = manual(ctx, ManualCaptchaRequest{Name: cr.Name, Grid: grid, Cells: total})
+			if err != nil {
+				// 用户放弃就整条链路结束：再弹一次只会更烦。
+				if errors.Is(err, ErrManualCaptchaAborted) {
+					return "", true, err
+				}
+				lastErr = err
+				continue
+			}
+		}
+		codes := codesForCells(cr, cells)
 		if len(codes) == 0 {
-			lastErr = errors.New("识别未在九张图中找到目标物")
+			lastErr = errors.New("没有选出任何包含目标物的图片")
 			continue
 		}
-		// ③ validate：命中图的 code 换 ticket
+		// ④ validate：命中图的 code 换 ticket
 		fields := append(append([][2]string{}, baseFields...),
 			[2]string{"scenesImageCode", code})
 		for _, cd := range codes {
@@ -405,19 +471,21 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 			lastErr = errors.New("验证码校验未通过：" + flattenJSON(validateOut))
 			continue
 		}
-		return ticket, nil
+		return ticket, usedManual, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("验证码处理失败")
 	}
-	return "", lastErr
+	return "", usedManual, lastErr
 }
 
-// pickCaptchaCodes 下载 9 张图、拼九宫格、问模型哪几格命中，
-// 再把命中的格子序号映射回各自的 code。
-func (c *Client) pickCaptchaCodes(ctx context.Context, cr *captchaCreateResult) ([]string, error) {
+// buildCaptchaGrid 下载 9 张候选图并拼成九宫格，返回 data URL 与可用格子数。
+//
+// 自动识别与人工判定用的是同一张图：拼一次、两边复用，人工路径下
+// 用户在浏览器里看到的就是模型看到的那张，避免两条路径对不上。
+func (c *Client) buildCaptchaGrid(ctx context.Context, cr *captchaCreateResult) (string, int, error) {
 	if len(cr.ImageInfos) == 0 {
-		return nil, errors.New("验证码响应里没有候选图（imageInfos 为空）")
+		return "", 0, errors.New("验证码响应里没有候选图（imageInfos 为空）")
 	}
 	paths := make([]string, len(cr.ImageInfos))
 	for i, info := range cr.ImageInfos {
@@ -431,29 +499,41 @@ func (c *Client) pickCaptchaCodes(ctx context.Context, cr *captchaCreateResult) 
 		}
 	}
 	if downloaded == 0 {
-		return nil, errors.New("验证码图片全部下载失败，请检查网络或学校图片服务器")
+		return "", 0, errors.New("验证码图片全部下载失败，请检查网络或学校图片服务器")
 	}
 
 	grid := composeGrid(imgs, captchaGridCell)
 	gridB64, err := encodeJPEG(grid)
 	if err != nil {
-		return nil, fmt.Errorf("编码九宫格失败：%w", err)
+		return "", 0, fmt.Errorf("编码九宫格失败：%w", err)
 	}
-	cells, err := vision.PickCaptchaCells(ctx, "image/jpeg", gridB64, cr.Name, len(cr.ImageInfos))
-	if err != nil {
-		return nil, err
-	}
+	return "data:image/jpeg;base64," + gridB64, len(cr.ImageInfos), nil
+}
+
+// pickByVision 让多模态模型挑出命中目标物的格子。
+func (c *Client) pickByVision(ctx context.Context, gridB64, name string, total int) ([]int, error) {
+	const prefix = "data:image/jpeg;base64,"
+	b64 := strings.TrimPrefix(gridB64, prefix)
+	return vision.PickCaptchaCells(ctx, "image/jpeg", b64, name, total)
+}
+
+// codesForCells 把 1 基格子序号映射回各自的 code。
+// 越界序号与空 code 一律丢弃——宁可直接判失败，也不要拿空值去 validate。
+func codesForCells(cr *captchaCreateResult, cells []int) []string {
 	codes := make([]string, 0, len(cells))
+	seen := make(map[string]bool, len(cells))
 	for _, cell := range cells {
-		// 模型给的是 1 基序号；越界或空 code 一律丢弃
-		if cell < 1 || cell > len(cr.ImageInfos) || cell > len(imgs) {
+		if cell < 1 || cell > len(cr.ImageInfos) {
 			continue
 		}
-		if cd := strings.TrimSpace(cr.ImageInfos[cell-1].Code); cd != "" {
-			codes = append(codes, cd)
+		cd := strings.TrimSpace(cr.ImageInfos[cell-1].Code)
+		if cd == "" || seen[cd] {
+			continue
 		}
+		seen[cd] = true
+		codes = append(codes, cd)
 	}
-	return codes, nil
+	return codes
 }
 
 // errCaptchaNotRequired 表示提交被 2210060000 拒绝、但 checkValidation
@@ -463,18 +543,20 @@ var errCaptchaNotRequired = errors.New("checkValidation 显示不需要验证码
 
 // captchaTicketFor 在提交被 2210060000 拒绝后调用：确认要验证码并换取 ticket。
 // 走到这里说明提交确实需要 ticket，任何一步失败都应报错，不再静默跳过。
-func (c *Client) captchaTicketFor(ctx context.Context, host string, kind TaskKind, deviceID string) (string, error) {
+func (c *Client) captchaTicketFor(ctx context.Context, host string, kind TaskKind, deviceID string, manual ManualCaptchaFunc) (string, bool, error) {
 	ch, err := CheckCaptchaValidation(ctx, c, host, kind, deviceID)
 	if err != nil {
-		return "", fmt.Errorf("获取验证码会话失败：%w", err)
+		return "", false, fmt.Errorf("获取验证码会话失败：%w", err)
 	}
 	if !ch.Required {
-		return "", errCaptchaNotRequired
+		return "", false, errCaptchaNotRequired
 	}
-	if !vision.Enabled() {
-		return "", errors.New("该校签到需要通过图形验证码，但服务端未配置识别服务（管理员设置 → 识别服务）")
+	// 自动识别与人工兜底都没有，才是真的无解。走到这里的是定时任务：
+	// 那个时间点没人看屏幕，只能提示用户去手动执行一次。
+	if !vision.Enabled() && manual == nil {
+		return "", false, errors.New("该校签到需要图形验证码：定时任务无人值守，请到任务页手动执行一次，在弹窗里选出目标图片")
 	}
-	return c.solveCaptcha(ctx, host, ch, deviceID)
+	return c.solveCaptcha(ctx, host, ch, deviceID, manual)
 }
 
 // jsonString 从 map 里取字符串字段。

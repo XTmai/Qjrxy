@@ -120,6 +120,11 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		PhotoPath:   photoPath,
 		UploadPhoto: hasPhoto,
 	}
+	// 手动执行时允许「自动识别失败 → 弹窗让用户点」。
+	// 定时任务不注入：那个时间点通常没人看屏幕，等满 100 秒只是白占资源。
+	if defaultIfEmpty(opts.Source, "manual") == "manual" {
+		signOpts.ManualCaptcha = s.manualCaptcha(opts.UserID, account.ID)
+	}
 
 	result, detail, err := client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
 	// 提交时才发现会话失效：自动重登一次并重试，用户无感知。
@@ -386,6 +391,11 @@ func buildLogDetail(detail *cpdaily.TaskDetail, result *cpdaily.SignResult, acco
 		"signDate":   task.SignDate,
 		"beginClock": task.BeginClock,
 		"endClock":   task.EndClock,
+	}
+	// 人工介入要留痕：事后看到「验证码通过」时，能分清是模型认出来的
+	// 还是用户自己点的。
+	if result.CaptchaBy != "" {
+		payload["captchaBy"] = result.CaptchaBy
 	}
 	if detail != nil {
 		payload["taskName"] = detail.TaskName

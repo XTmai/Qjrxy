@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -108,7 +109,13 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	outcome, err := s.svc.RunTask(r.Context(), service.RunOptions{
+	// 与请求解耦：签到可能停下来等用户点验证码（最长 100 秒），
+	// 期间用户刷新页面、切后台都会断开这个请求。若沿用 r.Context()，
+	// 断线会让后续的 validate 与提交全部以 context canceled 失败，
+	// 用户明明点完了却显示没签上。
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
+	defer cancel()
+	outcome, err := s.svc.RunTask(runCtx, service.RunOptions{
 		UserID:    user.ID,
 		AccountID: req.AccountID,
 		TaskID:    req.TaskID,

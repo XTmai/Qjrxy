@@ -109,7 +109,7 @@ func TestSubmitRetriesOnceWhenCaptchaRequired(t *testing.T) {
 		"lon": 118.7, "lat": 32.0, "address": "校内",
 	}
 
-	res, err := c.submit(context.Background(), host, "1010", device, KindSign, form)
+	res, err := c.submit(context.Background(), host, "1010", device, KindSign, form, nil)
 	if err != nil {
 		t.Fatalf("提交报错：%v", err)
 	}
@@ -169,7 +169,7 @@ func TestSubmitSkipsCaptchaWhenAccepted(t *testing.T) {
 	device := DeviceProfile{DeviceID: "dev-1", UserID: "u1", Lon: 118.7, Lat: 32.0}
 	form := map[string]any{"signInstanceWid": "W1", "userId": "u1", "lon": 118.7, "lat": 32.0}
 
-	res, err := c.submit(context.Background(), host, "1010", device, KindSign, form)
+	res, err := c.submit(context.Background(), host, "1010", device, KindSign, form, nil)
 	if err != nil || res == nil || !res.Success {
 		t.Fatalf("提交应成功：err=%v res=%+v", err, res)
 	}
@@ -236,7 +236,7 @@ func TestCaptchaRetryStillRejectedGivesHint(t *testing.T) {
 	c := NewClient(ClientOptions{HTTPClient: hc}, nil)
 	res, err := c.submit(context.Background(), strings.TrimPrefix(srv.URL, "https://"), "1010",
 		DeviceProfile{DeviceID: "dev-1", UserID: "u1", Lon: 118.7, Lat: 32.0},
-		KindSign, map[string]any{"userId": "u1", "lon": 118.7, "lat": 32.0})
+		KindSign, map[string]any{"userId": "u1", "lon": 118.7, "lat": 32.0}, nil)
 	if err != nil {
 		t.Fatalf("不应返回底层错误：%v", err)
 	}

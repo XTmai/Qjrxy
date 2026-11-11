@@ -569,6 +569,10 @@ type SignOptions struct {
 	PhotoPath    string
 	UploadPhoto  bool
 	ExtraAnswers map[string]string // title -> content
+	// ManualCaptcha 在自动识别不可用时把九宫格交给用户点选。
+	// 只有「用户就在面板前」的执行路径（手动触发）才应该传，
+	// 定时任务传 nil，否则会挂起一个永远没人处理的等待。
+	ManualCaptcha ManualCaptchaFunc
 }
 
 // SignResult 是提交结果。
@@ -578,6 +582,9 @@ type SignResult struct {
 	Message string `json:"message"`
 	Hint    string `json:"hint"`
 	Payload string `json:"-"`
+	// CaptchaBy 记录这次验证码是谁解出来的："auto" 模型识别，
+	// "manual" 用户点选。审计里要看得出人工介入过。
+	CaptchaBy string `json:"captchaBy,omitempty"`
 }
 
 // Sign 执行完整签到流程：拉详情 → 组表单 → 加密 → 提交。
@@ -655,7 +662,7 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 		form["qrUuid"] = ""
 	}
 
-	result, err := c.submit(ctx, host, tenantID, device, opts.Kind, form)
+	result, err := c.submit(ctx, host, tenantID, device, opts.Kind, form, opts.ManualCaptcha)
 	if err != nil {
 		if ae, ok := err.(*APIError); ok {
 			return &SignResult{
@@ -674,13 +681,23 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 // ticket，必须随提交体一起参与 AES + sign，否则被 2210060000 拒绝。
 // 这里先按原样提交，只有服务端明确要验证码时才补一次——不需要
 // 验证码的学校，请求序列与引入该功能前完全一致，不多一次往返。
-func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any) (*SignResult, error) {
+func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any, manual ManualCaptchaFunc) (*SignResult, error) {
 	result, err := c.submitOnce(ctx, host, tenantID, device, kind, form)
 	if err != nil || result == nil || result.Success || !needsCaptcha(result) {
 		return result, err
 	}
-	ticket, cerr := c.captchaTicketFor(ctx, host, kind, device.DeviceID)
+	ticket, byManual, cerr := c.captchaTicketFor(ctx, host, kind, device.DeviceID, manual)
 	if cerr != nil {
+		// 用户取消手动验证：不要伪装成提交失败，给一条能看懂的收尾。
+		if errors.Is(cerr, ErrManualCaptchaAborted) {
+			return &SignResult{
+				Success: false,
+				Code:    result.Code,
+				Message: cerr.Error(),
+				Hint:    "本次签到未完成，需要时请重新执行",
+				Payload: result.Payload,
+			}, nil
+		}
 		// 学校侧状态自相矛盾：提交要 ticket，checkValidation 又说不需要。
 		// 把服务端原始结果交回去，用户至少能看到真实原因。
 		if errors.Is(cerr, errCaptchaNotRequired) {
@@ -702,6 +719,13 @@ func (c *Client) submit(ctx context.Context, host, tenantID string, device Devic
 	retry, rerr := c.submitOnce(ctx, host, tenantID, device, kind, form)
 	if rerr != nil {
 		return nil, rerr
+	}
+	if retry != nil {
+		// 带上「这次验证码是谁解的」：审计里要能区分人工介入与模型识别。
+		retry.CaptchaBy = "auto"
+		if byManual {
+			retry.CaptchaBy = "manual"
+		}
 	}
 	return retry, nil
 }
@@ -927,8 +951,8 @@ func ExplainFailure(code, message string) string {
 	case strings.Contains(message, "版本过低"):
 		return "服务端拒绝了本次请求（提示版本过低），通常是加密密钥或客户端版本已轮换，请更新服务端配置"
 	case code == captchaRequiredCode || strings.Contains(message, "验证码"):
-		return "该校签到需要图形验证码，自动识别没有通过。请检查管理员设置里的识别服务是否可用；" +
-			"急着签到的话，先在今日校园 App 里手动签一次，再回来重试"
+		return "该校签到需要图形验证码。手动执行时面板会弹窗让你选出目标图片；" +
+			"定时任务请先在管理员设置里配置识别服务，否则到点只能失败"
 	case code == "4":
 		return "服务端无法解析提交内容，请检查账号、设备信息与签到点是否匹配"
 	case strings.Contains(message, "范围"):

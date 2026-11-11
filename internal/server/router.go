@@ -92,6 +92,12 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/tasks/sync", s.withUser(s.handleSyncTasks))
 	mux.HandleFunc("POST /api/tasks/run", s.withUser(s.handleRunTask))
 
+	// ---- 验证码人工兜底 ----
+	// 自动识别失败时签到流程会挂起，前端轮询 pending 取题目，
+	// 用户点完格子回传后再继续提交。
+	mux.HandleFunc("GET /api/captcha/pending", s.withUser(s.handleCaptchaPending))
+	mux.HandleFunc("POST /api/captcha/{token}", s.withUser(s.handleCaptchaSubmit))
+
 	// ---- 计划 ----
 	mux.HandleFunc("GET /api/plans", s.withUser(s.handleListPlans))
 	mux.HandleFunc("POST /api/plans", s.withUser(s.handleCreatePlan))
