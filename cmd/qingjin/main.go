@@ -189,4 +189,4 @@ func openBrowser(url string) error {
 	}
 }
 
-const appVersion = "1.2.0"
+const appVersion = "1.2.1"
