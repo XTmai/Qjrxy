@@ -20,6 +20,7 @@ import {
   RefreshCw,
   ScrollText,
   Settings2,
+  ShieldCheck,
   Sun,
 } from "lucide-react";
 import { api } from "@/api";
@@ -245,6 +246,8 @@ export function Layout() {
   useLiveUpdates();
   // 单用户模式没有账号体系：不显示退出/账号设置
   const single = info !== undefined && !info.multiUser;
+  // 管理员：单用户本机自用，或多用户下的 admin 角色
+  const isAdmin = single || user?.role === "admin";
 
   useEffect(() => {
     if (isError) navigate("/login", { replace: true });
@@ -252,7 +255,8 @@ export function Layout() {
 
   if (!user) return null;
 
-  const active = (to: string) => (to === "/" ? location.pathname === "/" : location.pathname.startsWith(to));
+  const active = (to: string) =>
+    to === "/" ? location.pathname === "/" : location.pathname === to || location.pathname.startsWith(to + "/");
 
   return (
     <SidebarProvider>
@@ -311,13 +315,28 @@ export function Layout() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={active("/settings")} tooltip="系统设置">
+                  <SidebarMenuButton
+                    asChild
+                    isActive={active("/settings") && !active("/settings/admin")}
+                    tooltip="系统设置"
+                  >
                     <Link to="/settings">
                       <Settings2 />
                       <span>系统设置</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {/* 管理员设置：仅管理员（role=admin 或单用户模式）可见 */}
+                {isAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={active("/settings/admin")} tooltip="管理员设置">
+                      <Link to="/settings/admin">
+                        <ShieldCheck />
+                        <span>管理员设置</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

@@ -672,6 +672,16 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any) (*SignResult, error) {
 	endpoints := EndpointsFor(kind)
 
+	// 部分学校的任务在提交前要求通过「以图判图」验证码：通过后服务端
+	// 签发一次性 ticket，必须进提交体一起参与 AES + sign，否则被以
+	// 「验证码验签失败」(2210060000) 拒绝。没开启的学校 checkValidation
+	// 会返回 validation=false，这里直接跳过。
+	if ticket, err := c.captchaTicketFor(ctx, host, kind, device.DeviceID); err != nil {
+		return &SignResult{Success: false, Message: "验证码处理失败", Hint: err.Error()}, nil
+	} else if ticket != "" {
+		form["ticket"] = ticket
+	}
+
 	body, err := json.Marshal(form)
 	if err != nil {
 		return nil, err

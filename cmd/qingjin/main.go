@@ -18,6 +18,7 @@ import (
 
 	"qjrxy/internal/buildinfo"
 	"qjrxy/internal/config"
+	"qjrxy/internal/diag"
 	"qjrxy/internal/scheduler"
 	"qjrxy/internal/secure"
 	"qjrxy/internal/server"
@@ -133,6 +134,7 @@ func main() {
 
 	log.Println("正在关闭服务……")
 	sched.Stop()
+	diag.Close()
 	// 先结束 SSE 长连接，否则 http.Server.Shutdown 会一直等它们自然断开，
 	// 每次退出都要耗满超时时间。
 	api.Close()

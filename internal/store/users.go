@@ -171,3 +171,14 @@ func (db *DB) PurgeExpiredSessions(ctx context.Context) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, now())
 	return err
 }
+
+// UpdateUserRole 设置用户角色（admin/user）。
+// 仅用于「首个注册用户成为管理员」与服务端预置管理员两类场景；
+// 普通的运行时角色变更不在产品范围内。
+func (db *DB) UpdateUserRole(ctx context.Context, userID int64, role string) error {
+	if role != "admin" && role != "user" {
+		return errors.New("未知角色：" + role)
+	}
+	_, err := db.ExecContext(ctx, `UPDATE users SET role = ? WHERE id = ?`, role, userID)
+	return err
+}

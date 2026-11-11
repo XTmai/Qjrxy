@@ -214,11 +214,31 @@ export interface SystemInfo {
   serverTime: string;
   tokenTTLDay: number;
   quotaEnabled: boolean;
+  /** 诊断日志是否在记录（管理员页控制） */
+  diagEnabled?: boolean;
   /** false = 单用户模式：打开即用，无登录/注册 */
   multiUser: boolean;
   /** 本机局域网可访问地址（扫码授权用；只绑回环时为空） */
   lanUrls?: string[];
   features: string[];
+}
+
+/** 管理员页的运行时配置视图（API key 永远只回掩码） */
+export interface AdminConfig {
+  diagEnabled: boolean;
+  diagKeepDays: number;
+  vision: {
+    hasKey: boolean;
+    keyMask: string;
+    baseURL: string;
+    model: string;
+  };
+  server: {
+    multiUser: boolean;
+    registerOpen: boolean;
+    quotaEnabled: boolean;
+    tlsInsecureHosts: string;
+  };
 }
 
 export interface SignRange {

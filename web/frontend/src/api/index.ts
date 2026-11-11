@@ -2,6 +2,7 @@
 import { http } from './client';
 import type {
   Account,
+  AdminConfig,
   AccountInput,
   AuditRow,
   Dashboard,
@@ -131,4 +132,18 @@ export const api = {
   // ---- 额度（QINGJIN_QUOTA_ENABLED=true 时可用） ----
   redeem: (code: string) =>
     http.post<{ user: User; granted: number; message: string }>('/quota/redeem', { code }),
+
+  // ---- 管理员（role=admin 或单用户模式；其他人 403） ----
+  getAdminConfig: () => http.get<AdminConfig>('/admin/config'),
+  saveAdminConfig: (payload: {
+    diagEnabled?: boolean;
+    diagKeepDays?: number;
+    visionApiKey?: string;
+    visionBaseURL?: string;
+    visionModel?: string;
+    multiUser?: boolean;
+    registerOpen?: boolean;
+    quotaEnabled?: boolean;
+    tlsInsecureHosts?: string;
+  }) => http.post<{ message: string; token?: string }>('/admin/config', payload),
 };

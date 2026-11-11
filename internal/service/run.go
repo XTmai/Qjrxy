@@ -76,6 +76,8 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	}
 
 	traceID := NewTraceID()
+	// 注入追踪 ID：诊断日志用它把同一次任务的全部 HTTP 请求串起来。
+	ctx = cpdaily.WithTraceID(ctx, traceID)
 	startedAt := time.Now()
 	logID, err := s.db.CreateLog(ctx, &store.Log{
 		UserID:    opts.UserID,

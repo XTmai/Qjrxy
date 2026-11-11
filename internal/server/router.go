@@ -113,6 +113,10 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	// ---- 额度 ----
 	mux.HandleFunc("POST /api/quota/redeem", s.withUser(s.handleRedeemQuota))
 
+	// ---- 管理员（role=admin 或单用户模式；页面与其余用户隔离） ----
+	mux.HandleFunc("GET /api/admin/config", s.withUser(s.requireAdmin(s.handleAdminGetConfig)))
+	mux.HandleFunc("POST /api/admin/config", s.withUser(s.requireAdmin(s.handleAdminSaveConfig)))
+
 	if static != nil {
 		mux.Handle("/", static)
 	}

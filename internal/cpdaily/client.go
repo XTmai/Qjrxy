@@ -41,6 +41,8 @@ type ClientOptions struct {
 	ProxyURL      string
 	UserAgent     string
 	HTTPClient    *http.Client
+	// Label 是诊断日志里这路流量的标识（如 "account:22"），可选。
+	Label string
 }
 
 func defaultHTTPClient(opts ClientOptions) *http.Client {
@@ -67,11 +69,12 @@ type Client struct {
 	http    *http.Client
 	opts    ClientOptions
 	cookies map[string]string
+	label   string
 }
 
 // NewClient 创建客户端；cookies 为可选的 cookie 键值对（用于导入登录态）。
 func NewClient(opts ClientOptions, cookies map[string]string) *Client {
-	c := &Client{http: defaultHTTPClient(opts), opts: opts, cookies: map[string]string{}}
+	c := &Client{http: defaultHTTPClient(opts), opts: opts, cookies: map[string]string{}, label: opts.Label}
 	for k, v := range cookies {
 		if strings.TrimSpace(k) != "" {
 			c.cookies[k] = v
@@ -172,12 +175,20 @@ func (c *Client) do(ctx context.Context, method, rawURL string, headers map[stri
 		}
 		req.Header.Set("User-Agent", ua)
 	}
+	// 诊断：请求头设置完毕后开一条记录，响应体读取时镜像，Close 落盘。
+	rec := c.diagStart(ctx, req)
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if rec != nil {
+			rec.finish("", err)
+		}
 		return nil, err
 	}
 	c.absorb(resp)
 	resp.Body = decompressBody(resp)
+	if rec != nil {
+		rec.wrap(resp)
+	}
 	return resp, nil
 }
 
@@ -386,10 +397,19 @@ func (c *Client) doNoRedirect(ctx context.Context, method, rawURL string, header
 			return http.ErrUseLastResponse
 		},
 	}
+	rec := c.diagStart(ctx, req)
 	resp, err := noFollow.Do(req)
 	if err != nil {
+		if rec != nil {
+			rec.finish("", err)
+		}
 		return nil, err
 	}
 	c.absorb(resp)
+	if rec != nil {
+		// doNoRedirect 的响应体由调用方（换票/登录）完整读取，
+		// 包一层镜像，Close 时落盘。
+		rec.wrap(resp)
+	}
 	return resp, nil
 }

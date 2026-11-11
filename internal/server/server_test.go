@@ -26,14 +26,19 @@ type testEnv struct {
 
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
-	dir := t.TempDir()
 	cfg := &config.Config{
 		Addr:         ":0",
-		DataDir:      dir,
 		SecretKey:    bytes.Repeat([]byte{7}, 32),
 		QuotaEnabled: true, // 兑换等用例依赖额度体系
 		RegisterOpen: true, // 多用户用例需要在同一实例内注册多个账号
 	}
+	return newEnvWith(t, cfg)
+}
+
+func newEnvWith(t *testing.T, cfg *config.Config) *testEnv {
+	t.Helper()
+	dir := t.TempDir()
+	cfg.DataDir = dir
 	db, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("打开数据库失败：%v", err)
@@ -46,7 +51,10 @@ func newEnv(t *testing.T) *testEnv {
 	t.Cleanup(srv.Close)
 
 	env := &testEnv{srv: srv, db: db, svc: svc}
-	env.register(t, "apiuser", "secret123")
+	if cfg.RegisterOpen {
+		// 首个注册用户自动成为管理员（admin 接口的权限测试依赖这一点）
+		env.register(t, "apiuser", "secret123")
+	}
 	return env
 }
 

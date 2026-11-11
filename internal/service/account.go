@@ -7,15 +7,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"qjrxy/internal/config"
 	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/diag"
 	"qjrxy/internal/events"
 	"qjrxy/internal/secure"
 	"qjrxy/internal/store"
+	"qjrxy/internal/vision"
 )
 
 // Service 聚合业务逻辑，供 HTTP 层与调度器共用。
@@ -37,7 +40,7 @@ func New(cfg *config.Config, db *store.DB) *Service {
 	// 证书校验策略：默认对学校系统做完整校验，只有配置里显式列出的主机才跳过。
 	// 这条链路承载学号与密码，不能再按早期版本全局关闭校验。
 	cpdaily.ConfigureTLSInsecureHosts(cfg.TLSInsecureHosts)
-	return &Service{
+	svc := &Service{
 		cfg:   cfg,
 		db:    db,
 		hub:   events.New(),
@@ -47,6 +50,85 @@ func New(cfg *config.Config, db *store.DB) *Service {
 			InsecureHosts: cfg.TLSInsecureHosts,
 		},
 	}
+	// 诊断日志与识别服务：env 为底，settings 表（管理员页改的）覆盖。
+	// 两者都支持运行时热更新（admin API 保存后立即生效）。
+	svc.ApplyRuntimeSettings()
+	return svc
+}
+
+// applyRuntimeSettings 按「settings 表 > 环境变量 > 内置默认」的优先级
+// 重载诊断日志与识别服务配置。启动与管理员保存后共用。
+// ApplyRuntimeSettings 按「settings 表 > 环境变量 > 内置默认」的优先级
+// 重载诊断日志与识别服务配置。启动与管理员保存后共用。
+func (s *Service) ApplyRuntimeSettings() {
+	ctx := context.Background()
+	settings, _ := s.db.AllSettings(ctx)
+
+	diagOn := os.Getenv("QINGJIN_DIAG") != "off"
+	if v := settings["diag.enabled"]; v != "" {
+		diagOn = v != "0"
+	}
+	keep := 7
+	if v := settings["diag.keepDays"]; v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			keep = n
+		}
+	}
+	diag.Configure(s.cfg.DataDir, diagOn, keep)
+
+	key := os.Getenv("DEEPSEEK_API_KEY")
+	if enc := settings["vision.apiKey"]; enc != "" {
+		if plain, err := secure.Decrypt(s.cfg.SecretKey, enc); err == nil {
+			key = plain
+		}
+	}
+	base := os.Getenv("DEEPSEEK_BASE_URL")
+	if v := settings["vision.baseURL"]; v != "" {
+		base = v
+	}
+	model := os.Getenv("DEEPSEEK_VISION_MODEL")
+	if v := settings["vision.model"]; v != "" {
+		model = v
+	}
+	vision.Configure(key, base, model)
+
+	// 服务器运行模式：settings 覆盖环境变量，直接写回共享的 cfg 指针，
+	// 所有读取 cfg 的路径（鉴权、额度、systemInfo）立即看到新值。
+	if v := settings["server.multiUser"]; v != "" {
+		s.cfg.SingleUser = v == "0"
+	}
+	if v := settings["server.registerOpen"]; v != "" {
+		s.cfg.RegisterOpen = v == "1"
+	}
+	if v := settings["server.quotaEnabled"]; v != "" {
+		s.cfg.QuotaEnabled = v == "1"
+	}
+	if v := settings["server.tlsInsecureHosts"]; v != "" || dbHas("server.tlsInsecureHosts", settings) {
+		hosts := splitHosts(v)
+		s.cfg.TLSInsecureHosts = hosts
+		cpdaily.ConfigureTLSInsecureHosts(hosts)
+	}
+}
+
+// splitHosts 解析逗号分隔的白名单，去空白。
+func splitHosts(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// dbHas 判断 settings 里是否出现过某个键（区分「空值清空」与「未配置」）。
+func dbHas(key string, settings map[string]string) bool {
+	_, ok := settings[key]
+	return ok
 }
 
 // DB 暴露存储层。
@@ -88,7 +170,17 @@ func (s *Service) Register(ctx context.Context, username, password, nickname str
 	if nickname == "" {
 		nickname = username
 	}
-	return s.db.CreateUser(ctx, username, nickname, hash, 50)
+	user, err := s.db.CreateUser(ctx, username, nickname, hash, 50)
+	if err != nil {
+		return nil, err
+	}
+	// 第一个注册的用户就是管理员：部署者注册完即可用管理员页，
+	// 不需要再手动改库。注释承诺了很多年的行为在这里兑现。
+	if count, cerr := s.db.CountUsers(ctx); cerr == nil && count == 1 {
+		_ = s.db.UpdateUserRole(ctx, user.ID, "admin")
+		user.Role = "admin"
+	}
+	return user, nil
 }
 
 // Login 校验用户名密码并签发会话 token。
@@ -414,7 +506,9 @@ func (s *Service) PhotoAbsPath(rel string) string {
 
 // clientFor 用账号保存的 cookie 构造协议客户端。
 func (s *Service) clientFor(a *store.Account) *cpdaily.Client {
-	return cpdaily.NewClient(s.opts, decodeCookies(a.Cookies))
+	opts := s.opts
+	opts.Label = fmt.Sprintf("account:%d", a.ID)
+	return cpdaily.NewClient(opts, decodeCookies(a.Cookies))
 }
 
 // deviceProfile 从账号生成设备信息。

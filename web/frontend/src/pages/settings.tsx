@@ -1,12 +1,13 @@
 // 设置：URL 驱动的 tab（沿用 openilink settings 模式）。
 // 外观 / 安全（改密）/ 额度（QINGJIN_QUOTA_ENABLED=true 时）/ 关于。
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useInfo, useUser } from "@/hooks/use-auth";
 import { useTheme } from "@/lib/theme";
@@ -14,8 +15,10 @@ import { QQ_GROUP_URL } from "@/lib/links";
 import { api } from "@/api";
 import { useToast } from "@/hooks/use-toast";
 import { PageHeader } from "@/components/page-header";
+import { setToken } from "@/api/client";
+import type { AdminConfig } from "@/lib/types";
 
-const TABS = ["appearance", "security", "quota", "about"] as const;
+const TABS = ["appearance", "security", "quota", "admin", "about"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -26,12 +29,16 @@ export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { data: info } = useInfo();
 
-  const tabFromUrl = location.pathname.split("/").pop() as Tab;
-  const tab: Tab = TABS.includes(tabFromUrl) ? tabFromUrl : "appearance";
-  const switchTab = (t: Tab) => navigate(`/settings/${t}`, { replace: true });
-
   const quotaOn = info?.quotaEnabled ?? false;
   const singleUser = info !== undefined && !info.multiUser;
+  // 管理员：多用户模式下 role=admin；单用户模式本机自用即管理员。
+  const isAdmin = singleUser || user?.role === "admin";
+
+  const rawTab = location.pathname.split("/").pop() as Tab;
+  // 深链接防护：非管理员访问 /settings/admin 时落回外观页
+  const tab: Tab = TABS.includes(rawTab) && !(rawTab === "admin" && !isAdmin) ? rawTab : "appearance";
+  const switchTab = (t: Tab) => navigate(`/settings/${t}`, { replace: true });
+
   const remaining = user ? Math.max(0, user.quota - user.quotaUsed) : 0;
   const usedPct = user && user.quota > 0 ? Math.min(100, Math.round((user.quotaUsed / user.quota) * 100)) : 0;
 
@@ -89,6 +96,11 @@ export function SettingsPage() {
           {quotaOn && (
             <TabsTrigger value="quota" className="flex-1 px-6">
               额度
+            </TabsTrigger>
+          )}
+          {isAdmin && (
+            <TabsTrigger value="admin" className="flex-1 px-6">
+              管理员
             </TabsTrigger>
           )}
           <TabsTrigger value="about" className="flex-1 px-6">
@@ -232,6 +244,13 @@ export function SettingsPage() {
           </TabsContent>
         )}
 
+        {/* 管理员（role=admin 或单用户模式；其他人不可见也进不来） */}
+        {isAdmin && (
+          <TabsContent value="admin" className="m-0 space-y-5">
+            <AdminPanel />
+          </TabsContent>
+        )}
+
         {/* 关于 */}
         <TabsContent value="about" className="m-0 space-y-5">
           <Card className="border-border/50">
@@ -286,6 +305,219 @@ export function SettingsPage() {
           </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// ---- 管理员面板：运行时配置（诊断开关 / 识别服务）----
+// 仅 role=admin 或单用户模式可到达；配置保存后服务端立即热生效。
+function AdminPanel() {
+  const { toast } = useToast();
+  const [cfg, setCfg] = useState<AdminConfig | null>(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [keepDays, setKeepDays] = useState("7");
+  const [apiKey, setApiKey] = useState("");
+  const [baseURL, setBaseURL] = useState("");
+  const [model, setModel] = useState("");
+  const [tlsHosts, setTlsHosts] = useState("");
+
+  const load = async () => {
+    try {
+      const res = await api.getAdminConfig();
+      setCfg(res);
+      setKeepDays(String(res.diagKeepDays));
+      setBaseURL(res.vision.baseURL);
+      setModel(res.vision.model);
+      setTlsHosts(res.server.tlsInsecureHosts);
+    } catch (e) {
+      setLoadErr(e instanceof Error ? e.message : "加载失败");
+    }
+  };
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const save = async (patch: Parameters<typeof api.saveAdminConfig>[0], title: string) => {
+    setBusy(true);
+    try {
+      const res = await api.saveAdminConfig(patch);
+      // 开多用户会重新签发会话：把新 token 存起来，避免保存完就被踢到登录页
+      if (res.token) setToken(res.token);
+      toast({ title, description: res.message });
+      setApiKey("");
+      await load();
+    } catch (e) {
+      toast({
+        title: "保存失败",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loadErr) {
+    return (
+      <Card className="border-border/50">
+        <CardContent className="text-destructive py-6 text-sm">{loadErr}</CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid items-start gap-5 lg:grid-cols-2">
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="text-base">诊断日志</CardTitle>
+          <CardDescription>
+            记录对学校服务器的每次请求与响应（Cookie 与票据脱敏），按天落盘在服务器
+            data/diag/ 下，保留期满自动清理；前端与 API 均不暴露。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">记录 HTTP 诊断日志</p>
+              <p className="text-muted-foreground text-xs">出现未知错误时用于回放现场；关闭后不再记录</p>
+            </div>
+            <Switch
+              checked={cfg?.diagEnabled ?? false}
+              onCheckedChange={(v) => void save({ diagEnabled: v }, v ? "诊断日志已开启" : "诊断日志已关闭")}
+            />
+          </div>
+          <div className="flex max-w-md items-center gap-2">
+            <span className="text-muted-foreground w-24 text-xs">保留天数</span>
+            <Input
+              value={keepDays}
+              onChange={(e) => setKeepDays(e.target.value)}
+              inputMode="numeric"
+              className="w-24"
+            />
+            <Button variant="outline" size="sm" disabled={busy} onClick={() => void save({ diagKeepDays: Number(keepDays) }, "保留天数已更新")}>
+              保存
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="text-base">验证码识别服务（DeepSeek 多模态）</CardTitle>
+          <CardDescription>
+            部分学校的签到要求「以图判图」验证码，开启后自动识别并换取 ticket。留空 API Key 表示不修改。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3">
+            <Field>
+              <FieldLabel>API Key{cfg?.vision.hasKey ? `（已配置：${cfg.vision.keyMask}）` : "（未配置）"}</FieldLabel>
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={cfg?.vision.hasKey ? "留空保持不变" : "sk-..."}
+                autoComplete="new-password"
+              />
+            </Field>
+            <Field>
+              <FieldLabel>Base URL（可选，默认官方）</FieldLabel>
+              <Input value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com" />
+            </Field>
+            <Field>
+              <FieldLabel>模型（可选，默认 deepseek-v4.1-flash）</FieldLabel>
+              <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4.1-flash" />
+            </Field>
+          </div>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={() =>
+              void save(
+                {
+                  visionApiKey: apiKey || undefined,
+                  visionBaseURL: baseURL,
+                  visionModel: model,
+                },
+                "识别服务配置已更新",
+              )
+            }
+          >
+            保存
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="text-base">访问模式</CardTitle>
+          <CardDescription>
+            多用户模式关闭时本机打开即用（推荐自用）；开启后需要账号密码登录，适合部署到服务器给多人使用。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">多用户模式</p>
+              <p className="text-muted-foreground text-xs">
+                开启后所有访问需要登录；开启时当前账号自动成为管理员并签发新会话
+              </p>
+            </div>
+            <Switch
+              checked={cfg?.server.multiUser ?? false}
+              onCheckedChange={(v) => void save({ multiUser: v }, v ? "已切换到多用户模式" : "已切换到单用户模式")}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">允许自助注册</p>
+              <p className="text-muted-foreground text-xs">多用户模式下，登录页出现注册入口</p>
+            </div>
+            <Switch
+              checked={cfg?.server.registerOpen ?? false}
+              onCheckedChange={(v) => void save({ registerOpen: v }, v ? "自助注册已开启" : "自助注册已关闭")}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">额度体系</p>
+              <p className="text-muted-foreground text-xs">托管运营场景使用：执行扣次数、卡密兑换；个人使用保持关闭</p>
+            </div>
+            <Switch
+              checked={cfg?.server.quotaEnabled ?? false}
+              onCheckedChange={(v) => void save({ quotaEnabled: v }, v ? "额度体系已开启" : "额度体系已关闭")}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="text-base">证书校验白名单</CardTitle>
+          <CardDescription>
+            个别学校证书链不完整导致登录失败时，把学校域名后缀加进来（逗号分隔，如
+            nut.campusphere.net）。白名单外仍做完整校验；留空表示全部严格校验。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Input
+            value={tlsHosts}
+            onChange={(e) => setTlsHosts(e.target.value)}
+            placeholder="如：nut.campusphere.net,example.edu.cn"
+            className="max-w-md font-mono"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void save({ tlsInsecureHosts: tlsHosts }, "证书白名单已更新")}
+          >
+            保存
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   );
 }

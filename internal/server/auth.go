@@ -7,6 +7,7 @@ import (
 
 	"qjrxy/internal/buildinfo"
 	"qjrxy/internal/cpdaily"
+	"qjrxy/internal/diag"
 	"qjrxy/internal/secure"
 )
 
@@ -171,11 +172,12 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		// 今日校园客户端版本；两者混用会把 9.9.24 当成 Qjrxy 的版本号。
 		"appVersion":    buildinfo.Version,
 		"clientVersion": cpdaily.AppVersion,
-		"apiVersion":   "v1",
-		"serverTime":   time.Now().Format(time.RFC3339),
-		"tokenTTLDay":  s.tokenTTL,
-		"quotaEnabled": s.svc.Config().QuotaEnabled,
-		"multiUser":    !s.svc.Config().SingleUser,
+		"apiVersion":    "v1",
+		"serverTime":    time.Now().Format(time.RFC3339),
+		"tokenTTLDay":   s.tokenTTL,
+		"quotaEnabled":  s.svc.Config().QuotaEnabled,
+		"diagEnabled":   diag.Enabled(),
+		"multiUser":     !s.svc.Config().SingleUser,
 		// 局域网可访问地址：扫码授权需要手机用这些地址打开本机
 		"lanUrls":  LANBaseURLs(s.svc.Config().Addr),
 		"features": features,
