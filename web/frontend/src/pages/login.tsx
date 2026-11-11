@@ -44,10 +44,10 @@ export function LoginPage() {
   };
 
   return (
-    <div className="bg-background text-foreground relative flex min-h-screen items-center justify-center p-4">
+    <div className="bg-canvas text-foreground relative flex min-h-screen items-center justify-center p-4">
       <HexagonBackground />
 
-      <Card className="z-10 w-full max-w-sm">
+      <Card className="shadow-l3 z-10 w-full max-w-sm">
         <CardHeader className="text-center">
           <div className="bg-primary text-primary-foreground mx-auto mb-3 flex size-12 items-center justify-center rounded-2xl text-xl font-bold">
             Q

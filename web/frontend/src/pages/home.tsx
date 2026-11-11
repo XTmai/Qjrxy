@@ -34,7 +34,7 @@ const toneClass: Record<string, string> = {
   ok: "bg-success-soft text-success-text border-success-border",
   warn: "bg-warning-soft text-warning-text border-warning-border",
   err: "bg-danger-soft text-danger-text border-danger-border",
-  info: "bg-primary-soft text-accent-foreground border-primary-border",
+  info: "bg-brand-soft text-brand border-brand/20",
   plain: "bg-muted text-muted-foreground border-border",
 };
 
@@ -67,9 +67,9 @@ function Metric({
   tone?: "primary" | "success" | "warning" | "danger";
 }) {
   const toneCls = {
-    primary: "bg-primary-soft text-primary",
+    primary: "bg-muted text-foreground",
     success: "bg-success-soft text-success",
-    warning: "bg-warning-soft text-warning",
+    warning: "bg-muted text-muted-foreground",
     danger: "bg-danger-soft text-danger",
   }[tone];
   return (
@@ -152,8 +152,8 @@ export function HomePage() {
       <Card className="border-border overflow-hidden">
         <CardContent className="flex flex-wrap items-center gap-4 p-4">
           <span
-            className={`flex size-11 shrink-0 items-center justify-center rounded-lg ${
-              readiness === 100 ? "bg-success-soft text-success" : "bg-primary-soft text-primary"
+            className={`flex size-11 shrink-0 items-center justify-center rounded-xl ${
+              readiness === 100 ? "bg-success-soft text-success" : "bg-brand-soft text-brand"
             }`}
           >
             <ShieldCheck className="size-5" />
@@ -161,12 +161,10 @@ export function HomePage() {
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="tracking-headline whitespace-nowrap text-lg font-semibold">今日就绪率 {readiness}%</h1>
-              <Badge
-                variant="outline"
-                className="border-primary-border bg-primary-soft whitespace-nowrap text-accent-foreground"
-              >
+              <span className="text-muted-foreground flex items-center gap-1.5 whitespace-nowrap text-[11px]">
+                <span className="bg-success pulse-dot size-1.5 rounded-full" />
                 调度引擎在线
-              </Badge>
+              </span>
             </div>
             <p className="text-muted-foreground mt-0.5 text-xs text-pretty">
               {accounts.length} 个账号中 {readyCount} 个已就绪 · {headline}
@@ -200,7 +198,7 @@ export function HomePage() {
           title={`${needsLogin} 个账号登录态已失效`}
           description="服务端会尝试自动恢复；仍失效的账号请到账号管理页手动登录。"
           action={
-            <Button variant="destructive" size="sm" className="h-7 text-xs" asChild>
+            <Button variant="default" size="sm" className="h-7 text-xs" asChild>
               <Link to="/accounts">去处理</Link>
             </Button>
           }
@@ -251,7 +249,7 @@ export function HomePage() {
           label="今日任务"
           value={summaries.reduce((n, s) => n + s.list.length, 0)}
           unit="笔"
-          tone="success"
+          tone="primary"
           note={`${stats.todaySuccess} 成功 · ${stats.todayFailed} 失败`}
         />
         <Metric

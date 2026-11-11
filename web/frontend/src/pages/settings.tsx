@@ -106,8 +106,8 @@ export function SettingsPage() {
               <div className="grid grid-cols-2 gap-4">
                 {(
                   [
-                    { key: "light", label: "浅色", bg: "bg-white", fg: "bg-neutral-200", accent: "bg-emerald-500" },
-                    { key: "dark", label: "深色", bg: "bg-neutral-900", fg: "bg-neutral-700", accent: "bg-emerald-500" },
+                    { key: "light", label: "浅色", bg: "bg-white", fg: "bg-neutral-200", accent: "bg-neutral-900" },
+                    { key: "dark", label: "深色", bg: "bg-neutral-900", fg: "bg-neutral-700", accent: "bg-neutral-100" },
                   ] as const
                 ).map((t) => (
                   <button
@@ -116,8 +116,8 @@ export function SettingsPage() {
                     onClick={() => setTheme(t.key)}
                     className={`flex flex-col items-center gap-3 rounded-xl border p-4 transition-all ${
                       theme === t.key
-                        ? "ring-primary border-primary bg-primary/5"
-                        : "bg-muted/20 border-border/50 hover:border-border-strong"
+                        ? "border-foreground/25 bg-card shadow-l1"
+                        : "border-border/60 hover:border-border-strong"
                     }`}
                   >
                     {/* mini 预览 */}

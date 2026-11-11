@@ -22,3 +22,7 @@ Thumbs.db
 .zcode/
 *.tsbuildinfo
 release/
+.mcp.json
+
+# 本地 UI 验收用的临时数据目录（复制自 data/，计划已禁用）
+.tmp-ui/

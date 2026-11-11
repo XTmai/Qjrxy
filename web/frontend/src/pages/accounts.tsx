@@ -316,9 +316,7 @@ const AccountCard = memo(function AccountCard({
   return (
     <div
       onClick={() => onOpen(account.id)}
-      className={`bg-card cursor-pointer rounded-lg border p-4 transition-colors ${
-        ok ? "border-border hover:border-primary/40" : "border-warning-border"
-      }`}
+      className="bg-card border-border hover:border-border-strong cursor-pointer rounded-xl border p-4 transition-colors"
     >
       {/* 头部：头像 + 身份 + 状态 */}
       <div className="flex items-start gap-3">
@@ -417,7 +415,7 @@ const AccountCard = memo(function AccountCard({
   );
 });
 
-/** 四块信息格：ok 灰调、缺失琥珀调，可带缩略图与快捷动作 */
+/** 四块信息格：完整项灰调显示，缺失项只用一个小小的琥珀点提示，不做整块染色 */
 function InfoBlock({
   icon: Icon,
   label,
@@ -433,35 +431,34 @@ function InfoBlock({
   action?: { text: string; onClick: () => void };
   thumb?: string;
 }) {
+  // 缩略图可能 404（照片被换/账号被清），失败时直接不占位，别留一个破图标
+  const [thumbFailed, setThumbFailed] = useState(false);
   return (
-    <div
-      className={`rounded-md border p-2.5 ${
-        ok ? "border-border bg-muted/30" : "border-warning-border bg-warning-soft/60"
-      }`}
-    >
+    <div className="border-border/70 bg-muted/40 rounded-lg border p-2.5">
       <div className="flex items-center gap-1.5">
         <Icon className={`size-3 ${ok ? "text-muted-foreground" : "text-warning"}`} />
-        <span className={`tracking-label text-[10px] font-medium uppercase ${ok ? "text-muted-foreground" : "text-warning-text"}`}>
+        <span className="text-muted-foreground tracking-label truncate text-[10px] font-medium uppercase">
           {label}
         </span>
-        {thumb && (
+        {thumb && !thumbFailed && (
           <img
             src={thumb}
             alt={label}
-            className="ml-auto size-5 rounded object-cover ring-1 ring-border"
+            className="ring-border ml-auto size-6 rounded object-cover ring-1"
             loading="lazy"
             decoding="async"
+            onError={() => setThumbFailed(true)}
           />
         )}
       </div>
-      <p className={`mt-1.5 truncate text-xs font-medium ${ok ? "" : "text-warning-text"}`} title={value}>
+      <p className={`mt-1.5 truncate text-xs font-medium ${ok ? "" : "text-muted-foreground"}`} title={value}>
         {value}
       </p>
       {action && (
         <button
           type="button"
           onClick={action.onClick}
-          className="text-warning mt-1 text-[10px] font-medium hover:underline"
+          className="text-muted-foreground hover:text-foreground mt-1 text-[10px] font-medium hover:underline hover:underline-offset-2"
         >
           {action.text} →
         </button>

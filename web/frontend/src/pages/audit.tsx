@@ -144,13 +144,13 @@ export function AuditPage() {
         <HeadMetric
           label="达标率"
           value={stats7d ? `${stats7d.successRate.toFixed(1)}%` : "—"}
-          tone={stats7d && stats7d.successRate >= 90 ? "ok" : "warn"}
+          tone={stats7d && stats7d.total > 0 ? (stats7d.successRate >= 90 ? "ok" : "warn") : undefined}
         />
         <HeadMetric label="平均耗时" value={stats7d?.avgLatencyMs ? `${stats7d.avgLatencyMs} ms` : "—"} />
         <HeadMetric
           label="平均围栏偏移"
           value={stats7d ? `${stats7d.avgGeoOffsetM.toFixed(0)} m` : "—"}
-          tone={stats7d && stats7d.avgGeoOffsetM <= 200 ? "ok" : "warn"}
+          tone={stats7d && stats7d.total > 0 ? (stats7d.avgGeoOffsetM <= 200 ? "ok" : "warn") : undefined}
         />
       </div>
 
@@ -358,7 +358,7 @@ function HeadMetric({
   tone?: "ok" | "warn";
 }) {
   const toneCls =
-    tone === "ok" ? "text-success" : tone === "warn" ? "text-warning" : "text-foreground";
+    tone === "ok" ? "text-success-text" : tone === "warn" ? "text-warning-text" : "text-foreground";
   return (
     <Card className="border-border">
       <CardContent className="p-3.5">

@@ -7,35 +7,41 @@
 @custom-variant dark (&:is(.dark *));
 
 /* =========================================================
-   Campus Precision Engine — 设计令牌
-   开发者控制台风格：高技术精度 / 零杂乱 / 高对比层级
-   浅色 slate 画布 + 纯白卡片 + 电光靛蓝主色
+   设计令牌 —— 「灰画布 + 浮起面板」
+   中性灰阶承担全部层级，唯一彩色强调（sky）只用于品牌与焦点；
+   语义色（成功/警告/危险）保留，因为操作台的判断依赖它们。
    ========================================================= */
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  /* 画布（壳层）与面板（内容层）分离：面板才是「纸」 */
+  --canvas: #f1f2f4;
+  --background: #ffffff;
+  --foreground: #0f1115;
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #0f1115;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --popover-foreground: #0f1115;
 
-  /* 主色：电光靛蓝 */
-  --primary: #4f46e5;
+  /* 主色即「近黑」：实心按钮用深中性色，彩色留给强调点 */
+  --primary: #111318;
   --primary-foreground: #ffffff;
-  --primary-hover: #4338ca;
-  --primary-active: #3730a3;
-  --primary-soft: #eef2ff;
-  --primary-border: #c7d2fe;
+  --primary-hover: #26282e;
+  --primary-active: #000000;
+  --primary-soft: #f4f5f7;
+  --primary-border: #e3e4e9;
 
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #eef2ff;
-  --accent-foreground: #3730a3;
+  --secondary: #f4f5f7;
+  --secondary-foreground: #0f1115;
+  --muted: #f4f5f7;
+  --muted-foreground: #6b7280;
+  --accent: #f4f5f7;
+  --accent-foreground: #0f1115;
   --destructive: #e11d48;
   --destructive-foreground: #ffffff;
+
+  /* 唯一的彩色强调 */
+  --brand: #0ea5e9;
+  --brand-soft: #f0f9ff;
 
   /* 语义状态（底色 / 文字 / 边框 三件套） */
   --success: #10b981;
@@ -53,56 +59,63 @@
   --danger-text: #9f1239;
   --danger-border: #fecdd3;
 
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --input: #e2e8f0;
-  --ring: #6366f1;
+  --border: #e6e7eb;
+  --border-strong: #d3d5db;
+  --input: #e6e7eb;
+  --ring: #0ea5e9;
 
-  --chart-1: #4f46e5;
+  --chart-1: #0ea5e9;
   --chart-2: #10b981;
   --chart-3: #f59e0b;
   --chart-4: #e11d48;
-  --chart-5: #64748b;
+  --chart-5: #9ca3af;
 
-  --sidebar: #ffffff;
-  --sidebar-foreground: #0f172a;
-  --sidebar-primary: #4f46e5;
+  /* 侧边栏直接坐在画布上：同色、无边框 */
+  --sidebar: #f1f2f4;
+  --sidebar-foreground: #0f1115;
+  --sidebar-primary: #0ea5e9;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #eef2ff;
-  --sidebar-accent-foreground: #3730a3;
-  --sidebar-border: #e2e8f0;
-  --sidebar-ring: #6366f1;
+  --sidebar-accent: #ffffff;
+  --sidebar-accent-foreground: #0f1115;
+  --sidebar-border: #e6e7eb;
+  --sidebar-ring: #0ea5e9;
 
-  --radius: 0.5rem;
+  --radius: 0.625rem;
 
-  --shadow-l1: 0 1px 2px 0 rgb(15 23 42 / 0.04);
-  --shadow-l2: 0 4px 6px -1px rgb(15 23 42 / 0.06), 0 2px 4px -2px rgb(15 23 42 / 0.04);
-  --shadow-l3: 0 12px 24px -4px rgb(15 23 42 / 0.08), 0 4px 8px -2px rgb(15 23 42 / 0.03);
+  --shadow-l1: 0 1px 2px 0 rgb(15 17 21 / 0.04), 0 1px 1px 0 rgb(15 17 21 / 0.03);
+  --shadow-l2: 0 6px 16px -6px rgb(15 17 21 / 0.1), 0 2px 6px -2px rgb(15 17 21 / 0.05);
+  --shadow-l3: 0 18px 40px -12px rgb(15 17 21 / 0.14), 0 6px 14px -6px rgb(15 17 21 / 0.06);
+  /* 内容面板浮在画布上的那一层 */
+  --shadow-sheet: 0 1px 2px 0 rgb(15 17 21 / 0.04), 0 16px 40px -20px rgb(15 17 21 / 0.12);
 }
 
 .dark {
-  --background: #0b1120;
-  --foreground: #e2e8f0;
-  --card: #131c2e;
-  --card-foreground: #e2e8f0;
-  --popover: #1a2438;
-  --popover-foreground: #e2e8f0;
+  --canvas: #07080a;
+  --background: #101113;
+  --foreground: #ededf0;
+  --card: #16181b;
+  --card-foreground: #ededf0;
+  --popover: #1a1c20;
+  --popover-foreground: #ededf0;
 
-  --primary: #818cf8;
-  --primary-foreground: #0b1120;
-  --primary-hover: #6366f1;
-  --primary-active: #4f46e5;
-  --primary-soft: #1e1b4b;
-  --primary-border: #3730a3;
+  --primary: #ededf0;
+  --primary-foreground: #07080a;
+  --primary-hover: #ffffff;
+  --primary-active: #d4d6dc;
+  --primary-soft: #1d1f23;
+  --primary-border: #2a2c32;
 
-  --secondary: #1a2438;
-  --secondary-foreground: #e2e8f0;
-  --muted: #1a2438;
-  --muted-foreground: #94a3b8;
-  --accent: #1e1b4b;
-  --accent-foreground: #c7d2fe;
+  --secondary: #1a1c20;
+  --secondary-foreground: #ededf0;
+  --muted: #1a1c20;
+  --muted-foreground: #8e939c;
+  --accent: #1d1f23;
+  --accent-foreground: #ededf0;
   --destructive: #fb7185;
-  --destructive-foreground: #0b1120;
+  --destructive-foreground: #07080a;
+
+  --brand: #38bdf8;
+  --brand-soft: #0b1c26;
 
   --success: #34d399;
   --success-soft: #052e24;
@@ -119,32 +132,36 @@
   --danger-text: #fda4af;
   --danger-border: #9f1239;
 
-  --border: #243044;
-  --border-strong: #334155;
-  --input: #243044;
-  --ring: #818cf8;
+  --border: #23252a;
+  --border-strong: #33363d;
+  --input: #23252a;
+  --ring: #38bdf8;
 
-  --chart-1: #818cf8;
+  --chart-1: #38bdf8;
   --chart-2: #34d399;
   --chart-3: #fbbf24;
   --chart-4: #fb7185;
-  --chart-5: #94a3b8;
+  --chart-5: #8e939c;
 
-  --sidebar: #0f1729;
-  --sidebar-foreground: #e2e8f0;
-  --sidebar-primary: #818cf8;
-  --sidebar-primary-foreground: #0b1120;
-  --sidebar-accent: #1e1b4b;
-  --sidebar-accent-foreground: #c7d2fe;
-  --sidebar-border: #243044;
-  --sidebar-ring: #818cf8;
+  --sidebar: #07080a;
+  --sidebar-foreground: #ededf0;
+  --sidebar-primary: #38bdf8;
+  --sidebar-primary-foreground: #07080a;
+  --sidebar-accent: #1a1c20;
+  --sidebar-accent-foreground: #ededf0;
+  --sidebar-border: #23252a;
+  --sidebar-ring: #38bdf8;
 
-  --shadow-l1: 0 1px 2px 0 rgb(0 0 0 / 0.3);
-  --shadow-l2: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
-  --shadow-l3: 0 12px 24px -4px rgb(0 0 0 / 0.5), 0 4px 8px -2px rgb(0 0 0 / 0.3);
+  --shadow-l1: 0 1px 2px 0 rgb(0 0 0 / 0.4), 0 1px 1px 0 rgb(0 0 0 / 0.3);
+  --shadow-l2: 0 6px 16px -6px rgb(0 0 0 / 0.5), 0 2px 6px -2px rgb(0 0 0 / 0.35);
+  --shadow-l3: 0 18px 40px -12px rgb(0 0 0 / 0.6), 0 6px 14px -6px rgb(0 0 0 / 0.4);
+  --shadow-sheet: 0 1px 2px 0 rgb(0 0 0 / 0.5), 0 16px 40px -20px rgb(0 0 0 / 0.6);
 }
 
 @theme inline {
+  --color-canvas: var(--canvas);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -184,9 +201,9 @@
   --color-ring: var(--ring);
 
   --radius-sm: calc(var(--radius) - 2px);
-  --radius-md: calc(var(--radius) + 2px);
-  --radius-lg: calc(var(--radius) + 8px);
-  --radius-xl: calc(var(--radius) + 16px);
+  --radius-md: calc(var(--radius) + 1px);
+  --radius-lg: calc(var(--radius) + 5px);
+  --radius-xl: calc(var(--radius) + 9px);
 
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
   --font-heading: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
@@ -220,7 +237,7 @@
     scrollbar-gutter: stable;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-canvas text-foreground;
     font-size: 14px;
     line-height: 20px;
   }
@@ -228,16 +245,25 @@
     font-variant-numeric: tabular-nums;
   }
   ::selection {
-    background: color-mix(in srgb, var(--primary) 22%, transparent);
+    background: color-mix(in srgb, var(--brand) 22%, transparent);
+  }
+  /* 侧边栏选中项：白底浮起（画布上的「卡片」），而不是灰底填充 */
+  [data-slot="sidebar-menu-button"][data-active="true"] {
+    background: var(--sidebar-accent);
+    box-shadow: var(--shadow-l1);
+    color: var(--foreground);
+  }
+  [data-slot="sidebar-menu-button"][data-active="true"] svg {
+    color: var(--brand);
   }
 }
 
 @layer utilities {
   .tracking-headline {
-    letter-spacing: -0.02em;
+    letter-spacing: -0.03em;
   }
   .tracking-label {
-    letter-spacing: 0.02em;
+    letter-spacing: 0.06em;
   }
   .shadow-l1 {
     box-shadow: var(--shadow-l1);
@@ -247,6 +273,9 @@
   }
   .shadow-l3 {
     box-shadow: var(--shadow-l3);
+  }
+  .shadow-sheet {
+    box-shadow: var(--shadow-sheet);
   }
 }
 

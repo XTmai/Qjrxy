@@ -9,7 +9,6 @@ import {
   Bot,
   CalendarClock,
   ChevronsUpDown,
-  Circle,
   Github,
   House,
   LogOut,
@@ -62,9 +61,9 @@ const NAV = [
 ];
 
 const statusColors: Record<string, string> = {
-  authorized: "text-success fill-success",
-  expired: "text-danger fill-danger",
-  unknown: "text-muted-foreground fill-muted-foreground",
+  authorized: "bg-success",
+  expired: "bg-danger",
+  unknown: "bg-muted-foreground/50",
 };
 
 function SidebarLogo() {
@@ -103,10 +102,10 @@ function TopBar() {
   }, []);
 
   return (
-    <header className="bg-background sticky top-0 z-40 flex h-14 shrink-0 items-center justify-between gap-3 border-b px-5">
+    <header className="border-border/70 flex h-14 shrink-0 items-center justify-between gap-3 border-b px-4 lg:px-6">
       <div className="flex min-w-0 items-center gap-3">
         <SidebarTrigger className="-ml-1.5 size-8" />
-        <Separator orientation="vertical" className="h-4 opacity-50" />
+        <Separator orientation="vertical" className="h-4 opacity-60" />
 
         <span className="hidden items-center gap-1.5 sm:flex">
           <span className="bg-success pulse-dot size-1.5 rounded-full" />
@@ -184,7 +183,7 @@ function DaemonCard() {
   const { open } = useSidebar();
   if (!open) return null;
   return (
-    <div className="border-border bg-muted/30 mx-2 rounded-md border p-2.5">
+    <div className="border-border/70 bg-background shadow-l1 mx-2 mb-1 rounded-lg border p-2.5">
       <div className="flex items-center justify-between">
         <span className="text-muted-foreground tracking-label text-[10px] font-medium uppercase">Task Daemon</span>
         <span className="bg-success pulse-dot size-1.5 rounded-full" />
@@ -213,8 +212,8 @@ export function Layout() {
 
   return (
     <SidebarProvider>
-      <Sidebar variant="sidebar" collapsible="icon" className="border-r">
-        <SidebarHeader className="h-14 justify-center">
+      <Sidebar variant="sidebar" collapsible="icon" className="border-r-0">
+        <SidebarHeader className="h-16 justify-center px-2">
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton size="lg" asChild>
@@ -248,8 +247,8 @@ export function Layout() {
                           <SidebarMenuSubItem key={a.id}>
                             <SidebarMenuSubButton asChild size="sm">
                               <Link to={`/accounts?account=${a.id}`}>
-                                <Circle
-                                  className={`size-1.5 ${statusColors[a.loginStatus] || "text-muted-foreground"}`}
+                                <span
+                                  className={`size-1.5 shrink-0 rounded-full ${statusColors[a.loginStatus] || statusColors.unknown}`}
                                 />
                                 <span className="truncate">{a.alias || a.username}</span>
                               </Link>
@@ -343,13 +342,15 @@ export function Layout() {
         <SidebarRail />
       </Sidebar>
 
-      <SidebarInset className="bg-background flex flex-col">
-        <TopBar />
-        <main className="flex-1 overflow-x-hidden overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1400px] p-5 lg:p-7">
-            <Outlet />
-          </div>
-        </main>
+      <SidebarInset className="bg-canvas flex flex-col lg:p-2 lg:pl-0">
+        <div className="bg-background border-border shadow-sheet flex min-h-0 flex-1 flex-col overflow-hidden border-0 lg:rounded-tl-2xl lg:border">
+          <TopBar />
+          <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+            <div className="mx-auto w-full max-w-[1400px] p-5 lg:p-7">
+              <Outlet />
+            </div>
+          </main>
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );
