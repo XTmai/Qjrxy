@@ -668,19 +668,59 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 	return result, detail, nil
 }
 
-// submit 组装加密请求并提交。
+// submit 提交签到。
+//
+// 部分学校的任务要求「以图判图」验证码：通过后服务端签发一次性
+// ticket，必须随提交体一起参与 AES + sign，否则被 2210060000 拒绝。
+// 这里先按原样提交，只有服务端明确要验证码时才补一次——不需要
+// 验证码的学校，请求序列与引入该功能前完全一致，不多一次往返。
 func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any) (*SignResult, error) {
-	endpoints := EndpointsFor(kind)
-
-	// 部分学校的任务在提交前要求通过「以图判图」验证码：通过后服务端
-	// 签发一次性 ticket，必须进提交体一起参与 AES + sign，否则被以
-	// 「验证码验签失败」(2210060000) 拒绝。没开启的学校 checkValidation
-	// 会返回 validation=false，这里直接跳过。
-	if ticket, err := c.captchaTicketFor(ctx, host, kind, device.DeviceID); err != nil {
-		return &SignResult{Success: false, Message: "验证码处理失败", Hint: err.Error()}, nil
-	} else if ticket != "" {
-		form["ticket"] = ticket
+	result, err := c.submitOnce(ctx, host, tenantID, device, kind, form)
+	if err != nil || result == nil || result.Success || !needsCaptcha(result) {
+		return result, err
 	}
+	ticket, cerr := c.captchaTicketFor(ctx, host, kind, device.DeviceID)
+	if cerr != nil {
+		// 学校侧状态自相矛盾：提交要 ticket，checkValidation 又说不需要。
+		// 把服务端原始结果交回去，用户至少能看到真实原因。
+		if errors.Is(cerr, errCaptchaNotRequired) {
+			return result, nil
+		}
+		return &SignResult{
+			Success: false,
+			Code:    result.Code,
+			Message: "验证码处理失败",
+			Hint:    cerr.Error(),
+			Payload: result.Payload,
+		}, nil
+	}
+	if ticket == "" {
+		// 没拿到 ticket 就不要再提交一次，把服务端原始结果交回去
+		return result, nil
+	}
+	form["ticket"] = ticket
+	retry, rerr := c.submitOnce(ctx, host, tenantID, device, kind, form)
+	if rerr != nil {
+		return nil, rerr
+	}
+	return retry, nil
+}
+
+// needsCaptcha 判断本次失败是否因为缺少验证码 ticket。
+// 业务码优先；个别学校返回的 code 不稳定，message 里带「验证码」也认。
+func needsCaptcha(r *SignResult) bool {
+	if r == nil {
+		return false
+	}
+	if r.Code == captchaRequiredCode {
+		return true
+	}
+	return strings.Contains(r.Message, "验证码")
+}
+
+// submitOnce 是一次完整的提交：加密、签名、发请求、解析结果。
+func (c *Client) submitOnce(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any) (*SignResult, error) {
+	endpoints := EndpointsFor(kind)
 
 	body, err := json.Marshal(form)
 	if err != nil {
@@ -886,6 +926,9 @@ func ExplainFailure(code, message string) string {
 			"或先用那台手机在今日校园正常签到一次，也可联系辅导员在「辅导猫 → 手机授权管理」中授权"
 	case strings.Contains(message, "版本过低"):
 		return "服务端拒绝了本次请求（提示版本过低），通常是加密密钥或客户端版本已轮换，请更新服务端配置"
+	case code == captchaRequiredCode || strings.Contains(message, "验证码"):
+		return "该校签到需要图形验证码，自动识别没有通过。请检查管理员设置里的识别服务是否可用；" +
+			"急着签到的话，先在今日校园 App 里手动签一次，再回来重试"
 	case code == "4":
 		return "服务端无法解析提交内容，请检查账号、设备信息与签到点是否匹配"
 	case strings.Contains(message, "范围"):
