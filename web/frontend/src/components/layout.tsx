@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useUser, useInfo } from "@/hooks/use-auth";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLiveUpdates } from "@/hooks/use-live-updates";
+import { CaptchaChallengeDialog } from "@/components/captcha-challenge-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveStore } from "@/stores/live-store";
 import {
@@ -416,6 +417,9 @@ export function Layout() {
           </main>
         </div>
       </SidebarInset>
+
+      {/* 签到验证码待人工点选：挂在整个面板上，切到哪一页都能弹出来 */}
+      <CaptchaChallengeDialog />
     </SidebarProvider>
   );
 }

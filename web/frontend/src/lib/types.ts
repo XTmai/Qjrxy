@@ -253,6 +253,19 @@ export interface SignRange {
   applied: boolean;
 }
 
+/** 签到验证码等用户人工点选：后端已把 9 张候选图拼成一张九宫格 */
+export interface ManualCaptcha {
+  token: string;
+  accountId: number;
+  /** 要找的目标物，如「自行车」 */
+  name: string;
+  /** 九宫格图，data:image/jpeg;base64,... */
+  grid: string;
+  /** 格子总数，恒为 9 */
+  cells: number;
+  expiresAt: string;
+}
+
 export interface RunOutcome {
   logId: number;
   status: string;

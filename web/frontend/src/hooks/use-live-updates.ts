@@ -10,6 +10,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { subscribeLiveEvents } from "@/api/events";
+import { useCaptchaStore } from "@/stores/captcha-store";
 import { useLiveStore } from "@/stores/live-store";
 
 /** 服务端主题 → 需要失效的 queryKeys 根节点 */
@@ -102,6 +103,14 @@ export function useLiveUpdates() {
       },
       onInvalidate: (topics) => {
         useLiveStore.getState().markEvent();
+        // 验证码不是「数据变了」，而是「有一道题在等你点」：
+        // 让弹窗去拉题目，不要顺手把几个查询全刷一遍。
+        if (topics.includes("captcha")) {
+          useCaptchaStore.getState().bump();
+          const rest = topics.filter((t) => t !== "captcha");
+          if (rest.length === 0) return;
+          topics = rest;
+        }
         queue(topics);
       },
     });

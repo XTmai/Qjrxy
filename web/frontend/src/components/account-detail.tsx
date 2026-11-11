@@ -209,7 +209,14 @@ function TasksTab({ account, onChanged }: { account: Account; onChanged: () => v
       await load();
       onChanged();
     } catch (e) {
-      toast({ title: "执行失败", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      // 等验证码时请求可能先断开（用户刷新/切网），但服务端仍在等他点完。
+      // 这种情况不该报「执行失败」，否则用户以为白签了又去点一次。
+      const pending = await api.captchaPending().catch(() => []);
+      if (pending.length > 0) {
+        toast({ title: "等待验证码", description: "请在弹窗中选出包含目标的图片，完成后会自动继续" });
+      } else {
+        toast({ title: "执行失败", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
+      }
     } finally {
       setRunning(null);
     }

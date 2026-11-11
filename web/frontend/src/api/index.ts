@@ -8,6 +8,7 @@ import type {
   Dashboard,
   DayStat,
   LoginChallenge,
+  ManualCaptcha,
   Plan,
   PlanInput,
   ProbeResult,
@@ -97,6 +98,12 @@ export const api = {
     http.post<{ tasks: Task[]; count: number }>('/tasks/sync', { accountId }),
   runTask: (accountId: number, taskId: number, kind: string) =>
     http.post<RunOutcome>('/tasks/run', { accountId, taskId, kind }),
+
+  // ---- 验证码人工兜底 ----
+  // 自动识别失败时签到会挂起，这里取当前待处理的题目；刷新页面后也能恢复。
+  captchaPending: () => http.get<ManualCaptcha[]>('/captcha/pending'),
+  captchaSubmit: (token: string, body: { cells?: number[]; action?: 'skip' | 'cancel' }) =>
+    http.post<{ submitted: boolean }>(`/captcha/${token}`, body),
 
   // ---- 计划 ----
   plans: () => http.get<{ plans: Plan[] }>('/plans'),
