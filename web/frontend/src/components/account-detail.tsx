@@ -15,7 +15,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-import { Bot, Check, ChevronRight, ImageIcon, Loader2, LogIn, MapPin, MessageSquare, QrCode } from "lucide-react";
+import { Bot, Check, ChevronRight, ImageIcon, Loader2, LogIn, MapPin, QrCode } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime, relativeTime, taskState, taskTime } from "@/lib/task";
 import { api } from "@/api";
@@ -23,7 +23,7 @@ import type { Account, RunLog, RunOutcome, Task } from "@/lib/types";
 import { LoginBadge, RunStatusBadge, TaskStateBadge } from "@/components/status-badge";
 import { PlansTab } from "./plans";
 import { DeviceScanDialog } from "./device-scan-dialog";
-import { SmsLoginDialog } from "./sms-login-dialog";
+import { SchoolLoginDialog } from "./school-login-dialog";
 
 interface Props {
   account: Account;
@@ -420,27 +420,10 @@ function DeviceTab({
   const { toast } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
   const [showScan, setShowScan] = useState(false);
-  const [showSMS, setShowSMS] = useState(false);
+  const [showLogin, setShowLogin] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [photoVersion, setPhotoVersion] = useState(Date.now());
-
-  const relLogin = async () => {
-    setBusy(true);
-    try {
-      const ch = await api.accountLogin(account.id);
-      if (ch.done) {
-        toast({ title: "登录成功" });
-        onChanged();
-      } else if (ch.needCaptcha) {
-        toast({ title: "学校要求验证码", description: "请通过「任务」页操作，或稍后再试" });
-      }
-    } catch (e) {
-      toast({ title: "登录失败", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const applyRange = async () => {
     setBusy(true);
@@ -494,21 +477,16 @@ function DeviceTab({
     },
     {
       key: "login",
-      title: "账密登录",
-      desc: account.lastProbeAt
-        ? `${relativeTime(account.lastProbeAt)}检测 · ${account.lastProbeMsg || ""}`
-        : "用保存的密码登录学校系统",
+      title: "登录学校系统",
+      desc:
+        account.loginStatus === "authorized"
+          ? account.lastProbeAt
+            ? `已登录 · ${relativeTime(account.lastProbeAt)}检测`
+            : "已登录"
+          : "选择账号密码或短信验证码登录",
       icon: LogIn,
       done: account.loginStatus === "authorized",
-      run: () => void relLogin(),
-    },
-    {
-      key: "sms",
-      title: "短信验证码登录",
-      desc: "用绑定的手机号 + 验证码登录，支持所有学校",
-      icon: MessageSquare,
-      done: false,
-      run: () => setShowSMS(true),
+      run: () => setShowLogin(true),
     },
     {
       key: "range",
@@ -606,11 +584,11 @@ function DeviceTab({
         删除账号
       </Button>
 
-      {showSMS && (
-        <SmsLoginDialog
-          accountId={account.id}
+      {showLogin && (
+        <SchoolLoginDialog
+          account={account}
           onClose={(loggedIn) => {
-            setShowSMS(false);
+            setShowLogin(false);
             if (loggedIn) {
               toast({ title: "登录成功" });
               onChanged();
