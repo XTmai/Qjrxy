@@ -1,8 +1,8 @@
 // Package vision 调用多模态大模型识别图片。
 //
-// 当前用途：今日校园的「以图判图」签到验证码——服务端下发一张场景图
-// （例如「以下图片是什么」），需要看图给出答案。字符 OCR 干不了这个，
-// 只有真正看懂图的模型可以。
+// 当前用途：今日校园的「以图判图」签到验证码。服务端下发 9 张候选图
+// 和一个目标词（如「自行车」），需要在九宫格里挑出包含该物品的格子。
+// 字符 OCR 干不了这个，只有真正看懂图的模型可以。
 //
 // DeepSeek 官方 API 是 OpenAI 兼容格式，图片以 data URL 内联在消息里。
 package vision
@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -23,7 +25,7 @@ import (
 type Config struct {
 	APIKey  string // DEEPSEEK_API_KEY
 	BaseURL string // DEEPSEEK_BASE_URL，默认 https://api.deepseek.com
-	Model   string // DEEPSEEK_VISION_MODEL，默认 deepseek-v4.1-flash
+	Model   string // DEEPSEEK_VISION_MODEL，默认 deepseek-flash
 }
 
 var cfg Config
@@ -36,7 +38,9 @@ func Configure(apiKey, baseURL, model string) {
 		cfg.BaseURL = "https://api.deepseek.com"
 	}
 	if cfg.Model == "" {
-		cfg.Model = "deepseek-v4.1-flash"
+		// DeepSeek 当前的视觉模型名。名称随版本轮换，管理员设置页
+		// 可以覆盖；调用返回 400 时错误信息会提示这一点。
+		cfg.Model = "deepseek-flash"
 	}
 }
 
@@ -48,21 +52,83 @@ func Current() Config {
 	return Config{APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Model: cfg.Model}
 }
 
-// DescribeCaptcha 识别今日校园的「以图判图」验证码。
+// PickCaptchaCells 在九宫格拼图里找出包含 target 的格子。
 //
-// 这类验证码下发一张场景图并提问（如「以下图片是什么」），答案是要
-// 逐个填进 scenesImageCodes 的文本。这里让多模态模型直接看图作答，
-// 输出约定为 JSON 数组；解析交给调用方（parseAnswers 做宽容处理）。
-// 温度压到 0：同一张图两次识别必须给出同一个答案。
-func DescribeCaptcha(ctx context.Context, imageMIME, imageB64 string) (string, error) {
-	const prompt = `这是一道今日校园签到时弹出的图形验证码，形式通常是看图答题：
-图中有一个问题（例如「以下图片是什么」「下图是什么场景」）和若干需要判定的内容。
-请仔细观察图片，按题目的提问作答：
-- 若要求说出图片内容，请用简短的中文名词回答（如「公交车」「食堂」「图书馆」）；
-- 若是选择题，请回答对应选项的编号或选项文字。
-只输出一个 JSON 字符串数组，数组元素按题目顺序排列，不要输出任何解释或多余字符。
-示例：["公交车"] 或 ["图书馆","教学楼"]`
-	return describeImage(ctx, imageMIME, imageB64, prompt)
+// gridMIME/gridB64 是 composeGrid 的输出；target 是服务端下发的目标词，
+// 为空时退化为「按图里的题目文字判断」。返回 1 基序号（1-9），升序去重。
+// 温度压到 0：同一张图两次识别必须给同一组编号。
+func PickCaptchaCells(ctx context.Context, gridMIME, gridB64, target string, total int) ([]int, error) {
+	if total <= 0 {
+		total = 9
+	}
+	goal := fmt.Sprintf("目标物是「%s」", strings.TrimSpace(target))
+	if strings.TrimSpace(target) == "" {
+		goal = "图片里写着题目，请按题目的要求判断"
+	}
+	prompt := fmt.Sprintf(`这是一张 3×3 的九宫格拼图，每一格是一张候选图片，来自签到验证码。
+%s。
+请找出所有包含目标物的格子。格子按从左到右、从上到下编号：
+1 2 3
+4 5 6
+7 8 9
+只输出 JSON 整数数组，例如 [2,5]，不要输出任何解释。
+如果没有任何一格符合，输出 []。`, goal)
+	answer, err := describeImage(ctx, gridMIME, gridB64, prompt)
+	if err != nil {
+		return nil, err
+	}
+	cells := parseCells(answer, total)
+	return cells, nil
+}
+
+// parseCells 从模型回答里提取格子编号。容忍 ```json 围栏、前后缀文字、
+// 字符串形式的数字，并按 total 过滤越界值。
+func parseCells(answer string, total int) []int {
+	answer = strings.TrimSpace(answer)
+	answer = strings.TrimPrefix(answer, "```json")
+	answer = strings.TrimPrefix(answer, "```")
+	answer = strings.TrimSuffix(answer, "```")
+	answer = strings.TrimSpace(answer)
+
+	// 取第一个 [ 到最后一个 ]：模型偶尔会在数组前后加一句说明
+	if i := strings.Index(answer, "["); i >= 0 {
+		if j := strings.LastIndex(answer, "]"); j > i {
+			answer = answer[i : j+1]
+		}
+	}
+
+	var nums []int
+	if err := json.Unmarshal([]byte(answer), &nums); err != nil {
+		var strs []string
+		if err2 := json.Unmarshal([]byte(answer), &strs); err2 == nil {
+			for _, s := range strs {
+				var n int
+				if _, err3 := fmt.Sscanf(strings.TrimSpace(s), "%d", &n); err3 == nil {
+					nums = append(nums, n)
+				}
+			}
+		} else {
+			// 最后兜底：从文本里抠出所有 1-9 的数字
+			for _, m := range regexp.MustCompile(`\d+`).FindAllString(answer, -1) {
+				var n int
+				if _, err3 := fmt.Sscanf(m, "%d", &n); err3 == nil {
+					nums = append(nums, n)
+				}
+			}
+		}
+	}
+
+	seen := make(map[int]bool, len(nums))
+	out := make([]int, 0, len(nums))
+	for _, n := range nums {
+		if n < 1 || n > total || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // describeImage 把图片交给多模态模型，返回模型的文本回答。
@@ -111,7 +177,11 @@ func describeImage(ctx context.Context, imageMIME, imageB64, prompt string) (str
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("识别服务返回 HTTP %d：%s", resp.StatusCode, truncate(string(respBody), 200))
+		hint := ""
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusNotFound {
+			hint = "（模型名或接口地址可能已过期，可在管理员设置里改成账号可用的视觉模型）"
+		}
+		return "", fmt.Errorf("识别服务返回 HTTP %d%s：%s", resp.StatusCode, hint, truncate(string(respBody), 200))
 	}
 	var out struct {
 		Choices []struct {
