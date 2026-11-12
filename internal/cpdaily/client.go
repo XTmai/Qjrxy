@@ -175,6 +175,21 @@ func (c *Client) do(ctx context.Context, method, rawURL string, headers map[stri
 		}
 		req.Header.Set("User-Agent", ua)
 	}
+	// 账号体系令牌：App 对全部校园接口都带 sessionTokenKey（Android 另加
+	// SessionToken），服务端据此做长期认证。只带 Cookie 的话服务端只能按
+	// CAS 票判定，票约 12 小时绝对过期 → 被判登录失效（返回登录页 HTML）。
+	// 这里统一注入，所有请求路径都受益；iOS 与 App 行为一致只带头。
+	if token := c.cookies["sessionToken"]; token != "" {
+		if enc, err := DESEncrypt(token, desKeyToken); err == nil {
+			if req.Header.Get("sessionTokenKey") == "" {
+				req.Header.Set("sessionTokenKey", enc)
+			}
+			if !strings.Contains(req.Header.Get("User-Agent"), "iPhone") &&
+				req.Header.Get("SessionToken") == "" {
+				req.Header.Set("SessionToken", enc)
+			}
+		}
+	}
 	// 诊断：请求头设置完毕后开一条记录，响应体读取时镜像，Close 落盘。
 	rec := c.diagStart(ctx, req)
 	resp, err := c.http.Do(req)

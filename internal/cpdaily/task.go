@@ -761,14 +761,7 @@ func (c *Client) submit(ctx context.Context, host, tenantID string, device Devic
 		headers["CpdailyInfo"] = infoEnc
 	}
 
-	if token := c.cookies["sessionToken"]; token != "" {
-		if enc, err := DESEncrypt(token, desKeyToken); err == nil {
-			headers["sessionTokenKey"] = enc
-			if !isIOS {
-				headers["SessionToken"] = enc
-			}
-		}
-	}
+	// 账号令牌头已由 client.do() 统一注入，这里不再重复。
 
 	// 提交体：设备字段 + bodyString + 版本标记 + sign。
 	// 外层必须同时带 lon/lat，服务端会用它们做一次快速校验，

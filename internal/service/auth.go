@@ -618,6 +618,10 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 		}
 	}
 
+	// 这一轮请求可能带回了续期 cookie（服务端若做滑动续期），成功时落库，
+	// 免得下次 clientFor 又从 DB 重建出旧票。
+	_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "authorized")
+
 	cached := make([]store.Task, 0, len(tasks))
 	for _, t := range tasks {
 		cached = append(cached, store.Task{

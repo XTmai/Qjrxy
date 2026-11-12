@@ -313,6 +313,7 @@ export function SchoolLoginDialog({ account, onClose }: Props) {
               </div>
               <p className="text-muted-foreground text-xs">
                 账密登录失败（自建统一身份认证）时的备用方式，登录后可能让手机 App 下线。
+                该方式没有密码可自动重登，登录态依赖学校会话期限，长期挂机建议配置密码。
               </p>
               {hint && <p className="text-muted-foreground text-xs">{hint}</p>}
             </div>
