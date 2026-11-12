@@ -188,23 +188,16 @@ func (c *Client) doRequest(ctx context.Context, method, rawURL string, headers m
 		}
 		req.Header.Set("User-Agent", ua)
 	}
-	// 账号体系令牌：App 对全部校园接口都带 sessionTokenKey（Android 另加
-	// SessionToken），服务端据此做长期认证。只带 Cookie 的话服务端只能按
-	// CAS 票判定，票约 12 小时绝对过期 → 被判登录失效（返回登录页 HTML）。
-	// 这里统一注入，所有请求路径都受益；iOS 与 App 行为一致只带头。
+	// 账号体系令牌：App 对账号与业务接口都带 sessionTokenKey，值是
+	// sessionToken 的**明文**（抓包确认：36 字符 UUID，不是加密串）。
+	// 这是账号体系的长期凭据，CAS 票过期后服务端仍能据此认人。
 	//
-	// 但 withCookie=false 的请求（验证码图片等第三方域）必须跳过：它们
+	// withCookie=false 的请求（验证码图片等第三方域）必须跳过：它们
 	// 不属于校园接口，不该拿到任何账号凭证。
 	if withCookie {
 		if token := c.cookies["sessionToken"]; token != "" {
-			if enc, err := DESEncrypt(token, desKeyToken); err == nil {
-				if req.Header.Get("sessionTokenKey") == "" {
-					req.Header.Set("sessionTokenKey", enc)
-				}
-				if !strings.Contains(req.Header.Get("User-Agent"), "iPhone") &&
-					req.Header.Get("SessionToken") == "" {
-					req.Header.Set("SessionToken", enc)
-				}
+			if req.Header.Get("sessionTokenKey") == "" {
+				req.Header.Set("sessionTokenKey", token)
 			}
 		}
 	}

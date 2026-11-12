@@ -15,6 +15,9 @@ type Account struct {
 	SchoolName  string `json:"schoolName"`
 	Username    string `json:"username"`
 	PasswordEnc string `json:"-"`
+	// TGCEnc 是登录时拿到的 CAS 票（tgc）的密文。票过期后用它重新换取
+	// 业务会话，是短信登录（无密码）唯一的自动恢复手段。
+	TGCEnc      string `json:"-"`
 	TenantID    string `json:"tenantId"`
 	Host        string `json:"host"`
 	IDSURL      string `json:"idsUrl"`
@@ -54,7 +57,7 @@ func (a Account) HasCookie() bool {
 	return strings.TrimSpace(a.Cookies) != ""
 }
 
-const accountColumns = `id, user_id, alias, school_name, username, password_enc, tenant_id, host, ids_url,
+const accountColumns = `id, user_id, alias, school_name, username, password_enc, tgc_enc, tenant_id, host, ids_url,
 	join_type, cookies, login_status, last_login_at, last_probe_at, last_probe_msg,
 	device_id, device_model, system_version, platform,
 	wis_device_id, user_agent, app_version, build_id, address, lon, lat, abnormal, photo_path,
@@ -62,7 +65,7 @@ const accountColumns = `id, user_id, alias, school_name, username, password_enc,
 
 func scanAccount(scanner interface{ Scan(...any) error }) (*Account, error) {
 	var a Account
-	err := scanner.Scan(&a.ID, &a.UserID, &a.Alias, &a.SchoolName, &a.Username, &a.PasswordEnc,
+	err := scanner.Scan(&a.ID, &a.UserID, &a.Alias, &a.SchoolName, &a.Username, &a.PasswordEnc, &a.TGCEnc,
 		&a.TenantID, &a.Host, &a.IDSURL, &a.JoinType, &a.Cookies, &a.LoginStatus, &a.LastLoginAt,
 		&a.LastProbeAt, &a.LastProbeMsg,
 		&a.DeviceID, &a.DeviceModel, &a.SystemVersion, &a.Platform, &a.WisDeviceID, &a.UserAgent,
@@ -100,12 +103,12 @@ func (db *DB) CreateAccount(ctx context.Context, a *Account) (*Account, error) {
 		a.Platform = "android"
 	}
 	res, err := db.ExecContext(ctx, `
-		INSERT INTO accounts (user_id, alias, school_name, username, password_enc, tenant_id, host, ids_url,
+		INSERT INTO accounts (user_id, alias, school_name, username, password_enc, tgc_enc, tenant_id, host, ids_url,
 			join_type, cookies, login_status, last_login_at, device_id, device_model, system_version,
 			platform, wis_device_id, user_agent, app_version, build_id, address, lon, lat, abnormal,
 			photo_path, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		a.UserID, a.Alias, a.SchoolName, a.Username, a.PasswordEnc, a.TenantID, a.Host, a.IDSURL,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		a.UserID, a.Alias, a.SchoolName, a.Username, a.PasswordEnc, a.TGCEnc, a.TenantID, a.Host, a.IDSURL,
 		a.JoinType, a.Cookies, a.LoginStatus, a.LastLoginAt, a.DeviceID, a.DeviceModel, a.SystemVersion,
 		a.Platform, a.WisDeviceID, a.UserAgent, a.AppVersion, a.BuildID, a.Address, a.Lon, a.Lat,
 		a.Abnormal, a.PhotoPath, a.CreatedAt, a.UpdatedAt)
@@ -164,13 +167,13 @@ func (db *DB) AccountBySchoolUsername(ctx context.Context, userID int64, schoolN
 func (db *DB) UpdateAccount(ctx context.Context, a *Account) error {
 	a.UpdatedAt = now()
 	_, err := db.ExecContext(ctx, `
-		UPDATE accounts SET alias = ?, school_name = ?, username = ?, password_enc = ?, tenant_id = ?,
+		UPDATE accounts SET alias = ?, school_name = ?, username = ?, password_enc = ?, tgc_enc = ?, tenant_id = ?,
 			host = ?, ids_url = ?, join_type = ?, cookies = ?, login_status = ?, last_login_at = ?,
 			device_id = ?, device_model = ?, system_version = ?, platform = ?, wis_device_id = ?,
 			user_agent = ?, app_version = ?, build_id = ?, address = ?, lon = ?, lat = ?,
 			abnormal = ?, photo_path = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
-		a.Alias, a.SchoolName, a.Username, a.PasswordEnc, a.TenantID, a.Host, a.IDSURL, a.JoinType,
+		a.Alias, a.SchoolName, a.Username, a.PasswordEnc, a.TGCEnc, a.TenantID, a.Host, a.IDSURL, a.JoinType,
 		a.Cookies, a.LoginStatus, a.LastLoginAt, a.DeviceID, a.DeviceModel, a.SystemVersion, a.Platform,
 		a.WisDeviceID, a.UserAgent, a.AppVersion, a.BuildID, a.Address, a.Lon, a.Lat, a.Abnormal,
 		a.PhotoPath, a.UpdatedAt, a.ID, a.UserID)

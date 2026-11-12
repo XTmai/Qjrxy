@@ -227,6 +227,9 @@ var sensitiveHeaders = map[string]bool{
 	"sessiontokenkey":  true,
 	"sessiontoken":     true,
 	"wisdeviceid":      true,
+	"tgc":              true,
+	"authtgc":          true,
+	"castgc":           true,
 	"cpdailyextension": true,
 }
 

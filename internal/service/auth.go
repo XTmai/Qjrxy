@@ -257,6 +257,16 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	// tgc 为空说明该校不走 IAP CAS 换票（账号体系会话直接可用），
 	// 这时不该拦在「缺少换票参数」上，交给 finishSession 实测会话是否有效。
 	tgc := strings.TrimSpace(result.TGC)
+	// 保存 tgc：短信登录没有密码，业务票过期后这是唯一的自动恢复凭据
+	// （重新走 /iap/login 换新票，不需要用户再收短信）。
+	if tgc != "" {
+		if enc, err := secure.Encrypt(s.cfg.SecretKey, tgc); err == nil {
+			account.TGCEnc = enc
+			if err := s.db.UpdateAccount(ctx, account); err != nil {
+				return nil, err
+			}
+		}
+	}
 	var exchangeErr error
 	if tgc != "" {
 		exchangeErr = cpdaily.ExchangeTGC(ctx, client, host, tgc, device, account.TenantID)
@@ -453,15 +463,9 @@ func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) Prob
 	// 替换也不影响用户归属。
 	defer s.notify(account.UserID, events.TopicAccounts)
 
-	// 情况一：从未登录过 / 已标记失效 → 直接尝试自动登录
+	// 情况一：从未登录过 / 已标记失效 → 先用 CAS 票续期，再尝试密码重登
 	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
-		if !hasCredentials(account) {
-			res.Status = "expired"
-			res.Message = "尚未登录，且未保存密码，请手动完成账密登录"
-			_ = s.db.RecordProbe(ctx, account.ID, "expired", res.Message)
-			return res
-		}
-		updated, err := s.AutoRelogin(ctx, account)
+		updated, err := s.recoverSession(ctx, account)
 		if err != nil {
 			res.Status = "expired"
 			res.Message = "自动登录失败，请手动登录"
@@ -473,10 +477,10 @@ func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) Prob
 		res.Relogged = true
 	}
 
-	// 用当前会话拉任务；失效则重登后重试一次
+	// 用当前会话拉任务；失效则先 CAS 票续期、再密码重登，然后重试一次
 	tasks, err := s.SyncTasks(ctx, account.UserID, account.ID)
-	if err != nil && cpdaily.IsAuthExpired(err) && hasCredentials(account) && !res.Relogged {
-		if updated, reErr := s.AutoRelogin(ctx, account); reErr == nil {
+	if err != nil && cpdaily.IsAuthExpired(err) && !res.Relogged {
+		if updated, reErr := s.recoverSession(ctx, account); reErr == nil {
 			account = updated
 			res.Relogged = true
 			tasks, err = s.SyncTasks(ctx, account.UserID, account.ID)
@@ -544,6 +548,45 @@ func hasCredentials(a *store.Account) bool {
 	return strings.TrimSpace(a.PasswordEnc) != ""
 }
 
+// renewSessionWithTGC 用登录时保存的 CAS 票重新换取业务会话。
+//
+// 这是票过期后的首选恢复手段：不依赖密码、不触发图形验证码、也不需要
+// 用户重新收短信。CAS 的 TGT 在有效期内可以反复换 service ticket，
+// 前提是票本身没过期——过期的票换不动，会退回到密码重登/人工处理。
+func (s *Service) renewSessionWithTGC(ctx context.Context, account *store.Account) error {
+	if strings.TrimSpace(account.TGCEnc) == "" {
+		return errors.New("该账号没有保存 CAS 票")
+	}
+	tgc, err := secure.Decrypt(s.cfg.SecretKey, account.TGCEnc)
+	if err != nil || strings.TrimSpace(tgc) == "" {
+		return errors.New("CAS 票解析失败，请重新登录")
+	}
+	client := s.clientFor(account)
+	device := deviceProfile(account, account.Lon, account.Lat)
+	if err := cpdaily.ExchangeTGC(ctx, client, account.Host, tgc, device, account.TenantID); err != nil {
+		return err
+	}
+	cookies := encodeCookies(client.Cookies())
+	if err := s.db.UpdateAccountSession(ctx, account.ID, cookies, "authorized"); err != nil {
+		return err
+	}
+	account.Cookies = cookies
+	account.LoginStatus = "authorized"
+	return nil
+}
+
+// recoverSession 尝试自动恢复会话：先用 tgc 换票（无密码也能做），
+// 不行再用保存的密码重登。两条都失败时返回错误。
+func (s *Service) recoverSession(ctx context.Context, account *store.Account) (*store.Account, error) {
+	if err := s.renewSessionWithTGC(ctx, account); err == nil {
+		return account, nil
+	}
+	if !hasCredentials(account) {
+		return nil, errors.New("账号没有可用的 CAS 票或密码，请手动完成一次登录")
+	}
+	return s.AutoRelogin(ctx, account)
+}
+
 // AutoRelogin 用账号保存的密码自动重新登录，用于会话过期后的无感恢复。
 //
 // 成功返回刷新后的账号；学校要求图形验证码时返回错误，
@@ -579,19 +622,16 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 		return nil, err
 	}
 	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
-		if !hasCredentials(account) {
-			return nil, errors.New("账号尚未登录，请先完成账密登录")
-		}
-		if account, err = s.AutoRelogin(ctx, account); err != nil {
+		if account, err = s.recoverSession(ctx, account); err != nil {
 			return nil, fmt.Errorf("自动登录失败：%w", err)
 		}
 	}
 	client := s.clientFor(account)
 	kinds := []cpdaily.TaskKind{cpdaily.KindAttendance, cpdaily.KindSign, cpdaily.KindCollect}
 	tasks, err := client.ListAllTasks(ctx, account.Host, kinds)
-	if err != nil && cpdaily.IsAuthExpired(err) && hasCredentials(account) {
-		// 提交时才发现会话过期：重登一次再试。
-		if updated, reErr := s.AutoRelogin(ctx, account); reErr == nil {
+	if err != nil && cpdaily.IsAuthExpired(err) {
+		// 拉取时才发现会话过期：先用 CAS 票续期，不行再密码重登，然后重试。
+		if updated, reErr := s.recoverSession(ctx, account); reErr == nil {
 			account = updated
 			client = s.clientFor(account)
 			tasks, err = client.ListAllTasks(ctx, account.Host, kinds)

@@ -25,16 +25,12 @@ func TestDoInjectsSessionTokenHeaders(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	want, err := DESEncrypt("token-abc-123", desKeyToken)
-	if err != nil {
-		t.Fatal(err)
+	// 抓包确认：App 的 sessionTokenKey 是明文 UUID，不是加密串
+	if got.Get("sessionTokenKey") != "token-abc-123" {
+		t.Errorf("sessionTokenKey = %q，期望明文 token", got.Get("sessionTokenKey"))
 	}
-	if got.Get("sessionTokenKey") != want {
-		t.Errorf("sessionTokenKey = %q，期望 %q", got.Get("sessionTokenKey"), want)
-	}
-	// Android 客户端额外带 SessionToken
-	if got.Get("SessionToken") != want {
-		t.Errorf("SessionToken = %q，期望 %q", got.Get("SessionToken"), want)
+	if got.Get("SessionToken") != "" {
+		t.Errorf("App 不带 SessionToken 头，得到 %q", got.Get("SessionToken"))
 	}
 }
 

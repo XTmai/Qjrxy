@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 	school_name    TEXT NOT NULL,
 	username       TEXT NOT NULL,
 	password_enc   TEXT NOT NULL DEFAULT '',
+	tgc_enc        TEXT NOT NULL DEFAULT '',
 	tenant_id      TEXT NOT NULL DEFAULT '',
 	host           TEXT NOT NULL DEFAULT '',
 	ids_url        TEXT NOT NULL DEFAULT '',
@@ -174,6 +175,7 @@ func (db *DB) migrate() error {
 	}
 	// 增量迁移：老库补列（失败说明已存在，忽略）
 	for _, stmt := range []string{
+		`ALTER TABLE accounts ADD COLUMN tgc_enc TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN platform TEXT NOT NULL DEFAULT 'android'`,
 		`ALTER TABLE accounts ADD COLUMN wis_device_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE account_tasks ADD COLUMN stu_sign_wid TEXT NOT NULL DEFAULT ''`,
