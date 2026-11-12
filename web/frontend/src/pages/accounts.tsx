@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   CalendarClock,
+  Download,
   Fingerprint,
   ImageIcon,
   Loader2,
@@ -11,6 +12,7 @@ import {
   QrCode,
   Search,
   Settings2,
+  Upload,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -27,12 +29,23 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/api";
+import { AccountImportDialog } from "@/components/account-import-dialog";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { downloadBlob, todayStamp } from "@/lib/download";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAccounts, useCreateAccount, useProbeAccounts } from "@/hooks/use-accounts";
 import { usePlans } from "@/hooks/use-plans";
 import { queryKeys } from "@/lib/query-keys";
 import { toast } from "@/hooks/use-toast";
-import { AccountDetail } from "@/components/account-detail";
+import { AccountDetail, type DetailTab } from "@/components/account-detail";
 import { CaptchaDialog } from "@/components/captcha-dialog";
 import { DeviceScanDialog } from "@/components/device-scan-dialog";
 import { LoginBadge } from "@/components/status-badge";
@@ -49,6 +62,9 @@ export function AccountsPage() {
   const [search, setSearch] = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [detailTab, setDetailTab] = useState<DetailTab>("tasks");
+  const [showImport, setShowImport] = useState(false);
+  const { confirm, ConfirmDialog } = useConfirm();
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [scanAccountId, setScanAccountId] = useState<number | null>(null);
@@ -95,6 +111,35 @@ export function AccountsPage() {
     return m;
   }, [plans]);
 
+  const doExport = async (
+    format: "json" | "csv",
+    withSession: boolean,
+    withPassword: boolean,
+  ) => {
+    if (withSession || withPassword) {
+      const ok = await confirm({
+        title: "导出包含敏感凭证",
+        description: withPassword
+          ? "文件包含登录态（cookies / 续期票据）和明文密码。任何人拿到文件都能直接登录这些账号，请只在受控设备上保存。"
+          : "文件包含登录态（cookies / 续期票据）。拿到文件的人可以在其有效期内使用这些账号。",
+        confirmText: "继续导出",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
+    try {
+      const blob = await api.exportAccounts({ format, withSession, withPassword });
+      const suffix = `${withSession ? "-with-session" : ""}${withPassword ? "-with-password" : ""}`;
+      downloadBlob(blob, `qjrxy-accounts-${todayStamp()}${suffix}.${format}`);
+    } catch (e) {
+      toast({
+        title: "导出失败",
+        description: e instanceof Error ? e.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
+
   const probeAll = () => {
     probe.mutate(undefined, {
       onSuccess: ({ results }) => {
@@ -113,7 +158,10 @@ export function AccountsPage() {
   };
 
   // 固定引用：配合 AccountCard 的 memo，打开弹窗时不再重渲染整张列表
-  const handleOpen = useCallback((id: number) => setDetailId(id), []);
+  const handleOpen = useCallback((id: number, tab: DetailTab = "tasks") => {
+    setDetailTab(tab);
+    setDetailId(id);
+  }, []);
   const handleScan = useCallback((id: number) => setScanAccountId(id), []);
   const handleLogin = useCallback(async (id: number) => {
     try {
@@ -152,6 +200,39 @@ export function AccountsPage() {
                 {probe.isPending ? <Loader2 className="size-4 animate-spin" /> : "检测登录态"}
               </Button>
             )}
+            <Button variant="outline" size="sm" onClick={() => setShowImport(true)}>
+              <Upload className="size-3.5" />
+              导入
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" disabled={!accounts || accounts.length === 0}>
+                  <Download className="size-3.5" />
+                  导出
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-muted-foreground text-[10px] uppercase">
+                  不含密码 · 含登录态
+                </DropdownMenuLabel>
+                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("csv", true, false)}>
+                  CSV
+                </DropdownMenuItem>
+                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("json", true, false)}>
+                  JSON
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-muted-foreground text-[10px] uppercase">
+                  含密码（明文，谨慎）
+                </DropdownMenuLabel>
+                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("csv", true, true)}>
+                  CSV + 密码
+                </DropdownMenuItem>
+                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("json", true, true)}>
+                  JSON + 密码
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button variant="default" size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="size-3.5" />
               添加账号
@@ -235,8 +316,28 @@ export function AccountsPage() {
       )}
 
       {detail && (
-        <AccountDetail account={detail} onClose={(deleted) => { setDetailId(null); if (deleted) void 0; }} />
+        <AccountDetail
+          account={detail}
+          initialTab={detailTab}
+          onClose={(deleted) => {
+            setDetailId(null);
+            if (deleted) void 0;
+          }}
+        />
       )}
+
+      {showImport && (
+        <AccountImportDialog
+          onClose={(imported) => {
+            setShowImport(false);
+            if (imported) {
+              void queryClient.invalidateQueries({ queryKey: queryKeys.accounts.all() });
+              void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
+            }
+          }}
+        />
+      )}
+      {ConfirmDialog}
 
       {scanAccountId !== null && (
         <DeviceScanDialog
@@ -272,7 +373,7 @@ const AccountGrid = memo(function AccountGrid({
 }: {
   accounts: Account[];
   planCounts: Map<number, number>;
-  onOpen: (id: number) => void;
+  onOpen: (id: number, tab?: DetailTab) => void;
   onScan: (id: number) => void;
   onLogin: (id: number) => void;
 }) {
@@ -305,7 +406,7 @@ const AccountCard = memo(function AccountCard({
 }: {
   account: Account;
   planCount: number;
-  onOpen: (id: number) => void;
+  onOpen: (id: number, tab?: DetailTab) => void;
   onScan: (id: number) => void;
   onLogin: (id: number) => void;
 }) {
@@ -365,8 +466,14 @@ const AccountCard = memo(function AccountCard({
           icon={ImageIcon}
           label="查寝照片"
           ok={!!account.photoUrl}
-          value={account.photoUrl ? "已上传" : "未上传"}
-          action={!account.photoUrl ? { text: "去上传", onClick: () => onOpen(account.id) } : undefined}
+          value={
+            (account.photoPoolCount ?? 0) > 0
+              ? `照片池 ${account.photoPoolCount} 张`
+              : account.photoUrl
+                ? "已上传"
+                : "未上传"
+          }
+          action={!account.photoUrl ? { text: "去上传", onClick: () => onOpen(account.id, "photos") } : undefined}
           thumb={account.photoUrl ? `${account.photoUrl}?w=96&t=${account.updatedAt}` : undefined}
         />
         <InfoBlock
@@ -374,14 +481,14 @@ const AccountCard = memo(function AccountCard({
           label="签到位置"
           ok={!!account.address}
           value={account.address ? account.address : "未设置"}
-          action={!account.address ? { text: "自动获取", onClick: () => onOpen(account.id) } : undefined}
+          action={!account.address ? { text: "自动获取", onClick: () => onOpen(account.id, "device") } : undefined}
         />
         <InfoBlock
           icon={CalendarClock}
           label="自动计划"
           ok={planCount > 0}
           value={planCount > 0 ? `${planCount} 个启用中` : "未创建"}
-          action={planCount === 0 ? { text: "去创建", onClick: () => onOpen(account.id) } : undefined}
+          action={planCount === 0 ? { text: "去创建", onClick: () => onOpen(account.id, "plans") } : undefined}
         />
       </div>
 

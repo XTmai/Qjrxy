@@ -179,11 +179,27 @@
 
 ### `POST /api/accounts/{id}/photo` 🔒
 
-`multipart/form-data`，字段名 `photo`，支持 jpg/png/webp，≤ 8MB。
+`multipart/form-data`，字段名 `photo`，支持 jpg/png/webp，≤ 5MB。
 
 ### `GET /api/accounts/{id}/photo` 🔒
 
 返回图片二进制。
+
+### `GET /api/accounts/{id}/photos` 🔒
+
+返回该账号照片池：`{ "photos": [{ "id": 1, "url": "/api/accounts/1/photos/1", "createdAt": "..." }] }`。
+
+### `POST /api/accounts/{id}/photos` 🔒
+
+`multipart/form-data`，字段名 `photos` 可重复；单张 jpg/png/webp ≤ 5MB，单次最多 10 张，每账号最多 10 张。逐文件返回成功列表与 `failed`（文件名 + 原因）。
+
+### `GET /api/accounts/{id}/photos/{photoId}` 🔒
+
+返回池内照片二进制，支持与单张照片相同的 `?w=` 缩略图参数。
+
+### `DELETE /api/accounts/{id}/photos/{photoId}` 🔒
+
+删除池内照片及其文件。
 
 ### `POST /api/accounts/{id}/device-ticket` 🔒
 

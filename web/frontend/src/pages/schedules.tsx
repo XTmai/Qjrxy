@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PageHeader } from "@/components/page-header";
+import { MonthCalendar } from "@/components/month-calendar";
 import { EmptyBanner } from "@/components/empty-banner";
 import { PlanCard } from "@/components/plans";
 import { useAccounts } from "@/hooks/use-accounts";
@@ -53,6 +54,7 @@ export function SchedulesPage() {
   const [windowStart, setWindowStart] = useState("21:00");
   const [windowEnd, setWindowEnd] = useState("23:00");
   const [days, setDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [dates, setDates] = useState<string[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [error, setError] = useState("");
 
@@ -66,6 +68,7 @@ export function SchedulesPage() {
     setWindowStart(p.windowStart || "21:00");
     setWindowEnd(p.windowEnd || "23:00");
     setDays(p.days?.length ? p.days : [0, 1, 2, 3, 4, 5, 6]);
+    setDates(p.dates ?? []);
     setEnabled(p.enabled);
     setError("");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -79,6 +82,7 @@ export function SchedulesPage() {
     setWindowStart("21:00");
     setWindowEnd("23:00");
     setDays([0, 1, 2, 3, 4, 5, 6]);
+    setDates([]);
     setEnabled(true);
     setError("");
   };
@@ -89,7 +93,7 @@ export function SchedulesPage() {
   const save = () => {
     setError("");
     if (!accountId) return setError("请选择要执行计划的账号");
-    if (!days.length) return setError("请至少选择一个执行日");
+    if (!days.length && !dates.length) return setError("请至少选择一个执行日或指定日期");
     const payload: PlanInput = {
       accountId: Number(accountId),
       name: name.trim() || "查寝计划",
@@ -98,6 +102,7 @@ export function SchedulesPage() {
       windowStart,
       windowEnd,
       days,
+      dates,
       enabled,
     };
     const mutation =
@@ -241,6 +246,22 @@ export function SchedulesPage() {
                 </div>
               </div>
 
+              {/* 指定日期：优先于星期 */}
+              <div className="border-border space-y-2 rounded-lg border p-3">
+                <div className="flex items-center justify-between">
+                  <p className="tracking-label text-muted-foreground text-[10px] font-medium uppercase">
+                    指定日期（可选）
+                  </p>
+                  <span className="text-muted-foreground text-[11px]">
+                    {dates.length > 0 ? `${dates.length} 天` : "留空按星期"}
+                  </span>
+                </div>
+                <p className="text-muted-foreground text-[11px]">
+                  选了具体日期后，只在那些天执行，上面的星期设置失效；适合临时补签或单次计划。
+                </p>
+                <MonthCalendar value={dates} onChange={setDates} />
+              </div>
+
               {/* 启用开关 */}
               <label className="border-border flex items-center justify-between rounded-md border px-3 py-2.5">
                 <span className="flex items-center gap-2 text-xs">
@@ -323,7 +344,7 @@ export function SchedulesPage() {
             </CardHeader>
             <CardContent className="space-y-2.5 text-xs">
               <SecretRow icon={KeyRound} text="账号密码 AES-256-GCM 加密存储，仅用于自动登录" />
-              <SecretRow icon={Fingerprint} text="设备指纹只经扫码授权获取，不做手动填写" />
+              <SecretRow icon={Fingerprint} text="设备指纹优先扫码授权获取，也支持手动粘贴设备 ID 与 UA" />
               <SecretRow icon={ShieldCheck} text="会话过期自动识别并静默恢复，无需人工介入" />
             </CardContent>
           </Card>

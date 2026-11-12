@@ -311,6 +311,23 @@ export function SettingsPage() {
 
 // ---- 管理员面板：运行时配置（诊断开关 / 识别服务）----
 // 仅 role=admin 或单用户模式可到达；配置保存后服务端立即热生效。
+const GIB = 1024 ** 3;
+
+/** 字节 → 输入框里的 GB 数值（去掉无意义的尾零）。 */
+function formatGB(bytes: number): string {
+  const gb = bytes / GIB;
+  if (!Number.isFinite(gb) || gb <= 0) return "1";
+  return gb >= 10 ? String(Math.round(gb * 10) / 10) : gb.toFixed(2).replace(/\.?0+$/, "");
+}
+
+/** 字节 → 展示用容量（B / KB / MB / GB）。 */
+function formatStorage(bytes: number): string {
+  if (bytes >= GIB) return `${(bytes / GIB).toFixed(2).replace(/\.?0+$/, "")} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1).replace(/\.0$/, "")} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
 function AdminPanel() {
   const { toast } = useToast();
   const [cfg, setCfg] = useState<AdminConfig | null>(null);
@@ -321,6 +338,7 @@ function AdminPanel() {
   const [baseURL, setBaseURL] = useState("");
   const [model, setModel] = useState("");
   const [tlsHosts, setTlsHosts] = useState("");
+  const [poolLimitGB, setPoolLimitGB] = useState("1");
 
   const load = async () => {
     try {
@@ -330,6 +348,7 @@ function AdminPanel() {
       setBaseURL(res.vision.baseURL);
       setModel(res.vision.model);
       setTlsHosts(res.server.tlsInsecureHosts);
+      setPoolLimitGB(formatGB(res.photoPool.limitBytes));
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : "加载失败");
     }
@@ -366,6 +385,19 @@ function AdminPanel() {
       </Card>
     );
   }
+
+  const poolLimit = cfg?.photoPool.limitBytes ?? 0;
+  const poolUsed = cfg?.photoPool.usedBytes ?? 0;
+  const poolPct = poolLimit > 0 ? Math.min(100, Math.round((poolUsed / poolLimit) * 100)) : 0;
+
+  const savePoolLimit = () => {
+    const gb = Number(poolLimitGB);
+    if (!Number.isFinite(gb) || gb <= 0 || gb > 1024) {
+      toast({ title: "容量需在 1MB-1TB 之间", variant: "destructive" });
+      return;
+    }
+    void save({ photoPoolLimitBytes: Math.round(gb * GIB) }, "照片池容量已更新");
+  };
 
   return (
     <div className="grid items-start gap-5 lg:grid-cols-2">
@@ -490,6 +522,43 @@ function AdminPanel() {
               onCheckedChange={(v) => void save({ quotaEnabled: v }, v ? "额度体系已开启" : "额度体系已关闭")}
             />
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/50">
+        <CardHeader>
+          <CardTitle className="text-base">照片池容量</CardTitle>
+          <CardDescription>
+            所有账号照片池加在一起的磁盘上限（不含单张兜底照片），默认 1GB。
+            达到上限后新照片会被拒绝，已上传的照片不受影响。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">已用</span>
+              <span className="font-mono tabular-nums">
+                {formatStorage(poolUsed)} / {formatStorage(poolLimit)} · {cfg?.photoPool.photoCount ?? 0} 张
+              </span>
+            </div>
+            <div className="bg-muted h-1.5 overflow-hidden rounded-full">
+              <div className="bg-primary h-full rounded-full transition-all" style={{ width: `${poolPct}%` }} />
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground w-16 text-xs">容量上限</span>
+            <Input
+              value={poolLimitGB}
+              onChange={(e) => setPoolLimitGB(e.target.value)}
+              inputMode="decimal"
+              className="w-24"
+            />
+            <span className="text-muted-foreground text-xs">GB</span>
+            <Button variant="outline" size="sm" disabled={busy} onClick={savePoolLimit}>
+              保存
+            </Button>
+          </div>
+          <p className="text-muted-foreground text-[11px]">范围 1MB-1TB；例如 0.5 表示 512MB。</p>
         </CardContent>
       </Card>
 

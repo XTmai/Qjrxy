@@ -102,11 +102,21 @@ CREATE TABLE IF NOT EXISTS accounts (
 	lat            REAL NOT NULL DEFAULT 0,
 	abnormal       TEXT NOT NULL DEFAULT '在校',
 	photo_path     TEXT NOT NULL DEFAULT '',
+	photo_pool_cursor INTEGER NOT NULL DEFAULT 0,
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_user_school_user
 	ON accounts(user_id, school_name, username);
+
+CREATE TABLE IF NOT EXISTS account_photos (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+	path       TEXT NOT NULL,
+	created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_account_photos_account ON account_photos(account_id, id);
 
 CREATE TABLE IF NOT EXISTS account_tasks (
 	id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +149,7 @@ CREATE TABLE IF NOT EXISTS plans (
 	window_start  TEXT NOT NULL DEFAULT '00:10',
 	window_end    TEXT NOT NULL DEFAULT '23:30',
 	days          TEXT NOT NULL DEFAULT '[0,1,2,3,4,5,6]',
+	dates         TEXT NOT NULL DEFAULT '[]',
 	enabled       INTEGER NOT NULL DEFAULT 1,
 	last_run_at   TEXT NOT NULL DEFAULT '',
 	last_result   TEXT NOT NULL DEFAULT '',
@@ -176,6 +187,7 @@ func (db *DB) migrate() error {
 	// 增量迁移：老库补列（失败说明已存在，忽略）
 	for _, stmt := range []string{
 		`ALTER TABLE accounts ADD COLUMN tgc_enc TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE plans ADD COLUMN dates TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE accounts ADD COLUMN platform TEXT NOT NULL DEFAULT 'android'`,
 		`ALTER TABLE accounts ADD COLUMN wis_device_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE account_tasks ADD COLUMN stu_sign_wid TEXT NOT NULL DEFAULT ''`,
@@ -188,6 +200,7 @@ func (db *DB) migrate() error {
 		`ALTER TABLE accounts ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN last_probe_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN last_probe_msg TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE accounts ADD COLUMN photo_pool_cursor INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE logs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)

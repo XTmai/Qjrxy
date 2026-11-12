@@ -333,3 +333,32 @@ func TestScheduleWakeKeepsEarliest(t *testing.T) {
 		t.Error("清除唤醒后应允许执行")
 	}
 }
+
+// 指定日期优先：选了具体日期后只在这些天执行，星期设置失效。
+func TestShouldRunExplicitDates(t *testing.T) {
+	// 2026-11-13 是周五 -> 星期索引 4
+	friday := time.Date(2026, 11, 13, 21, 0, 0, 0, time.Local)
+
+	plan := store.Plan{Enabled: true, Mode: "school", Days: []int{0}, Dates: []string{"2026-11-13"}}
+	if !shouldRun(plan, friday) {
+		t.Error("日期命中时应执行（即使星期不匹配）")
+	}
+
+	plan.Dates = []string{"2026-11-14"}
+	if shouldRun(plan, friday) {
+		t.Error("日期未命中时不应执行，且不能回退到星期判断")
+	}
+
+	// 清空日期后回到星期语义
+	plan.Dates = nil
+	plan.Days = []int{4}
+	if !shouldRun(plan, friday) {
+		t.Error("无日期时应按星期执行")
+	}
+
+	// 当天已执行过不重复
+	plan.LastRunAt = "2026-11-13 21:00:00"
+	if shouldRun(plan, friday) {
+		t.Error("当天已执行过不应重复")
+	}
+}

@@ -80,8 +80,16 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/accounts/{id}/sms/login", s.withUser(s.handleSMSLogin))
 	mux.HandleFunc("POST /api/accounts/{id}/verify", s.withUser(s.handleVerifySession))
 	mux.HandleFunc("POST /api/accounts/probe", s.withUser(s.handleProbeAccounts))
+	// 导入导出（含登录态凭证，前端做二次确认）
+	mux.HandleFunc("GET /api/accounts/export", s.withUser(s.handleExportAccounts))
+	mux.HandleFunc("POST /api/accounts/import", s.withUser(s.handleImportAccounts))
 	mux.HandleFunc("POST /api/accounts/{id}/photo", s.withUser(s.handleUploadPhoto))
 	mux.HandleFunc("GET /api/accounts/{id}/photo", s.withUser(s.handleGetPhoto))
+	// 照片池：多张照片按上传顺序轮换
+	mux.HandleFunc("GET /api/accounts/{id}/photos", s.withUser(s.handleListAccountPhotos))
+	mux.HandleFunc("POST /api/accounts/{id}/photos", s.withUser(s.handleUploadAccountPhotos))
+	mux.HandleFunc("GET /api/accounts/{id}/photos/{photoId}", s.withUser(s.handleGetAccountPhoto))
+	mux.HandleFunc("DELETE /api/accounts/{id}/photos/{photoId}", s.withUser(s.handleDeleteAccountPhoto))
 	mux.HandleFunc("POST /api/accounts/{id}/device-ticket", s.withUser(s.handleDeviceTicket))
 	mux.HandleFunc("GET /api/device/poll/{ticket}", s.withUser(s.handleDevicePoll))
 	mux.HandleFunc("GET /api/accounts/{id}/sign-range", s.withUser(s.handleFetchRange))

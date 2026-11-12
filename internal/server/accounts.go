@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -20,6 +21,9 @@ type accountView struct {
 	store.Account
 	HasCookie bool   `json:"hasCookie"`
 	PhotoURL  string `json:"photoUrl"`
+	// PhotoPoolCount 是该账号照片池的数量；photoUrl 在单张为空时会
+	// 自动指向池内第一张，账号卡片/首页缩略图无需区分两种来源。
+	PhotoPoolCount int `json:"photoPoolCount"`
 }
 
 func toAccountView(a *store.Account) accountView {
@@ -28,6 +32,26 @@ func toAccountView(a *store.Account) accountView {
 		view.PhotoURL = "/api/accounts/" + itoa(a.ID) + "/photo"
 	}
 	return view
+}
+
+// applyPoolStats 把照片池数量与封面写进账号视图。
+func applyPoolStats(view *accountView, accountID int64, stats store.PhotoPoolStats) {
+	view.PhotoPoolCount = stats.Count
+	if view.PhotoURL == "" && stats.FirstID > 0 {
+		view.PhotoURL = accountPhotoURL(accountID, stats.FirstID)
+	}
+}
+
+// accountViews 批量填充照片池信息（一次 GROUP BY，避免逐账号查询）。
+func (s *Server) accountViews(ctx context.Context, userID int64, accounts []store.Account) []accountView {
+	stats, _ := s.svc.DB().PhotoPoolStatsByUser(ctx, userID)
+	views := make([]accountView, 0, len(accounts))
+	for i := range accounts {
+		view := toAccountView(&accounts[i])
+		applyPoolStats(&view, accounts[i].ID, stats[accounts[i].ID])
+		views = append(views, view)
+	}
+	return views
 }
 
 func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
@@ -41,11 +65,7 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	views := make([]accountView, 0, len(accounts))
-	for i := range accounts {
-		views = append(views, toAccountView(&accounts[i]))
-	}
-	writeData(w, http.StatusOK, map[string]any{"accounts": views})
+	writeData(w, http.StatusOK, map[string]any{"accounts": s.accountViews(r.Context(), user.ID, accounts)})
 }
 
 func (s *Server) handleCreateAccount(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +109,11 @@ func (s *Server) handleGetAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	detail := map[string]any{"account": toAccountView(account)}
+	view := toAccountView(account)
+	if stats, err := s.svc.DB().PhotoPoolStats(r.Context(), user.ID, account.ID); err == nil {
+		applyPoolStats(&view, account.ID, stats)
+	}
+	detail := map[string]any{"account": view}
 
 	// 附带该账号的待办任务（缓存）
 	if tasks, err := s.svc.DB().TasksByAccount(r.Context(), account.ID); err == nil {
@@ -137,6 +161,8 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// 账号行删除后池记录会级联清空；文件不受数据库约束，单独清理整目录。
+	s.svc.RemoveAccountPhotoDir(user.ID, id)
 	s.svc.Events().Publish(user.ID, events.TopicAccounts)
 	writeData(w, http.StatusOK, map[string]any{"message": "账号已删除"})
 }
@@ -351,7 +377,7 @@ func (s *Server) handleUploadPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 9<<20))
+	data, err := io.ReadAll(io.LimitReader(file, 6<<20))
 	if err != nil {
 		writeError(w, badRequest("读取照片失败"))
 		return
@@ -399,6 +425,11 @@ func (s *Server) handleGetPhoto(w http.ResponseWriter, r *http.Request) {
 		writeError(w, notFound("照片文件不存在"))
 		return
 	}
+	s.servePhotoFile(w, r, path)
+}
+
+// servePhotoFile 输出照片，支持 ?w= 缩略图与长缓存（单张与照片池共用）。
+func (s *Server) servePhotoFile(w http.ResponseWriter, r *http.Request, path string) {
 	// ?w=96/320 返回缩略图：手机原图通常 3-5MB / 3000×4000px，列表页 12 张
 	// 原图直出会让浏览器解码上亿像素，页面明显卡顿。缩略图按 JPEG 重新
 	// 编码（EXIF 方向已烘焙进像素），URL 带 t=updatedAt 版本号，可长缓存。

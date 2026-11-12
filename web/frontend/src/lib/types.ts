@@ -38,9 +38,18 @@ export interface Account {
   abnormal: string;
   photoPath: string;
   photoUrl?: string;
+  /** 照片池张数；photoUrl 在无单张照片时指向池内第一张作为封面 */
+  photoPoolCount?: number;
   hasCookie?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 照片池中的一张照片 */
+export interface AccountPhoto {
+  id: number;
+  url: string;
+  createdAt: string;
 }
 
 export interface School {
@@ -102,6 +111,8 @@ export interface Plan {
   windowStart: string;
   windowEnd: string;
   days: number[];
+  /** 指定日期（YYYY-MM-DD）；非空时只在这些天执行，星期设置失效 */
+  dates: string[];
   enabled: boolean;
   lastRunAt: string;
   lastResult: string;
@@ -120,6 +131,7 @@ export interface PlanInput {
   windowStart: string;
   windowEnd: string;
   days: number[];
+  dates: string[];
   enabled: boolean;
 }
 
@@ -239,6 +251,11 @@ export interface AdminConfig {
     quotaEnabled: boolean;
     tlsInsecureHosts: string;
   };
+  photoPool: {
+    limitBytes: number;
+    usedBytes: number;
+    photoCount: number;
+  };
 }
 
 export interface SignRange {
@@ -281,4 +298,35 @@ export interface LoginChallenge {
   needCaptcha?: boolean;
   captcha?: string;
   message?: string;
+}
+
+/** 账号导出文件里的一条记录（cookies/tgc 为登录态凭证） */
+export interface ExportAccount {
+  alias: string;
+  schoolName: string;
+  username: string;
+  deviceId: string;
+  deviceModel: string;
+  systemVersion: string;
+  platform: string;
+  wisDeviceId: string;
+  userAgent: string;
+  appVersion: string;
+  buildId: string;
+  address: string;
+  lon: number;
+  lat: number;
+  abnormalReason: string;
+  loginStatus: string;
+  lastLoginAt: string;
+  cookies?: Record<string, string>;
+  tgc?: string;
+  password?: string;
+}
+
+export interface ImportResult {
+  created: number;
+  updated: number;
+  failed: number;
+  items: { username: string; school: string; status: string; error?: string }[];
 }

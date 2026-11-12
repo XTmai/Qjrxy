@@ -34,6 +34,13 @@ type Service struct {
 
 	mu    sync.RWMutex
 	state map[string]*cpdaily.LoginState // loginTicket -> 登录中间态
+
+	// 学校入口解析缓存：批量导入时同一学校会重复出现，避免每次都打远端。
+	tenantMu    sync.Mutex
+	tenantCache map[string]*cpdaily.Tenant
+
+	// photoMu 串行化「容量检查 + 落盘」，避免并发上传同时通过上限检查。
+	photoMu sync.Mutex
 }
 
 // New 创建服务。
@@ -278,7 +285,10 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 	if (in.Lon != 0 || in.Lat != 0) && !validCoord(in.Lon, in.Lat) {
 		return nil, false, errors.New("经纬度超出有效范围")
 	}
-	tenant, err := cpdaily.ResolveTenant(ctx, in.SchoolName)
+	if err := validateDeviceInput(&in); err != nil {
+		return nil, false, err
+	}
+	tenant, err := s.resolveTenantCached(ctx, in.SchoolName)
 	if err != nil {
 		return nil, false, err
 	}
@@ -432,6 +442,11 @@ func (s *Service) UpdateAccount(ctx context.Context, userID, id int64, in Accoun
 		}
 		account.PasswordEnc = enc
 	}
+	if in.DeviceID != "" || in.UserAgent != "" {
+		if err := validateDeviceInput(&in); err != nil {
+			return nil, err
+		}
+	}
 	if in.DeviceID != "" {
 		account.DeviceID = strings.TrimSpace(in.DeviceID)
 	}
@@ -475,13 +490,82 @@ func (s *Service) UpdateAccount(ctx context.Context, userID, id int64, in Accoun
 	return account, nil
 }
 
-// SavePhoto 保存上传的照片到账号目录，返回相对路径。
+// PhotoPoolLimitKey 是管理员页保存的照片池总容量配置项。
+const PhotoPoolLimitKey = "photo.poolLimitBytes"
+
+// DefaultPhotoPoolLimitBytes 是照片池总容量默认上限（1GB）。
+const DefaultPhotoPoolLimitBytes int64 = 1 << 30
+
+// SavePhoto 保存上传的单张兜底照片到账号目录，返回相对路径。
 func (s *Service) SavePhoto(userID, accountID int64, filename string, data []byte) (string, error) {
+	dir := filepath.Join(s.cfg.PhotosDir(), fmt.Sprintf("%d_%d", userID, accountID))
+	return s.savePhotoFile(dir, filename, data)
+}
+
+// SavePoolPhoto 保存照片池中的一张，放在账号目录的 pool/ 子目录下。
+//
+// 全局容量上限（所有账号的照片池合计，默认 1GB）在这里统一执行：
+// 检查与落盘用 photoMu 串行化，避免并发上传同时通过检查。
+func (s *Service) SavePoolPhoto(ctx context.Context, userID, accountID int64, filename string, data []byte) (string, error) {
+	if _, err := validatePhoto(filename, data); err != nil {
+		return "", err
+	}
+	s.photoMu.Lock()
+	defer s.photoMu.Unlock()
+	limit := s.PhotoPoolLimit(ctx)
+	used, _ := s.PhotoPoolUsage()
+	if used+int64(len(data)) > limit {
+		return "", fmt.Errorf("照片池总容量已满（已用 %s，上限 %s）", formatStorage(used), formatStorage(limit))
+	}
+	dir := filepath.Join(s.cfg.PhotosDir(), fmt.Sprintf("%d_%d", userID, accountID), "pool")
+	return s.savePhotoFile(dir, filename, data)
+}
+
+// PhotoPoolLimit 返回照片池总容量上限；未配置或配置非法时用 1GB。
+func (s *Service) PhotoPoolLimit(ctx context.Context) int64 {
+	raw, _ := s.db.GetSetting(ctx, PhotoPoolLimitKey)
+	n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err == nil && n > 0 {
+		return n
+	}
+	return DefaultPhotoPoolLimitBytes
+}
+
+// PhotoPoolUsage 统计所有账号照片池的磁盘占用（不含单张兜底照片）。
+func (s *Service) PhotoPoolUsage() (used int64, count int) {
+	root := s.cfg.PhotosDir()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return 0, 0
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, entry.Name(), "pool"))
+		if err != nil {
+			continue
+		}
+		for _, file := range files {
+			if file.IsDir() {
+				continue
+			}
+			if info, err := file.Info(); err == nil {
+				used += info.Size()
+				count++
+			}
+		}
+	}
+	return used, count
+}
+
+// validatePhoto 校验大小与扩展名，返回归一化后的扩展名。
+func validatePhoto(filename string, data []byte) (string, error) {
 	if len(data) == 0 {
 		return "", errors.New("照片内容为空")
 	}
-	if len(data) > 8<<20 {
-		return "", errors.New("照片不能超过 8MB")
+	if len(data) > 5<<20 {
+		return "", errors.New("照片不能超过 5MB")
 	}
 	ext := strings.ToLower(filepath.Ext(filename))
 	switch ext {
@@ -489,15 +573,68 @@ func (s *Service) SavePhoto(userID, accountID int64, filename string, data []byt
 	default:
 		return "", errors.New("仅支持 jpg/png/webp 格式")
 	}
-	dir := filepath.Join(s.cfg.PhotosDir(), fmt.Sprintf("%d_%d", userID, accountID))
+	return ext, nil
+}
+
+// savePhotoFile 是单张照片与照片池共用的落盘逻辑（大小/格式校验）。
+func (s *Service) savePhotoFile(dir, filename string, data []byte) (string, error) {
+	ext, err := validatePhoto(filename, data)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	name := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+	abs := filepath.Join(dir, name)
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return "", err
 	}
-	return filepath.ToSlash(filepath.Join(fmt.Sprintf("%d_%d", userID, accountID), name)), nil
+	rel, err := filepath.Rel(s.cfg.PhotosDir(), abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// formatStorage 把字节数格式化成管理员/错误提示里易读的容量。
+func formatStorage(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.1fGB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.0fMB", float64(n)/(1<<20))
+	default:
+		return fmt.Sprintf("%dKB", (n+1023)/1024)
+	}
+}
+
+// runPhoto 为一次执行挑选照片：池优先、顺序轮换，池为空/文件失效时回退单张。
+//
+// 文件丢失的池记录会被顺手删除，避免每次执行都先撞一张坏图。
+func (s *Service) runPhoto(ctx context.Context, account *store.Account) (string, bool) {
+	for i := 0; i < 100; i++ {
+		photo, err := s.db.NextAccountPhoto(ctx, account.UserID, account.ID)
+		if err != nil || photo == nil {
+			break
+		}
+		abs := s.PhotoAbsPath(photo.Path)
+		if abs != "" && fileExists(abs) {
+			return abs, true
+		}
+		_ = os.Remove(abs)
+		_, _ = s.db.DeleteAccountPhoto(ctx, account.UserID, account.ID, photo.ID)
+	}
+	abs := s.PhotoAbsPath(account.PhotoPath)
+	if abs != "" && fileExists(abs) {
+		return abs, false
+	}
+	return "", false
+}
+
+// RemoveAccountPhotoDir 删除账号的照片目录（单张 + 照片池）。
+func (s *Service) RemoveAccountPhotoDir(userID, accountID int64) {
+	_ = os.RemoveAll(filepath.Join(s.cfg.PhotosDir(), fmt.Sprintf("%d_%d", userID, accountID)))
 }
 
 // PhotoAbsPath 把相对路径转成绝对路径。
@@ -532,6 +669,28 @@ func deviceProfile(a *store.Account, lon, lat float64) cpdaily.DeviceProfile {
 		Lon:           lon,
 		Lat:           lat,
 	}
+}
+
+// validateDeviceInput 校验手动填写/导入的设备字段。
+//
+// 设备 ID 是提交签到时 CpdailyInfo 里的 CpUUID，长度和字符集与 App 采集的
+// 一致；UA 原样透传给请求头，过长会让部分网关直接拒绝。
+func validateDeviceInput(in *AccountInput) error {
+	if id := strings.TrimSpace(in.DeviceID); id != "" {
+		if len(id) < 8 || len(id) > 128 {
+			return errors.New("设备 ID 长度需在 8-128 之间")
+		}
+		for _, r := range id {
+			if r <= 0x20 || r == 0x7f {
+				return errors.New("设备 ID 不能包含空白或控制字符")
+			}
+		}
+		in.DeviceID = id
+	}
+	if len(in.UserAgent) > 512 {
+		return errors.New("User-Agent 过长（最多 512 字符）")
+	}
+	return nil
 }
 
 // normalizePlatform 统一平台标识，仅支持 android / ios。

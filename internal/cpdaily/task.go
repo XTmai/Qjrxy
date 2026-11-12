@@ -560,14 +560,17 @@ func postMultipart(ctx context.Context, c *Client, target string, fields map[str
 
 // SignOptions 是一次签到所需的全部输入。
 type SignOptions struct {
-	Kind         TaskKind
-	Task         Task
-	Lon          float64
-	Lat          float64
-	Position     string
-	Abnormal     string
-	PhotoPath    string
-	UploadPhoto  bool
+	Kind      TaskKind
+	Task      Task
+	Lon       float64
+	Lat       float64
+	Position  string
+	Abnormal  string
+	PhotoPath string
+	// ResolvePhoto 在任务确实需要照片（detail.isPhoto=1）时才调用，
+	// 返回本次要上传的照片绝对路径。照片池的顺序轮换挂在它后面，
+	// 不需要照片的任务不会白白推进轮换。
+	ResolvePhoto func() (string, bool)
 	ExtraAnswers map[string]string // title -> content
 	// ManualCaptcha 在自动识别不可用时把九宫格交给用户点选。
 	// 只有「用户就在面板前」的执行路径（手动触发）才应该传，
@@ -611,10 +614,14 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 	}
 
 	if detail.IsPhoto.Int() == 1 {
-		if !opts.UploadPhoto {
-			return &SignResult{Success: false, Message: "该任务需要上传照片", Hint: "请先在账号设置中绑定照片"}, detail, nil
+		photoPath := opts.PhotoPath
+		if opts.ResolvePhoto != nil {
+			photoPath, _ = opts.ResolvePhoto()
 		}
-		_, preview, err := UploadPhoto(ctx, c, host, opts.Kind, opts.PhotoPath)
+		if photoPath == "" {
+			return &SignResult{Success: false, Message: "该任务需要上传照片", Hint: "请先在账号详情的「照片」页上传照片"}, detail, nil
+		}
+		_, preview, err := UploadPhoto(ctx, c, host, opts.Kind, photoPath)
 		if err != nil {
 			return nil, detail, err
 		}

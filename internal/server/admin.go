@@ -15,6 +15,7 @@ import (
 
 	"qjrxy/internal/diag"
 	"qjrxy/internal/secure"
+	"qjrxy/internal/service"
 	"qjrxy/internal/vision"
 )
 
@@ -49,23 +50,31 @@ type adminServer struct {
 	TLSInsecureHosts string `json:"tlsInsecureHosts"`
 }
 
+type adminPhotoPool struct {
+	LimitBytes int64 `json:"limitBytes"`
+	UsedBytes  int64 `json:"usedBytes"`
+	PhotoCount int   `json:"photoCount"`
+}
+
 type adminConfig struct {
-	DiagEnabled  bool        `json:"diagEnabled"`
-	DiagKeepDays int         `json:"diagKeepDays"`
-	Vision       adminVision `json:"vision"`
-	Server       adminServer `json:"server"`
+	DiagEnabled  bool           `json:"diagEnabled"`
+	DiagKeepDays int            `json:"diagKeepDays"`
+	Vision       adminVision    `json:"vision"`
+	Server       adminServer    `json:"server"`
+	PhotoPool    adminPhotoPool `json:"photoPool"`
 }
 
 type adminConfigUpdate struct {
-	DiagEnabled      *bool   `json:"diagEnabled"`
-	DiagKeepDays     *int    `json:"diagKeepDays"`
-	VisionAPIKey     *string `json:"visionApiKey"`
-	VisionBaseURL    *string `json:"visionBaseURL"`
-	VisionModel      *string `json:"visionModel"`
-	MultiUser        *bool   `json:"multiUser"`
-	RegisterOpen     *bool   `json:"registerOpen"`
-	QuotaEnabled     *bool   `json:"quotaEnabled"`
-	TLSInsecureHosts *string `json:"tlsInsecureHosts"`
+	DiagEnabled         *bool   `json:"diagEnabled"`
+	DiagKeepDays        *int    `json:"diagKeepDays"`
+	VisionAPIKey        *string `json:"visionApiKey"`
+	VisionBaseURL       *string `json:"visionBaseURL"`
+	VisionModel         *string `json:"visionModel"`
+	MultiUser           *bool   `json:"multiUser"`
+	RegisterOpen        *bool   `json:"registerOpen"`
+	QuotaEnabled        *bool   `json:"quotaEnabled"`
+	TLSInsecureHosts    *string `json:"tlsInsecureHosts"`
+	PhotoPoolLimitBytes *int64  `json:"photoPoolLimitBytes"`
 }
 
 // handleAdminGetConfig 返回当前运行时配置。
@@ -104,6 +113,7 @@ func (s *Server) handleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	poolUsed, poolCount := s.svc.PhotoPoolUsage()
 	writeData(w, http.StatusOK, adminConfig{
 		DiagEnabled:  diagOn,
 		DiagKeepDays: keep,
@@ -118,6 +128,11 @@ func (s *Server) handleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
 			RegisterOpen:     cfg.RegisterOpen,
 			QuotaEnabled:     cfg.QuotaEnabled,
 			TLSInsecureHosts: strings.Join(cfg.TLSInsecureHosts, ","),
+		},
+		PhotoPool: adminPhotoPool{
+			LimitBytes: s.svc.PhotoPoolLimit(ctx),
+			UsedBytes:  poolUsed,
+			PhotoCount: poolCount,
 		},
 	})
 }
@@ -239,6 +254,19 @@ func (s *Server) handleAdminSaveConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = append(changed, "证书白名单="+onOff(hosts != ""))
+	}
+	if in.PhotoPoolLimitBytes != nil {
+		limit := *in.PhotoPoolLimitBytes
+		// 1MB 下限避免把池子设成永远无法上传；1TB 上限防止误填天文数字。
+		if limit < 1<<20 || limit > 1<<40 {
+			writeError(w, badRequest("照片池总容量需在 1MB-1TB 之间"))
+			return
+		}
+		if err := s.svc.DB().SetSetting(ctx, service.PhotoPoolLimitKey, strconv.FormatInt(limit, 10)); err != nil {
+			writeError(w, err)
+			return
+		}
+		changed = append(changed, fmt.Sprintf("照片池上限=%dMB", limit>>20))
 	}
 
 	// 热生效：全部运行时配置从「settings > env」合并后重新注入。

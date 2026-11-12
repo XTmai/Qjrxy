@@ -8,6 +8,7 @@ import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { MonthCalendar } from "@/components/month-calendar";
 import { useCreatePlan, useDeletePlan, useResetPlan, useTogglePlan, useUpdatePlan } from "@/hooks/use-plans";
 import { describeDays, formatDateTime } from "@/lib/task";
 import type { Plan, PlanInput } from "@/lib/types";
@@ -56,7 +57,11 @@ export function PlanCard({ plan, onEdit }: { plan: Plan; onEdit?: (plan: Plan) =
         </p>
         <p>
           <span className="text-muted-foreground inline-block w-16">执行日期</span>
-          {describeDays(plan.days)}
+          {plan.dates?.length
+            ? `指定 ${plan.dates.length} 天（${plan.dates.slice(0, 3).map((d) => d.slice(5)).join("、")}${
+                plan.dates.length > 3 ? "…" : ""
+              }）`
+            : describeDays(plan.days)}
         </p>
         <p>
           <span className="text-muted-foreground inline-block w-16">最近执行</span>
@@ -137,6 +142,7 @@ export function PlanFormDialog({
   const [windowStart, setWindowStart] = useState(existing?.windowStart ?? "21:00");
   const [windowEnd, setWindowEnd] = useState(existing?.windowEnd ?? "23:00");
   const [days, setDays] = useState<number[]>(existing?.days ?? [0, 1, 2, 3, 4, 5, 6]);
+  const [dates, setDates] = useState<string[]>(existing?.dates ?? []);
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
   const [error, setError] = useState("");
 
@@ -146,8 +152,8 @@ export function PlanFormDialog({
 
   const save = () => {
     setError("");
-    if (!days.length) {
-      setError("请至少选择一天");
+    if (!days.length && !dates.length) {
+      setError("请至少选择一天或指定日期");
       return;
     }
     const payload: PlanInput = {
@@ -158,6 +164,7 @@ export function PlanFormDialog({
       windowStart,
       windowEnd,
       days,
+      dates,
       enabled,
     };
     const mutation = isEdit ? update.mutateAsync({ id: existing.id, input: payload }) : create.mutateAsync(payload);
@@ -237,6 +244,21 @@ export function PlanFormDialog({
                   {label}
                 </button>
               ))}
+            </div>
+          </Field>
+
+          <Field>
+            <FieldLabel>指定日期（可选）</FieldLabel>
+            <div className="border-border space-y-2 rounded-lg border p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-muted-foreground text-[11px]">
+                  选了具体日期后只在这些天执行，星期设置失效
+                </p>
+                <span className="text-muted-foreground text-[11px]">
+                  {dates.length > 0 ? `${dates.length} 天` : "留空按星期"}
+                </span>
+              </div>
+              <MonthCalendar value={dates} onChange={setDates} />
             </div>
           </Field>
 

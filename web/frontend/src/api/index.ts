@@ -1,7 +1,8 @@
 // API 端点集合，与 internal/server/router.go 的 34 条路由一一对应。
-import { http } from './client';
+import { getToken, http } from './client';
 import type {
   Account,
+  AccountPhoto,
   AdminConfig,
   AccountInput,
   AuditRow,
@@ -67,6 +68,14 @@ export const api = {
   uploadPhoto: (id: number, formData: FormData) =>
     http.post<{ account: Account }>(`/accounts/${id}/photo`, formData),
   photoUrl: (id: number) => `/api/accounts/${id}/photo`,
+  accountPhotos: (id: number) => http.get<{ photos: AccountPhoto[] }>(`/accounts/${id}/photos`),
+  uploadAccountPhotos: (id: number, formData: FormData) =>
+    http.post<{ photos: AccountPhoto[]; failed: { name: string; error: string }[] }>(
+      `/accounts/${id}/photos`,
+      formData,
+    ),
+  deleteAccountPhoto: (id: number, photoId: number) =>
+    http.del<{ message: string }>(`/accounts/${id}/photos/${photoId}`),
 
   // ---- 设备扫码 ----
   deviceTicket: (id: number) =>
@@ -104,6 +113,24 @@ export const api = {
   captchaPending: () => http.get<ManualCaptcha[]>('/captcha/pending'),
   captchaSubmit: (token: string, body: { cells?: number[]; action?: 'skip' | 'cancel' }) =>
     http.post<{ submitted: boolean }>(`/captcha/${token}`, body),
+
+  // ---- 账号导入导出 ----
+  // 导出的文件含登录态凭证，走原生 fetch 拿 blob（Authorization 头无法用 <a> 直接带）。
+  exportAccounts: async (opts: { format: 'json' | 'csv'; withSession: boolean; withPassword: boolean }) => {
+    const qs = new URLSearchParams({
+      format: opts.format,
+      withSession: opts.withSession ? '1' : '0',
+      withPassword: opts.withPassword ? '1' : '0',
+    });
+    const res = await fetch(`/api/accounts/export?${qs.toString()}`, {
+      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : undefined,
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error('导出失败');
+    return await res.blob();
+  },
+  importAccounts: (accounts: unknown[]) =>
+    http.post<{ created: number; updated: number; failed: number; items: any[] }>('/accounts/import', { accounts }),
 
   // ---- 计划 ----
   plans: () => http.get<{ plans: Plan[] }>('/plans'),
@@ -152,5 +179,6 @@ export const api = {
     registerOpen?: boolean;
     quotaEnabled?: boolean;
     tlsInsecureHosts?: string;
+    photoPoolLimitBytes?: number;
   }) => http.post<{ message: string; token?: string }>('/admin/config', payload),
 };

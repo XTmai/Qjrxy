@@ -9,34 +9,36 @@ import (
 
 // Plan 是自动签到/查寝计划。
 type Plan struct {
-	ID           int64  `json:"id"`
-	UserID       int64  `json:"userId"`
-	AccountID    int64  `json:"accountId"`
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	Mode         string `json:"mode"` // school = 跟随学校下发时间；custom = 自定义时段
-	WindowStart  string `json:"windowStart"`
-	WindowEnd    string `json:"windowEnd"`
-	Days         []int  `json:"days"`
-	Enabled      bool   `json:"enabled"`
-	LastRunAt    string `json:"lastRunAt"`
-	LastResult   string `json:"lastResult"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
-	AccountAlias string `json:"accountAlias,omitempty"`
-	SchoolName   string `json:"schoolName,omitempty"`
-	Username     string `json:"accountUsername,omitempty"`
+	ID          int64  `json:"id"`
+	UserID      int64  `json:"userId"`
+	AccountID   int64  `json:"accountId"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Mode        string `json:"mode"` // school = 跟随学校下发时间；custom = 自定义时段
+	WindowStart string `json:"windowStart"`
+	WindowEnd   string `json:"windowEnd"`
+	Days        []int  `json:"days"`
+	// Dates 是指定日期（"2006-01-02"）；非空时只在这些天执行，星期设置失效。
+	Dates        []string `json:"dates"`
+	Enabled      bool     `json:"enabled"`
+	LastRunAt    string   `json:"lastRunAt"`
+	LastResult   string   `json:"lastResult"`
+	CreatedAt    string   `json:"createdAt"`
+	UpdatedAt    string   `json:"updatedAt"`
+	AccountAlias string   `json:"accountAlias,omitempty"`
+	SchoolName   string   `json:"schoolName,omitempty"`
+	Username     string   `json:"accountUsername,omitempty"`
 }
 
 const planColumns = `p.id, p.user_id, p.account_id, p.name, p.kind, p.mode, p.window_start, p.window_end,
-	p.days, p.enabled, p.last_run_at, p.last_result, p.created_at, p.updated_at`
+	p.days, p.dates, p.enabled, p.last_run_at, p.last_result, p.created_at, p.updated_at`
 
 func scanPlan(scanner interface{ Scan(...any) error }) (*Plan, error) {
 	var p Plan
-	var days string
+	var days, dates string
 	var enabled int
 	err := scanner.Scan(&p.ID, &p.UserID, &p.AccountID, &p.Name, &p.Kind, &p.Mode, &p.WindowStart,
-		&p.WindowEnd, &days, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt)
+		&p.WindowEnd, &days, &dates, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -48,7 +50,17 @@ func scanPlan(scanner interface{ Scan(...any) error }) (*Plan, error) {
 	if p.Days == nil {
 		p.Days = []int{0, 1, 2, 3, 4, 5, 6}
 	}
+	_ = json.Unmarshal([]byte(dates), &p.Dates)
 	return &p, nil
+}
+
+// encodeDates 序列化指定日期数组；空数组保持 "[]"（表示按星期）。
+func encodeDates(dates []string) string {
+	if dates == nil {
+		dates = []string{}
+	}
+	buf, _ := json.Marshal(dates)
+	return string(buf)
 }
 
 func encodeDays(days []int) string {
@@ -68,11 +80,11 @@ func (db *DB) CreatePlan(ctx context.Context, p *Plan) (*Plan, error) {
 		enabled = 1
 	}
 	res, err := db.ExecContext(ctx, `
-		INSERT INTO plans (user_id, account_id, name, kind, mode, window_start, window_end, days, enabled,
+		INSERT INTO plans (user_id, account_id, name, kind, mode, window_start, window_end, days, dates, enabled,
 			last_run_at, last_result, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,'','',?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,'','',?,?)`,
 		p.UserID, p.AccountID, p.Name, p.Kind, p.Mode, p.WindowStart, p.WindowEnd,
-		encodeDays(p.Days), enabled, p.CreatedAt, p.UpdatedAt)
+		encodeDays(p.Days), encodeDates(p.Dates), enabled, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -89,10 +101,10 @@ func (db *DB) UpdatePlan(ctx context.Context, p *Plan) error {
 	p.UpdatedAt = now()
 	res, err := db.ExecContext(ctx, `
 		UPDATE plans SET account_id = ?, name = ?, kind = ?, mode = ?, window_start = ?, window_end = ?,
-			days = ?, enabled = ?, updated_at = ?
+			days = ?, dates = ?, enabled = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
 		p.AccountID, p.Name, p.Kind, p.Mode, p.WindowStart, p.WindowEnd, encodeDays(p.Days),
-		enabled, p.UpdatedAt, p.ID, p.UserID)
+		encodeDates(p.Dates), enabled, p.UpdatedAt, p.ID, p.UserID)
 	if err != nil {
 		return err
 	}
@@ -145,10 +157,10 @@ func (db *DB) ListPlans(ctx context.Context, userID int64) ([]Plan, error) {
 	out := []Plan{}
 	for rows.Next() {
 		var p Plan
-		var days string
+		var days, dates string
 		var enabled int
 		if err := rows.Scan(&p.ID, &p.UserID, &p.AccountID, &p.Name, &p.Kind, &p.Mode, &p.WindowStart,
-			&p.WindowEnd, &days, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt,
+			&p.WindowEnd, &days, &dates, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt,
 			&p.AccountAlias, &p.SchoolName, &p.Username); err != nil {
 			return nil, err
 		}
@@ -157,6 +169,7 @@ func (db *DB) ListPlans(ctx context.Context, userID int64) ([]Plan, error) {
 		if p.Days == nil {
 			p.Days = []int{0, 1, 2, 3, 4, 5, 6}
 		}
+		_ = json.Unmarshal([]byte(dates), &p.Dates)
 		out = append(out, p)
 	}
 	return out, rows.Err()
@@ -212,10 +225,10 @@ func (db *DB) PlanByID(ctx context.Context, userID, id int64) (*Plan, error) {
 		FROM plans p JOIN accounts a ON a.id = p.account_id
 		WHERE p.id = ? AND p.user_id = ?`, id, userID)
 	var p Plan
-	var days string
+	var days, dates string
 	var enabled int
 	err := row.Scan(&p.ID, &p.UserID, &p.AccountID, &p.Name, &p.Kind, &p.Mode, &p.WindowStart,
-		&p.WindowEnd, &days, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt,
+		&p.WindowEnd, &days, &dates, &enabled, &p.LastRunAt, &p.LastResult, &p.CreatedAt, &p.UpdatedAt,
 		&p.AccountAlias, &p.SchoolName, &p.Username)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

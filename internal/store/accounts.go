@@ -188,6 +188,17 @@ func (db *DB) UpdateAccountSession(ctx context.Context, id int64, cookies, statu
 	return err
 }
 
+// UpdateAccountTGC 只更新续期票据。
+//
+// 不能拿账号结构体整体 UpdateAccount：导入时先写 cookies、再写 tgc，
+// 结构体里的 cookies 还是创建时的旧值（空），会把刚写入的登录态覆盖掉。
+func (db *DB) UpdateAccountTGC(ctx context.Context, id int64, tgcEnc string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE accounts SET tgc_enc = ?, updated_at = ? WHERE id = ?`,
+		tgcEnc, now(), id)
+	return err
+}
+
 // RecordProbe 记录一次登录态探测的结果。
 func (db *DB) RecordProbe(ctx context.Context, id int64, status, message string) error {
 	_, err := db.ExecContext(ctx,

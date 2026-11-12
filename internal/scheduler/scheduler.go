@@ -217,17 +217,32 @@ func shouldRun(plan store.Plan, now time.Time) bool {
 	if !plan.Enabled {
 		return false
 	}
-	// 星期过滤（0 = 周一）
-	day := (int(now.Weekday()) + 6) % 7
-	matched := false
-	for _, d := range plan.Days {
-		if d == day {
-			matched = true
-			break
+	// 指定日期优先：一旦选了具体日期，只在那些天执行，星期设置失效。
+	if len(plan.Dates) > 0 {
+		today := now.Format("2006-01-02")
+		matched := false
+		for _, d := range plan.Dates {
+			if d == today {
+				matched = true
+				break
+			}
 		}
-	}
-	if !matched {
-		return false
+		if !matched {
+			return false
+		}
+	} else {
+		// 星期过滤（0 = 周一）
+		day := (int(now.Weekday()) + 6) % 7
+		matched := false
+		for _, d := range plan.Days {
+			if d == day {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
 	}
 	// 当天已执行过就不再重复
 	if strings.HasPrefix(plan.LastRunAt, now.Format("2006-01-02")) {

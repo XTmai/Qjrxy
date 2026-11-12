@@ -1,5 +1,5 @@
-// 账号详情：任务 / 计划 / 记录 / 设备 四个 tab（shadcn 版）。
-import { useEffect, useRef, useState } from "react";
+// 账号详情：任务 / 计划 / 记录 / 照片 / 设置 五个 tab（shadcn 版）。
+import { useEffect, useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,26 +15,42 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-import { Bot, Check, ChevronRight, ImageIcon, Loader2, LogIn, MapPin, QrCode } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ChevronRight,
+  ClipboardPaste,
+  Loader2,
+  LogIn,
+  MapPin,
+  QrCode,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime, relativeTime, taskState, taskTime } from "@/lib/task";
 import { api } from "@/api";
-import type { Account, RunLog, RunOutcome, Task } from "@/lib/types";
+import type { Account, AccountPhoto, RunLog, RunOutcome, Task } from "@/lib/types";
 import { LoginBadge, RunStatusBadge, TaskStateBadge } from "@/components/status-badge";
 import { PlansTab } from "./plans";
+import { PhotoTab } from "./photo-pool";
 import { DeviceScanDialog } from "./device-scan-dialog";
+import { DeviceManualDialog } from "./device-manual-dialog";
 import { SchoolLoginDialog } from "./school-login-dialog";
 import { LocationDialog } from "./location-dialog";
 
+export type DetailTab = "tasks" | "plans" | "records" | "photos" | "device";
+
 interface Props {
   account: Account;
+  initialTab?: DetailTab;
   onClose: (deleted: boolean) => void;
 }
 
-export function AccountDetail({ account, onClose }: Props) {
+export function AccountDetail({ account, initialTab = "tasks", onClose }: Props) {
   // 弹窗内维护账号快照：上传照片/登录/设置位置后立即刷新，无需重开弹窗或刷新页面
   const [current, setCurrent] = useState<Account>(account);
-  const [tab, setTab] = useState("tasks");
+  const [tab, setTab] = useState<DetailTab>(initialTab);
+  const [photos, setPhotos] = useState<AccountPhoto[]>([]);
+  const [photosLoading, setPhotosLoading] = useState(true);
 
   const refreshAccount = async () => {
     try {
@@ -45,9 +61,28 @@ export function AccountDetail({ account, onClose }: Props) {
     }
   };
 
+  const loadPhotos = async () => {
+    try {
+      const { photos: list } = await api.accountPhotos(account.id);
+      setPhotos(list);
+    } catch {
+      /* 读取失败时保留已加载内容 */
+    } finally {
+      setPhotosLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setPhotosLoading(true);
+    void loadPhotos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account.id]);
+
+  const poolCount = photosLoading ? (current.photoPoolCount ?? 0) : photos.length;
+  const hasPhoto = Boolean(current.photoUrl) || poolCount > 0;
   const needsLogin = current.loginStatus !== "authorized";
   const needsDevice = !current.deviceId;
-  const needsPhoto = !current.photoUrl;
+  const needsPhoto = !photosLoading && !hasPhoto;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose(false)}>
@@ -72,8 +107,8 @@ export function AccountDetail({ account, onClose }: Props) {
             <Badge variant={current.deviceId ? "secondary" : "warning"}>
               {current.deviceId ? current.deviceModel || "设备已绑定" : "设备未绑定"}
             </Badge>
-            <Badge variant={current.photoUrl ? "secondary" : "warning"}>
-              {current.photoUrl ? "已传照片" : "无照片"}
+            <Badge variant={hasPhoto ? "secondary" : "warning"}>
+              {poolCount > 0 ? `照片池 ${poolCount} 张` : current.photoUrl ? "已传照片" : "无照片"}
             </Badge>
             {current.address && <Badge variant="secondary">{current.address}</Badge>}
           </div>
@@ -95,7 +130,7 @@ export function AccountDetail({ account, onClose }: Props) {
                 </Button>
               )}
               {needsPhoto && (
-                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("device")}>
+                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("photos")}>
                   上传照片
                 </Button>
               )}
@@ -103,7 +138,7 @@ export function AccountDetail({ account, onClose }: Props) {
           </div>
         )}
 
-        <Tabs value={tab} onValueChange={setTab}>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as DetailTab)}>
           <TabsList className="bg-muted/50 w-full p-1">
             <TabsTrigger value="tasks" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               查寝任务
@@ -113,6 +148,9 @@ export function AccountDetail({ account, onClose }: Props) {
             </TabsTrigger>
             <TabsTrigger value="records" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               执行记录
+            </TabsTrigger>
+            <TabsTrigger value="photos" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
+              照片
             </TabsTrigger>
             <TabsTrigger value="device" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
               设置
@@ -127,6 +165,17 @@ export function AccountDetail({ account, onClose }: Props) {
           </TabsContent>
           <TabsContent value="records" className="m-0">
             <LogsTab accountId={account.id} />
+          </TabsContent>
+          <TabsContent value="photos" className="m-0">
+            <PhotoTab
+              account={current}
+              photos={photos}
+              loading={photosLoading}
+              onReload={loadPhotos}
+              onChanged={() => {
+                void refreshAccount();
+              }}
+            />
           </TabsContent>
           <TabsContent value="device" className="m-0">
             <DeviceTab account={current} onChanged={refreshAccount} onDeleted={() => onClose(true)} />
@@ -428,27 +477,9 @@ function DeviceTab({
   const { toast } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
   const [showScan, setShowScan] = useState(false);
+  const [showManual, setShowManual] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showLocation, setShowLocation] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [photoVersion, setPhotoVersion] = useState(Date.now());
-
-  const uploadPhoto = async (file: File) => {
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.append("photo", file);
-      await api.uploadPhoto(account.id, fd);
-      setPhotoVersion(Date.now()); // 强制刷新 img 缓存
-      toast({ title: "照片已上传", description: "已生效，可直接执行查寝" });
-      onChanged();
-    } catch (e) {
-      toast({ title: "上传失败", description: e instanceof Error ? e.message : undefined, variant: "destructive" });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const remove = async () => {
     try {
@@ -470,6 +501,16 @@ function DeviceTab({
       icon: QrCode,
       done: Boolean(account.deviceId),
       run: () => setShowScan(true),
+    },
+    {
+      key: "manual",
+      title: "手动填写设备信息",
+      desc: account.deviceId
+        ? `当前 ${account.deviceId.slice(0, 8)}… · 可粘贴设备 ID 与 UA`
+        : "扫码拿不到时，手动粘贴设备 ID / UA 等字段",
+      icon: ClipboardPaste,
+      done: false,
+      run: () => setShowManual(true),
     },
     {
       key: "login",
@@ -496,39 +537,18 @@ function DeviceTab({
       done: Boolean(account.address || (account.lon && account.lat)),
       run: () => setShowLocation(true),
     },
-    {
-      key: "photo",
-      title: account.photoUrl ? "更换签到照片" : "上传签到照片",
-      desc: account.photoUrl ? "已上传，查寝时自动使用" : "查寝要求照片时必须上传",
-      icon: ImageIcon,
-      done: Boolean(account.photoUrl),
-      run: () => fileRef.current?.click(),
-    },
   ];
 
   return (
     <div className="space-y-3 py-3">
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void uploadPhoto(f);
-          e.target.value = "";
-        }}
-      />
-
       {/* 操作列表：每项说明状态 + 点击即执行 */}
       <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
         {actions.map((a) => (
           <button
             key={a.key}
             type="button"
-            disabled={busy}
             onClick={a.run}
-            className="hover:bg-muted/50 flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors disabled:opacity-50"
+            className="hover:bg-muted/50 flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors"
           >
             <span
               className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${
@@ -550,22 +570,7 @@ function DeviceTab({
         ))}
       </div>
 
-      {/* 照片预览 */}
-      {account.photoUrl && (
-        <div className="border-border flex gap-3 rounded-lg border p-3">
-          <img
-            src={`${account.photoUrl}?w=320&t=${photoVersion}`}
-            alt="签到照片"
-            loading="lazy"
-            decoding="async"
-            className="size-20 shrink-0 rounded-lg border object-cover"
-          />
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium">签到照片</p>
-            <p className="text-muted-foreground mt-0.5 text-[11px]">查寝提交时自动上传到学校</p>
-          </div>
-        </div>
-      )}
+      {/* 照片已迁到独立的「照片」tab：池 + 单张兜底 */}
 
       <Button
         variant="ghost"
@@ -606,6 +611,16 @@ function DeviceTab({
               toast({ title: "位置已保存" });
               onChanged();
             }
+          }}
+        />
+      )}
+
+      {showManual && (
+        <DeviceManualDialog
+          account={account}
+          onClose={(changed) => {
+            setShowManual(false);
+            if (changed) onChanged();
           }}
         />
       )}

@@ -3,10 +3,12 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 
 	"qjrxy/internal/config"
+	"qjrxy/internal/service"
 )
 
 // 管理员接口的权限三态：role=admin 放行、role=user 拒绝、单用户模式放行。
@@ -106,5 +108,41 @@ func TestAdminConfigSingleUserAllowed(t *testing.T) {
 	status, body := env.do(t, "GET", "/api/admin/config", nil, "")
 	if status != 200 {
 		t.Fatalf("单用户模式访问管理员接口应 200，得到 %d %v", status, body)
+	}
+}
+
+// TestAdminPhotoPoolLimit 校验管理员可设置照片池全局容量，并立即回读。
+func TestAdminPhotoPoolLimit(t *testing.T) {
+	env := newEnv(t)
+	status, body := env.do(t, "GET", "/api/admin/config", nil, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("读取配置失败：%d", status)
+	}
+	data, _ := body["data"].(map[string]any)
+	pool, _ := data["photoPool"].(map[string]any)
+	if pool == nil || pool["limitBytes"].(float64) != float64(service.DefaultPhotoPoolLimitBytes) {
+		t.Fatalf("默认照片池上限应为 1GB，得到 %v", pool)
+	}
+
+	limit := int64(2 << 30)
+	status, body = env.do(t, "POST", "/api/admin/config",
+		map[string]any{"photoPoolLimitBytes": limit}, env.token)
+	if status != http.StatusOK {
+		t.Fatalf("保存上限失败：%d %v", status, body)
+	}
+	_, body = env.do(t, "GET", "/api/admin/config", nil, env.token)
+	data, _ = body["data"].(map[string]any)
+	pool, _ = data["photoPool"].(map[string]any)
+	if pool["limitBytes"].(float64) != float64(limit) {
+		t.Errorf("上限未生效：%v", pool)
+	}
+	if v, _ := env.db.GetSetting(context.Background(), service.PhotoPoolLimitKey); v != "2147483648" {
+		t.Errorf("settings 未落库：%q", v)
+	}
+
+	status, _ = env.do(t, "POST", "/api/admin/config",
+		map[string]any{"photoPoolLimitBytes": 0}, env.token)
+	if status != http.StatusBadRequest {
+		t.Errorf("非法上限应 400，得到 %d", status)
 	}
 }

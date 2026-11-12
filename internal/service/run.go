@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"qjrxy/internal/cpdaily"
@@ -97,14 +98,15 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	// 提交可能耗时几十秒，不该等接口返回才让用户看到。
 	defer s.notify(opts.UserID, events.TopicLogs)
 
-	photoPath := s.PhotoAbsPath(account.PhotoPath)
-	hasPhoto := photoPath != "" && fileExists(photoPath)
-
 	client := s.clientFor(account)
 	// 坐标加入 10 米以内的随机偏移，避免每天同一坐标值过于规律；
 	// 偏移量远小于签到点半径（通常 300~1500 米），不影响范围判定。
 	lon, lat := jitterCoord(account.Lon, account.Lat)
 	device := deviceProfile(account, lon, lat)
+	// 照片在任务确实需要时才取（照片池按上传顺序轮换）；
+	// 自动重登后会再调一次 Sign，用 Once 保证同一次执行复用同一张。
+	var photoOnce sync.Once
+	var resolvedPhoto string
 	signOpts := cpdaily.SignOptions{
 		Kind: cpdaily.TaskKind(task.Kind),
 		Task: cpdaily.Task{
@@ -113,12 +115,16 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 			SignWID:         task.SignWID,
 			TaskName:        task.TaskName,
 		},
-		Lon:         lon,
-		Lat:         lat,
-		Position:    account.Address,
-		Abnormal:    account.Abnormal,
-		PhotoPath:   photoPath,
-		UploadPhoto: hasPhoto,
+		Lon:      lon,
+		Lat:      lat,
+		Position: account.Address,
+		Abnormal: account.Abnormal,
+		ResolvePhoto: func() (string, bool) {
+			photoOnce.Do(func() {
+				resolvedPhoto, _ = s.runPhoto(ctx, account)
+			})
+			return resolvedPhoto, resolvedPhoto != ""
+		},
 	}
 	// 手动执行时允许「自动识别失败 → 弹窗让用户点」。
 	// 定时任务不注入：那个时间点通常没人看屏幕，等满 100 秒只是白占资源。

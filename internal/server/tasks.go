@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -159,14 +160,15 @@ func (s *Server) hasQuota(w http.ResponseWriter, r *http.Request, user *store.Us
 // ---------- 计划 ----------
 
 type planRequest struct {
-	AccountID   int64  `json:"accountId"`
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Mode        string `json:"mode"`
-	WindowStart string `json:"windowStart"`
-	WindowEnd   string `json:"windowEnd"`
-	Days        []int  `json:"days"`
-	Enabled     *bool  `json:"enabled"`
+	AccountID   int64    `json:"accountId"`
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind"`
+	Mode        string   `json:"mode"`
+	WindowStart string   `json:"windowStart"`
+	WindowEnd   string   `json:"windowEnd"`
+	Days        []int    `json:"days"`
+	Dates       []string `json:"dates"`
+	Enabled     *bool    `json:"enabled"`
 }
 
 func (s *Server) handleListPlans(w http.ResponseWriter, r *http.Request) {
@@ -336,6 +338,10 @@ func (s *Server) planFromRequest(r *http.Request, userID, existingID int64, req 
 			enabled = current.Enabled
 		}
 	}
+	dates, err := normalizeDates(req.Dates)
+	if err != nil {
+		return nil, err
+	}
 	plan := &store.Plan{
 		ID:          existingID,
 		UserID:      userID,
@@ -346,9 +352,35 @@ func (s *Server) planFromRequest(r *http.Request, userID, existingID int64, req 
 		WindowStart: defaultStr(req.WindowStart, "00:10"),
 		WindowEnd:   defaultStr(req.WindowEnd, "23:30"),
 		Days:        normalizeDays(req.Days),
+		Dates:       dates,
 		Enabled:     enabled,
 	}
 	return plan, nil
+}
+
+// normalizeDates 校验指定日期（YYYY-MM-DD），去重排序；空数组表示按星期执行。
+func normalizeDates(dates []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(dates))
+	for _, raw := range dates {
+		d := strings.TrimSpace(raw)
+		if d == "" {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02", d); err != nil {
+			return nil, badRequest("指定日期格式应为 YYYY-MM-DD：" + d)
+		}
+		if seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	if len(out) > 366 {
+		return nil, badRequest("指定日期最多 366 天")
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func normalizeDays(days []int) []int {
@@ -460,11 +492,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	plans, _ := s.svc.DB().ListPlans(ctx, user.ID)
 	logs, _, _ := s.svc.DB().ListLogs(ctx, store.LogFilter{UserID: user.ID, Limit: 6})
 
-	views := make([]accountView, 0, len(accounts))
+	views := s.accountViews(ctx, user.ID, accounts)
 	pending := 0
-	for i := range accounts {
-		views = append(views, toAccountView(&accounts[i]))
-	}
 	for _, t := range tasks {
 		if t.Status != "done" {
 			pending++
