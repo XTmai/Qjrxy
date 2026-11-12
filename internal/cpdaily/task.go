@@ -569,6 +569,10 @@ type SignOptions struct {
 	PhotoPath    string
 	UploadPhoto  bool
 	ExtraAnswers map[string]string // title -> content
+	// ManualCaptcha 在自动识别不可用时把九宫格交给用户点选。
+	// 只有「用户就在面板前」的执行路径（手动触发）才应该传，
+	// 定时任务传 nil，否则会挂起一个永远没人处理的等待。
+	ManualCaptcha ManualCaptchaFunc
 }
 
 // SignResult 是提交结果。
@@ -578,6 +582,9 @@ type SignResult struct {
 	Message string `json:"message"`
 	Hint    string `json:"hint"`
 	Payload string `json:"-"`
+	// CaptchaBy 记录这次验证码是谁解出来的："auto" 模型识别，
+	// "manual" 用户点选。审计里要看得出人工介入过。
+	CaptchaBy string `json:"captchaBy,omitempty"`
 }
 
 // Sign 执行完整签到流程：拉详情 → 组表单 → 加密 → 提交。
@@ -655,7 +662,7 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 		form["qrUuid"] = ""
 	}
 
-	result, err := c.submit(ctx, host, tenantID, device, opts.Kind, form)
+	result, err := c.submit(ctx, host, tenantID, device, opts.Kind, form, opts.ManualCaptcha)
 	if err != nil {
 		if ae, ok := err.(*APIError); ok {
 			return &SignResult{
@@ -668,19 +675,150 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 	return result, detail, nil
 }
 
-// submit 组装加密请求并提交。
-func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any) (*SignResult, error) {
-	endpoints := EndpointsFor(kind)
-
-	// 部分学校的任务在提交前要求通过「以图判图」验证码：通过后服务端
-	// 签发一次性 ticket，必须进提交体一起参与 AES + sign，否则被以
-	// 「验证码验签失败」(2210060000) 拒绝。没开启的学校 checkValidation
-	// 会返回 validation=false，这里直接跳过。
-	if ticket, err := c.captchaTicketFor(ctx, host, kind, device.DeviceID); err != nil {
-		return &SignResult{Success: false, Message: "验证码处理失败", Hint: err.Error()}, nil
-	} else if ticket != "" {
+// submit 提交签到。
+//
+// 部分学校的任务要求「以图判图」验证码：通过后服务端签发一次性
+// ticket，必须随提交体一起参与 AES + sign，否则被 2210060000 拒绝。
+//
+// 三段式，兼顾「不拖慢绝大多数学校」与「不让验证码学校白失败一次」：
+//
+//  1. 先问一次 checkValidation，但只给很短的超时。绝大多数学校在这里
+//     就返回 validation=false，随后正常提交，不会多出一次失败提交
+//     （失败提交会在学校侧留下一条记录，风控上也不干净）。
+//  2. checkValidation 说需要验证码，就先换 ticket 再提交——一次成功。
+//  3. checkValidation 超时/报错，或说不需要但服务端仍然拒绝（2210060000），
+//     再按需补一次验证码流程并重试。这条兜底是必须的：实测存在
+//     checkValidation 与提交判定不一致的部署。
+func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any, manual ManualCaptchaFunc) (*SignResult, error) {
+	if ticket, byManual, cerr, handled := c.tryCaptchaBeforeSubmit(ctx, host, kind, device.DeviceID, manual); handled {
+		if ticket == "" {
+			// 用户取消、或验证码没解开：不要再提交一次，避免产生无意义失败。
+			return captchaAbortResult(cerr, byManual), nil
+		}
 		form["ticket"] = ticket
+		result, err := c.submitOnce(ctx, host, tenantID, device, kind, form)
+		if err != nil || result == nil {
+			return result, err
+		}
+		// 已经用新鲜 ticket 提交过一次；再失败就不再重复整条验证码链路，
+		// 把服务端结果原样交回（连续两次被拒通常不是「再解一次」能解决的）。
+		result.CaptchaBy = captchaBy(byManual)
+		return result, nil
 	}
+
+	result, err := c.submitOnce(ctx, host, tenantID, device, kind, form)
+	if err != nil || result == nil || result.Success || !needsCaptcha(result) {
+		return result, err
+	}
+	ticket, byManual, cerr := c.captchaTicketFor(ctx, host, kind, device.DeviceID, manual)
+	if cerr != nil {
+		// 用户取消手动验证：不要伪装成提交失败，给一条能看懂的收尾。
+		if errors.Is(cerr, ErrManualCaptchaAborted) {
+			return &SignResult{
+				Success: false,
+				Code:    result.Code,
+				Message: cerr.Error(),
+				Hint:    "本次签到未完成，需要时请重新执行",
+				Payload: result.Payload,
+			}, nil
+		}
+		// 学校侧状态自相矛盾：提交要 ticket，checkValidation 又说不需要。
+		// 把服务端原始结果交回去，用户至少能看到真实原因。
+		if errors.Is(cerr, errCaptchaNotRequired) {
+			return result, nil
+		}
+		return &SignResult{
+			Success: false,
+			Code:    result.Code,
+			Message: "验证码处理失败",
+			Hint:    cerr.Error(),
+			Payload: result.Payload,
+		}, nil
+	}
+	if ticket == "" {
+		// 没拿到 ticket 就不要再提交一次，把服务端原始结果交回去
+		return result, nil
+	}
+	form["ticket"] = ticket
+	retry, rerr := c.submitOnce(ctx, host, tenantID, device, kind, form)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if retry != nil {
+		retry.CaptchaBy = captchaBy(byManual)
+	}
+	return retry, nil
+}
+
+// tryCaptchaBeforeSubmit 在提交前用一次短超时的 checkValidation 探路。
+//
+// handled=true 表示这次已经处理过验证码：ticket 非空就带着提交；
+// ticket 为空（用户取消 / 解不开）由调用方按未完成收尾。
+// handled=false 表示可以直接按原样提交——不需要验证码，或探测失败。
+//
+// 探测失败一律降级为「直接提交」：checkValidation 只是优化，不该因为
+// 它慢或抽风就阻塞签到。这条降级路径让 99% 的学校只多花一次小请求。
+func (c *Client) tryCaptchaBeforeSubmit(ctx context.Context, host string, kind TaskKind, deviceID string, manual ManualCaptchaFunc) (ticket string, byManual bool, cerr error, handled bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, captchaProbeTimeout)
+	defer cancel()
+
+	ch, err := CheckCaptchaValidation(probeCtx, c, host, kind, deviceID)
+	if err != nil || ch == nil {
+		return "", false, nil, false
+	}
+	if !ch.Required {
+		return "", false, nil, false
+	}
+	t, m, serr := c.solveCaptcha(ctx, host, ch, deviceID, manual)
+	if serr != nil {
+		return "", m, serr, true
+	}
+	return t, m, nil, true
+}
+
+// captchaAbortResult 是「确认要验证码、但没拿到 ticket」时的最终结果。
+func captchaAbortResult(cause error, byManual bool) *SignResult {
+	msg := "验证码未完成"
+	hint := "本次签到未完成，需要时请重新执行"
+	if cause != nil {
+		msg = cause.Error()
+		if errors.Is(cause, ErrManualCaptchaAborted) {
+			hint = "本次签到未完成，需要时请重新执行"
+		} else {
+			hint = "验证码处理失败：" + cause.Error()
+		}
+	}
+	return &SignResult{
+		Success:   false,
+		Message:   msg,
+		Hint:      hint,
+		CaptchaBy: captchaBy(byManual),
+	}
+}
+
+// captchaBy 把「谁解的验证码」翻成审计字段。
+func captchaBy(byManual bool) string {
+	if byManual {
+		return "manual"
+	}
+	return "auto"
+}
+
+// needsCaptcha 判断本次失败是否因为缺少验证码 ticket。
+// 业务码优先；个别学校返回的 code 不稳定，message 里带「验证码」也认。
+func needsCaptcha(r *SignResult) bool {
+	if r == nil {
+		return false
+	}
+	if r.Code == captchaRequiredCode {
+		return true
+	}
+	return strings.Contains(r.Message, "验证码")
+}
+
+// submitOnce 是一次完整的提交：加密、签名、发请求、解析结果。
+func (c *Client) submitOnce(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any) (*SignResult, error) {
+	endpoints := EndpointsFor(kind)
 
 	body, err := json.Marshal(form)
 	if err != nil {
@@ -879,6 +1017,9 @@ func ExplainFailure(code, message string) string {
 			"或先用那台手机在今日校园正常签到一次，也可联系辅导员在「辅导猫 → 手机授权管理」中授权"
 	case strings.Contains(message, "版本过低"):
 		return "服务端拒绝了本次请求（提示版本过低），通常是加密密钥或客户端版本已轮换，请更新服务端配置"
+	case code == captchaRequiredCode || strings.Contains(message, "验证码"):
+		return "该校签到需要图形验证码。手动执行时面板会弹窗让你选出目标图片；" +
+			"定时任务请先在管理员设置里配置识别服务，否则到点只能失败"
 	case code == "4":
 		return "服务端无法解析提交内容，请检查账号、设备信息与签到点是否匹配"
 	case strings.Contains(message, "范围"):

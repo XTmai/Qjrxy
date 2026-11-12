@@ -151,6 +151,19 @@ func (c *Client) absorb(resp *http.Response) {
 }
 
 func (c *Client) do(ctx context.Context, method, rawURL string, headers map[string]string, body io.Reader) (*http.Response, error) {
+	return c.doRequest(ctx, method, rawURL, headers, body, true)
+}
+
+// doNoCookie 用于对方不该拿到会话票据的请求。
+//
+// 典型场景是验证码图片：地址由学校服务端下发，可能指向
+// wecloud-captcha.campusphere.net 这类 CDN 域。把 MOD_AUTH_CAS
+// 送过去既无必要，也等于把登录票据泄露给第三方主机。
+func (c *Client) doNoCookie(ctx context.Context, method, rawURL string, headers map[string]string, body io.Reader) (*http.Response, error) {
+	return c.doRequest(ctx, method, rawURL, headers, body, false)
+}
+
+func (c *Client) doRequest(ctx context.Context, method, rawURL string, headers map[string]string, body io.Reader, withCookie bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
 		return nil, err
@@ -160,7 +173,7 @@ func (c *Client) do(ctx context.Context, method, rawURL string, headers map[stri
 	}
 	// 调用方显式给了 Cookie（如 iOS 原生客户端需要手工拼 MOD_AUTH_CAS）时不覆盖，
 	// 否则会把服务端要求的会话票冲掉，导致返回登录页 HTML。
-	if req.Header.Get("Cookie") == "" {
+	if withCookie && req.Header.Get("Cookie") == "" {
 		if cookie := c.CookieString(); cookie != "" {
 			req.Header.Set("Cookie", cookie)
 		}
@@ -179,14 +192,19 @@ func (c *Client) do(ctx context.Context, method, rawURL string, headers map[stri
 	// SessionToken），服务端据此做长期认证。只带 Cookie 的话服务端只能按
 	// CAS 票判定，票约 12 小时绝对过期 → 被判登录失效（返回登录页 HTML）。
 	// 这里统一注入，所有请求路径都受益；iOS 与 App 行为一致只带头。
-	if token := c.cookies["sessionToken"]; token != "" {
-		if enc, err := DESEncrypt(token, desKeyToken); err == nil {
-			if req.Header.Get("sessionTokenKey") == "" {
-				req.Header.Set("sessionTokenKey", enc)
-			}
-			if !strings.Contains(req.Header.Get("User-Agent"), "iPhone") &&
-				req.Header.Get("SessionToken") == "" {
-				req.Header.Set("SessionToken", enc)
+	//
+	// 但 withCookie=false 的请求（验证码图片等第三方域）必须跳过：它们
+	// 不属于校园接口，不该拿到任何账号凭证。
+	if withCookie {
+		if token := c.cookies["sessionToken"]; token != "" {
+			if enc, err := DESEncrypt(token, desKeyToken); err == nil {
+				if req.Header.Get("sessionTokenKey") == "" {
+					req.Header.Set("sessionTokenKey", enc)
+				}
+				if !strings.Contains(req.Header.Get("User-Agent"), "iPhone") &&
+					req.Header.Get("SessionToken") == "" {
+					req.Header.Set("SessionToken", enc)
+				}
 			}
 		}
 	}
