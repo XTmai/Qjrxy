@@ -113,7 +113,11 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	// 期间用户刷新页面、切后台都会断开这个请求。若沿用 r.Context()，
 	// 断线会让后续的 validate 与提交全部以 context canceled 失败，
 	// 用户明明点完了却显示没签上。
-	runCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Minute)
+	//
+	// 预算按最坏情况留足：验证码最多重试 3 轮，每轮含一次模型识别
+	// （服务端超时 60s）加上重试等待，再叠加 100s 人工等待，3 分钟会
+	// 在第二轮模型超时时就被打断。6 分钟仍远小于用户可接受的等待上限。
+	runCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 6*time.Minute)
 	defer cancel()
 	outcome, err := s.svc.RunTask(runCtx, service.RunOptions{
 		UserID:    user.ID,

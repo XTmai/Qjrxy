@@ -50,12 +50,8 @@ func TestSubmitFallsBackToManualWhenVisionUnavailable(t *testing.T) {
 		_, _ = io.WriteString(w, `{"result":"TICKET-MANUAL"}`)
 	})
 	mux.HandleFunc("/wec-counselor-sign-apps/stu/sign/submitSign", func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&submitCalls, 1)
+		atomic.AddInt32(&submitCalls, 1)
 		_, _ = io.Copy(io.Discard, r.Body)
-		if n == 1 {
-			_, _ = io.WriteString(w, `{"code":"2210060000","message":"验证码验签失败"}`)
-			return
-		}
 		_, _ = io.WriteString(w, `{"code":"0","message":"SUCCESS"}`)
 	})
 	srv := httptest.NewTLSServer(mux)
@@ -103,12 +99,15 @@ func TestSubmitFallsBackToManualWhenVisionUnavailable(t *testing.T) {
 	if got := atomic.LoadInt32(&createCalls); got != 1 {
 		t.Fatalf("人工一次点选只应 create 一次，实际 %d", got)
 	}
-	if got := atomic.LoadInt32(&submitCalls); got != 2 {
-		t.Fatalf("提交次数应为 2，实际 %d", got)
+	if got := atomic.LoadInt32(&submitCalls); got != 1 {
+		t.Fatalf("先解验证码再提交，提交次数应为 1，实际 %d", got)
 	}
 }
 
-// 用户点「取消」后立即结束，不再弹第二次，也不再重新提交。
+// 用户点「取消」后立即结束，不再弹第二次，也不再提交。
+//
+// 新流程下 checkValidation 探路就已经知道要验证码，用户取消时还
+// 一次提交都没发出——比旧流程更干净，不会在学校侧留下失败记录。
 func TestSubmitManualCancelAbortsWithoutRetry(t *testing.T) {
 	var submitCalls, createCalls int32
 	img := capSolidPNG(t, 24, 24, color.RGBA{B: 200, A: 255})
@@ -163,8 +162,8 @@ func TestSubmitManualCancelAbortsWithoutRetry(t *testing.T) {
 	if !strings.Contains(res.Message, "取消") {
 		t.Fatalf("应说明是用户取消，实际 msg=%q hint=%q", res.Message, res.Hint)
 	}
-	if got := atomic.LoadInt32(&submitCalls); got != 1 {
-		t.Fatalf("取消后不应重新提交，实际 %d 次", got)
+	if got := atomic.LoadInt32(&submitCalls); got != 0 {
+		t.Fatalf("取消后不应提交，实际 %d 次", got)
 	}
 	if got := atomic.LoadInt32(&createCalls); got != 1 {
 		t.Fatalf("取消后不应刷新验证码，create 实际 %d 次", got)
@@ -197,12 +196,8 @@ func TestSubmitManualSkipRefreshesChallenge(t *testing.T) {
 	})
 	var submitCalls int32
 	mux.HandleFunc("/wec-counselor-sign-apps/stu/sign/submitSign", func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&submitCalls, 1)
+		atomic.AddInt32(&submitCalls, 1)
 		_, _ = io.Copy(io.Discard, r.Body)
-		if n == 1 {
-			_, _ = io.WriteString(w, `{"code":"2210060000","message":"验证码验签失败"}`)
-			return
-		}
 		_, _ = io.WriteString(w, `{"code":"0","message":"SUCCESS"}`)
 	})
 	srv := httptest.NewTLSServer(mux)
@@ -213,10 +208,15 @@ func TestSubmitManualSkipRefreshesChallenge(t *testing.T) {
 	defer vision.Configure(old.APIKey, old.BaseURL, old.Model)
 	vision.Configure("", "", "")
 
-	// 把 16 秒的重试等待压到 1ms，测试不该真的睡过去。
+	// 把两种重试等待都压到 1ms，测试不该真的睡过去。
 	oldWait := captchaRetryWait
+	oldRecognize := captchaRecognizeRetryWait
 	captchaRetryWait = time.Millisecond
-	defer func() { captchaRetryWait = oldWait }()
+	captchaRecognizeRetryWait = time.Millisecond
+	defer func() {
+		captchaRetryWait = oldWait
+		captchaRecognizeRetryWait = oldRecognize
+	}()
 
 	hc := srv.Client()
 	hc.Timeout = 5 * time.Second

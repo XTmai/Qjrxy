@@ -679,9 +679,33 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 //
 // 部分学校的任务要求「以图判图」验证码：通过后服务端签发一次性
 // ticket，必须随提交体一起参与 AES + sign，否则被 2210060000 拒绝。
-// 这里先按原样提交，只有服务端明确要验证码时才补一次——不需要
-// 验证码的学校，请求序列与引入该功能前完全一致，不多一次往返。
+//
+// 三段式，兼顾「不拖慢绝大多数学校」与「不让验证码学校白失败一次」：
+//
+//  1. 先问一次 checkValidation，但只给很短的超时。绝大多数学校在这里
+//     就返回 validation=false，随后正常提交，不会多出一次失败提交
+//     （失败提交会在学校侧留下一条记录，风控上也不干净）。
+//  2. checkValidation 说需要验证码，就先换 ticket 再提交——一次成功。
+//  3. checkValidation 超时/报错，或说不需要但服务端仍然拒绝（2210060000），
+//     再按需补一次验证码流程并重试。这条兜底是必须的：实测存在
+//     checkValidation 与提交判定不一致的部署。
 func (c *Client) submit(ctx context.Context, host, tenantID string, device DeviceProfile, kind TaskKind, form map[string]any, manual ManualCaptchaFunc) (*SignResult, error) {
+	if ticket, byManual, cerr, handled := c.tryCaptchaBeforeSubmit(ctx, host, kind, device.DeviceID, manual); handled {
+		if ticket == "" {
+			// 用户取消、或验证码没解开：不要再提交一次，避免产生无意义失败。
+			return captchaAbortResult(cerr, byManual), nil
+		}
+		form["ticket"] = ticket
+		result, err := c.submitOnce(ctx, host, tenantID, device, kind, form)
+		if err != nil || result == nil {
+			return result, err
+		}
+		// 已经用新鲜 ticket 提交过一次；再失败就不再重复整条验证码链路，
+		// 把服务端结果原样交回（连续两次被拒通常不是「再解一次」能解决的）。
+		result.CaptchaBy = captchaBy(byManual)
+		return result, nil
+	}
+
 	result, err := c.submitOnce(ctx, host, tenantID, device, kind, form)
 	if err != nil || result == nil || result.Success || !needsCaptcha(result) {
 		return result, err
@@ -721,13 +745,63 @@ func (c *Client) submit(ctx context.Context, host, tenantID string, device Devic
 		return nil, rerr
 	}
 	if retry != nil {
-		// 带上「这次验证码是谁解的」：审计里要能区分人工介入与模型识别。
-		retry.CaptchaBy = "auto"
-		if byManual {
-			retry.CaptchaBy = "manual"
-		}
+		retry.CaptchaBy = captchaBy(byManual)
 	}
 	return retry, nil
+}
+
+// tryCaptchaBeforeSubmit 在提交前用一次短超时的 checkValidation 探路。
+//
+// handled=true 表示这次已经处理过验证码：ticket 非空就带着提交；
+// ticket 为空（用户取消 / 解不开）由调用方按未完成收尾。
+// handled=false 表示可以直接按原样提交——不需要验证码，或探测失败。
+//
+// 探测失败一律降级为「直接提交」：checkValidation 只是优化，不该因为
+// 它慢或抽风就阻塞签到。这条降级路径让 99% 的学校只多花一次小请求。
+func (c *Client) tryCaptchaBeforeSubmit(ctx context.Context, host string, kind TaskKind, deviceID string, manual ManualCaptchaFunc) (ticket string, byManual bool, cerr error, handled bool) {
+	probeCtx, cancel := context.WithTimeout(ctx, captchaProbeTimeout)
+	defer cancel()
+
+	ch, err := CheckCaptchaValidation(probeCtx, c, host, kind, deviceID)
+	if err != nil || ch == nil {
+		return "", false, nil, false
+	}
+	if !ch.Required {
+		return "", false, nil, false
+	}
+	t, m, serr := c.solveCaptcha(ctx, host, ch, deviceID, manual)
+	if serr != nil {
+		return "", m, serr, true
+	}
+	return t, m, nil, true
+}
+
+// captchaAbortResult 是「确认要验证码、但没拿到 ticket」时的最终结果。
+func captchaAbortResult(cause error, byManual bool) *SignResult {
+	msg := "验证码未完成"
+	hint := "本次签到未完成，需要时请重新执行"
+	if cause != nil {
+		msg = cause.Error()
+		if errors.Is(cause, ErrManualCaptchaAborted) {
+			hint = "本次签到未完成，需要时请重新执行"
+		} else {
+			hint = "验证码处理失败：" + cause.Error()
+		}
+	}
+	return &SignResult{
+		Success:   false,
+		Message:   msg,
+		Hint:      hint,
+		CaptchaBy: captchaBy(byManual),
+	}
+}
+
+// captchaBy 把「谁解的验证码」翻成审计字段。
+func captchaBy(byManual bool) string {
+	if byManual {
+		return "manual"
+	}
+	return "auto"
 }
 
 // needsCaptcha 判断本次失败是否因为缺少验证码 ticket。

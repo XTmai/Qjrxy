@@ -2,11 +2,16 @@ package cpdaily
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/png"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -102,4 +107,55 @@ func capSolidPNG(t *testing.T, w, h int, c color.RGBA) []byte {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
+}
+
+// 验证码图片必须不带会话 Cookie：图片在独立 CDN 域上，
+// 把 MOD_AUTH_CAS 发过去等于泄露登录票据给第三方主机。
+func TestCaptchaImageRequestOmitsSessionCookie(t *testing.T) {
+	var gotCookie, gotReferer string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/img/x.png", func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		gotReferer = r.Header.Get("Referer")
+		_, _ = w.Write(capSolidPNG(t, 8, 8, color.RGBA{A: 255}))
+	})
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	hc := srv.Client()
+	c := NewClient(ClientOptions{HTTPClient: hc}, map[string]string{
+		"MOD_AUTH_CAS": "secret-ticket",
+		"sessionToken": "secret-session",
+	})
+	if _, err := c.fetchCaptchaImage(context.Background(), srv.URL+"/img/x.png"); err != nil {
+		t.Fatalf("下载图片失败：%v", err)
+	}
+	if gotCookie != "" {
+		t.Fatalf("图片请求不应携带会话 Cookie，实际 %q", gotCookie)
+	}
+	if !strings.HasPrefix(gotReferer, srv.URL) {
+		t.Fatalf("应带上图片域名自身的 Referer，实际 %q", gotReferer)
+	}
+}
+
+// 业务接口仍然要带 Cookie——不能因为图片那条改了就把会话弄丢。
+func TestBusinessRequestKeepsSessionCookie(t *testing.T) {
+	var gotCookie string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+		gotCookie = r.Header.Get("Cookie")
+		_, _ = io.WriteString(w, `{"code":"0"}`)
+	})
+	srv := httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	c := NewClient(ClientOptions{HTTPClient: srv.Client()}, map[string]string{"MOD_AUTH_CAS": "ticket-1"})
+	resp, err := c.do(context.Background(), http.MethodGet, srv.URL+"/api/ping", nil, nil)
+	if err != nil {
+		t.Fatalf("请求失败：%v", err)
+	}
+	defer resp.Body.Close()
+	if !strings.Contains(gotCookie, "MOD_AUTH_CAS=ticket-1") {
+		t.Fatalf("业务请求应携带会话 Cookie，实际 %q", gotCookie)
+	}
 }

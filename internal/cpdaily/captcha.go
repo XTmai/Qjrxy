@@ -16,6 +16,7 @@ import (
 	"math"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,21 @@ const (
 // captchaRetryWait 是服务端要求的最小刷新间隔（15s，留 1s 余量）。
 // 声明为变量只为让测试把它压到毫秒级，业务代码不应改写。
 var captchaRetryWait = 16 * time.Second
+
+// captchaProbeTimeout 是提交前 checkValidation 探路的超时。
+//
+// 它只用于「这次要不要验证码」这一个判断：正常响应是几十毫秒的小 JSON。
+// 给太短会误判成"不需要"（随后提交白失败一次），给太长又会让抽风的学校
+// 拖住整个签到——参考实现里没有超时，实测会白等 40 秒。5 秒是折中。
+// 声明为变量只为让测试把它压到毫秒级，业务代码不应改写。
+var captchaProbeTimeout = 5 * time.Second
+
+// captchaRecognizeRetryWait 是「识别失败、换一张重来」的间隔。
+//
+// 与 validate 失败不同：识别失败时服务端还没开始计时，只需要让用户/模型
+// 换一张图。参考实现这里只等 5-6 秒，而 validate 失败要等 16-20 秒
+// （服务端限制）。分成两种间隔能少等三分之一。
+var captchaRecognizeRetryWait = 5 * time.Second
 
 // checkValidationURL 按任务类型返回验证码检查接口。
 func checkValidationURL(host string, kind TaskKind) string {
@@ -228,12 +244,19 @@ func parseCaptchaCreate(out map[string]json.RawMessage) (*captchaCreateResult, e
 }
 
 // fetchCaptchaImage 下载一张候选图。
+//
+// 图片在独立的 CDN 域上（如 wecloud-captcha.campusphere.net），只需要
+// 图片本身，不需要业务会话——因此不发送 Cookie，避免把 MOD_AUTH_CAS
+// 交给第三方主机。部分部署按 Referer 做防盗链，带上图片自身的来源域。
 func (c *Client) fetchCaptchaImage(ctx context.Context, rawURL string) (image.Image, error) {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return nil, fmt.Errorf("验证码图片地址不合法：%s", truncateStr(rawURL, 80))
 	}
-	headers := map[string]string{"Accept": "image/*"}
-	resp, err := c.do(ctx, http.MethodGet, rawURL, headers, nil)
+	headers := map[string]string{
+		"Accept":  "image/*",
+		"Referer": refererOf(rawURL),
+	}
+	resp, err := c.doNoCookie(ctx, http.MethodGet, rawURL, headers, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +269,16 @@ func (c *Client) fetchCaptchaImage(ctx context.Context, rawURL string) (image.Im
 		return nil, fmt.Errorf("解码验证码图片失败：%w", err)
 	}
 	return img, nil
+}
+
+// refererOf 用图片地址的协议 + 主机作为 Referer，只保留来源域，
+// 不把具体图片路径再带回去。
+func refererOf(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/"
 }
 
 // fetchCaptchaImages 并发下载 9 张候选图。下载失败的格子留空（白底），
@@ -395,17 +428,24 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 	}
 	var lastErr error
 	usedManual := false
+	// validate 失败才需要等满服务端的 15 秒刷新限制；识别失败时服务端
+	// 还没开始计时，换一张只要几秒。区分开来能少等三分之一。
+	validateRejected := false
 	for try := 0; try < captchaMaxTry; try++ {
 		if try > 0 {
-			// 服务端要求刷新间隔 ≥15s；固定值容易被判定为脚本，
-			// 这里按尝试次数做小幅错开。
-			wait := captchaRetryWait + time.Duration(try*1500)*time.Millisecond
+			wait := captchaRecognizeRetryWait
+			if validateRejected {
+				wait = captchaRetryWait
+			}
+			// 按尝试次数小幅错开，避免固定的整点间隔显得像脚本。
+			wait += time.Duration(try*1500) * time.Millisecond
 			select {
 			case <-ctx.Done():
 				return "", usedManual, ctx.Err()
 			case <-time.After(wait):
 			}
 		}
+		validateRejected = false
 		// ① create：拿 9 张候选图、目标词与会话码
 		createOut, err := c.captchaPost(ctx, base+"create/scenesImage", deviceID, baseFields)
 		if err != nil {
@@ -464,11 +504,13 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 		validateOut, err := c.captchaPost(ctx, base+"validate/scenesImage", deviceID, fields)
 		if err != nil {
 			lastErr = err
+			validateRejected = true
 			continue
 		}
 		ticket := jsonString(validateOut, "result")
 		if ticket == "" {
 			lastErr = errors.New("验证码校验未通过：" + flattenJSON(validateOut))
+			validateRejected = true
 			continue
 		}
 		return ticket, usedManual, nil

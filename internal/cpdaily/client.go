@@ -151,6 +151,19 @@ func (c *Client) absorb(resp *http.Response) {
 }
 
 func (c *Client) do(ctx context.Context, method, rawURL string, headers map[string]string, body io.Reader) (*http.Response, error) {
+	return c.doRequest(ctx, method, rawURL, headers, body, true)
+}
+
+// doNoCookie 用于对方不该拿到会话票据的请求。
+//
+// 典型场景是验证码图片：地址由学校服务端下发，可能指向
+// wecloud-captcha.campusphere.net 这类 CDN 域。把 MOD_AUTH_CAS
+// 送过去既无必要，也等于把登录票据泄露给第三方主机。
+func (c *Client) doNoCookie(ctx context.Context, method, rawURL string, headers map[string]string, body io.Reader) (*http.Response, error) {
+	return c.doRequest(ctx, method, rawURL, headers, body, false)
+}
+
+func (c *Client) doRequest(ctx context.Context, method, rawURL string, headers map[string]string, body io.Reader, withCookie bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
 		return nil, err
@@ -160,7 +173,7 @@ func (c *Client) do(ctx context.Context, method, rawURL string, headers map[stri
 	}
 	// 调用方显式给了 Cookie（如 iOS 原生客户端需要手工拼 MOD_AUTH_CAS）时不覆盖，
 	// 否则会把服务端要求的会话票冲掉，导致返回登录页 HTML。
-	if req.Header.Get("Cookie") == "" {
+	if withCookie && req.Header.Get("Cookie") == "" {
 		if cookie := c.CookieString(); cookie != "" {
 			req.Header.Set("Cookie", cookie)
 		}

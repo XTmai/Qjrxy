@@ -427,8 +427,8 @@ function AdminPanel() {
               <Input value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder="https://api.deepseek.com" />
             </Field>
             <Field>
-              <FieldLabel>模型（可选，默认 deepseek-v4.1-flash）</FieldLabel>
-              <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-v4.1-flash" />
+              <FieldLabel>模型（可选，默认 deepseek-flash）</FieldLabel>
+              <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-flash" />
             </Field>
           </div>
           <Button
