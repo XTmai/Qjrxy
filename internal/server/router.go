@@ -80,6 +80,9 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/accounts/{id}/sms/login", s.withUser(s.handleSMSLogin))
 	mux.HandleFunc("POST /api/accounts/{id}/verify", s.withUser(s.handleVerifySession))
 	mux.HandleFunc("POST /api/accounts/probe", s.withUser(s.handleProbeAccounts))
+	// QR 扫码登录（官方 connect/qrcode/jsLogin 流程）
+	mux.HandleFunc("POST /api/accounts/qr-login/start", s.withUser(s.handleQRLoginStart))
+	mux.HandleFunc("POST /api/accounts/qr-login/poll", s.withUser(s.handleQRLoginPoll))
 	// 导入导出（含登录态凭证，前端做二次确认）
 	mux.HandleFunc("GET /api/accounts/export", s.withUser(s.handleExportAccounts))
 	mux.HandleFunc("POST /api/accounts/import", s.withUser(s.handleImportAccounts))

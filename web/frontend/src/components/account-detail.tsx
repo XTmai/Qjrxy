@@ -35,6 +35,7 @@ import { PhotoTab } from "./photo-pool";
 import { DeviceScanDialog } from "./device-scan-dialog";
 import { DeviceManualDialog } from "./device-manual-dialog";
 import { SchoolLoginDialog } from "./school-login-dialog";
+import { QRLoginDialog } from "./qr-login-dialog";
 import { LocationDialog } from "./location-dialog";
 
 export type DetailTab = "tasks" | "plans" | "records" | "photos" | "device";
@@ -479,6 +480,7 @@ function DeviceTab({
   const [showScan, setShowScan] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
+  const [showQRLogin, setShowQRLogin] = useState(false);
   const [showLocation, setShowLocation] = useState(false);
 
   const remove = async () => {
@@ -596,6 +598,18 @@ function DeviceTab({
             setShowLogin(false);
             if (loggedIn) {
               toast({ title: "登录成功" });
+              onChanged();
+            }
+          }}
+        />
+      )}
+
+      {showQRLogin && (
+        <QRLoginDialog
+          onClose={(loggedIn) => {
+            setShowQRLogin(false);
+            if (loggedIn) {
+              toast({ title: "扫码登录成功" });
               onChanged();
             }
           }}

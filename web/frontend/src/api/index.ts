@@ -77,6 +77,18 @@ export const api = {
   deleteAccountPhoto: (id: number, photoId: number) =>
     http.del<{ message: string }>(`/accounts/${id}/photos/${photoId}`),
 
+  // ---- QR 扫码登录 ----
+  qrLoginStart: (body: { schoolName?: string }) =>
+    http.post<{ ticket: string; qrImage: string; qrId: string; expiresAt: string }>(
+      "/accounts/qr-login/start",
+      body,
+    ),
+  qrLoginPoll: (body: { ticket: string }) =>
+    http.post<{ status: string; account?: Account }>(
+      "/accounts/qr-login/poll",
+      body,
+    ),
+
   // ---- 设备扫码 ----
   deviceTicket: (id: number) =>
     http.post<{ ticket: string; url: string; expiresAt: string; qrcode: string }>(
