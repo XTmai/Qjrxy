@@ -6,6 +6,7 @@ import { useUser, useInfo } from "@/hooks/use-auth";
 import { useAccounts } from "@/hooks/use-accounts";
 import { useLiveUpdates } from "@/hooks/use-live-updates";
 import { CaptchaChallengeDialog } from "@/components/captcha-challenge-dialog";
+import { LogoGlyph } from "@/components/logo-mark";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLiveStore } from "@/stores/live-store";
 import {
@@ -74,11 +75,14 @@ const statusColors: Record<string, string> = {
 
 function SidebarLogo() {
   const { open } = useSidebar();
+  // 收起时 logo 是唯一可见的品牌元素，用主色块承载；
+  // 展开时与文字并排，直接用前景色，跟随亮/暗主题。
+  // 22px 下用单字版本：四字网格会糊成一团，见 logo-mark.tsx 的注释。
   if (open) {
     return (
       <div className="flex items-center gap-2.5">
-        <span className="bg-primary text-primary-foreground flex size-8 items-center justify-center rounded-md text-sm font-bold">
-          Q
+        <span className="bg-primary text-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
+          <LogoGlyph className="size-[20px]" />
         </span>
         <div className="leading-tight">
           <p className="tracking-headline text-[13px] font-semibold">Qjrxy</p>
@@ -88,8 +92,8 @@ function SidebarLogo() {
     );
   }
   return (
-    <span className="bg-primary text-primary-foreground mx-auto flex size-8 items-center justify-center rounded-md text-sm font-bold">
-      Q
+    <span className="bg-primary text-primary-foreground mx-auto flex size-8 items-center justify-center rounded-md">
+      <LogoGlyph className="size-[20px]" />
     </span>
   );
 }
