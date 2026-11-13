@@ -1,5 +1,8 @@
 // 扫码登录：用今日校园 App 扫 QR 获取登录态（无需密码/验证码）。
 // 基于官方 connect/qrcode/jsLogin 流程，所有学校通用。
+//
+// 注意：campushoy 的二维码实际 TTL 约 60 秒。弹窗内每 50 秒自动换一张新码，
+// 否则用户从电脑切到手机 App 的时间里码就过期了。
 import { useEffect, useRef, useState } from "react";
 import { Loader2, QrCode } from "lucide-react";
 
@@ -21,46 +24,93 @@ interface Props {
 
 type QRState = "loading" | "waiting" | "scanned" | "success" | "expired" | "error";
 
+/** 提前于 campushoy 的约 60 秒 TTL 刷新 */
+const REFRESH_SECONDS = 50;
+
 export function QRLoginDialog({ schoolName, onClose }: Props) {
   const [state, setState] = useState<QRState>("loading");
   const [qrImage, setQrImage] = useState("");
   const [error, setError] = useState("");
+  const [seconds, setSeconds] = useState(REFRESH_SECONDS);
   const ticketRef = useRef("");
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopRef = useRef(false);
+  const startingRef = useRef(false);
+  const stateRef = useRef<QRState>("loading");
 
-  // 启动扫码登录
-  const start = async () => {
-    setState("loading");
+  const updateState = (next: QRState) => {
+    stateRef.current = next;
+    setState(next);
+  };
+
+  const clearTimers = () => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    pollTimerRef.current = null;
+    countdownRef.current = null;
+  };
+
+  const beginCountdown = () => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    setSeconds(REFRESH_SECONDS);
+    countdownRef.current = setInterval(() => {
+      if (stopRef.current) return;
+      setSeconds((s) => {
+        if (s > 1) return s - 1;
+        // 只在「还没扫码」时自动换码；已扫码就等用户确认
+        if (stateRef.current === "waiting") void start(true);
+        return REFRESH_SECONDS;
+      });
+    }, 1000);
+  };
+
+  // 启动 / 刷新二维码。refresh=true 时保留旧图，避免闪烁。
+  const start = async (refresh = false) => {
+    if (stopRef.current || startingRef.current) return;
+    startingRef.current = true;
+    clearTimers();
+    if (!refresh) updateState("loading");
     setError("");
     try {
       const res = await api.qrLoginStart({ schoolName });
+      if (stopRef.current) return;
       ticketRef.current = res.ticket;
       setQrImage(res.qrImage);
-      setState("waiting");
+      updateState("waiting");
+      beginCountdown();
       poll();
     } catch (e) {
+      if (stopRef.current) return;
       setError(e instanceof Error ? e.message : "生成二维码失败");
-      setState("error");
+      updateState("error");
+    } finally {
+      startingRef.current = false;
     }
   };
 
   // 轮询扫码状态
   const poll = async () => {
     if (stopRef.current || !ticketRef.current) return;
+    const ticket = ticketRef.current;
     try {
-      const res = await api.qrLoginPoll({ ticket: ticketRef.current });
-      if (stopRef.current) return;
+      const res = await api.qrLoginPoll({ ticket });
+      // 等待期间可能已经自动换码，旧 ticket 的响应直接丢弃
+      if (stopRef.current || ticket !== ticketRef.current) return;
       switch (res.status) {
         case "success":
-          setState("success");
+          clearTimers();
+          updateState("success");
           setTimeout(() => onClose(true), 800);
           return;
         case "scanned":
-          setState("scanned");
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          countdownRef.current = null;
+          updateState("scanned");
           break;
         case "expired":
-          setState("expired");
+          clearTimers();
+          updateState("expired");
           return;
         case "waiting":
           break;
@@ -68,15 +118,16 @@ export function QRLoginDialog({ schoolName, onClose }: Props) {
     } catch {
       // 网络错误，继续轮询
     }
-    timerRef.current = setTimeout(poll, 2000);
+    if (!stopRef.current) pollTimerRef.current = setTimeout(poll, 1500);
   };
 
   useEffect(() => {
     void start();
     return () => {
       stopRef.current = true;
-      if (timerRef.current) clearTimeout(timerRef.current);
+      clearTimers();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -87,7 +138,7 @@ export function QRLoginDialog({ schoolName, onClose }: Props) {
           扫码登录
         </DialogTitle>
         <DialogDescription>
-          用已登录今日校园的手机 App 扫描下方二维码，无需输入密码。
+          用已登录今日校园的手机 App 扫描下方二维码，无需输入密码。二维码会自动刷新。
         </DialogDescription>
         <DialogBody className="flex flex-col items-center gap-3">
           {state === "loading" && (
@@ -95,7 +146,7 @@ export function QRLoginDialog({ schoolName, onClose }: Props) {
               <Loader2 className="size-8 animate-spin text-muted-foreground" />
             </div>
           )}
-          {qrImage && state !== "error" && state !== "loading" && (
+          {qrImage && state !== "loading" && state !== "error" && (
             <img
               src={qrImage}
               alt="扫码登录二维码"
@@ -105,7 +156,9 @@ export function QRLoginDialog({ schoolName, onClose }: Props) {
             />
           )}
           {state === "waiting" && (
-            <p className="text-muted-foreground text-xs">等待扫码…</p>
+            <p className="text-muted-foreground text-xs">
+              等待扫码… <span className="tabular-nums">{seconds}s</span> 后自动刷新
+            </p>
           )}
           {state === "scanned" && (
             <p className="text-success-text text-xs font-medium">已扫码，请在手机上确认授权…</p>
