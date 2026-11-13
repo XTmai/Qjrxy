@@ -1,7 +1,7 @@
 .PHONY: build run test vet clean linux windows mac docker release
 
 BINARY := bin/qjrxy
-VERSION := 1.2.4
+VERSION := 1.3.0
 RELEASE := release
 
 build:
