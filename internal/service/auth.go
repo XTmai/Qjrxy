@@ -210,12 +210,21 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	// 登录响应里的 tenantId 才是这次登录真正落在的租户；账号上存的是创建时的，
 	// 可能是空的或旧的（学校合并/换域名）。以响应为准反查门户域名，比用学校名模糊
 	// 匹配可靠——「缺少换票参数」的反馈基本都出在这一步。
+	// NOTCLOUD 学校（如安徽师范大学）的门户和统一认证是两套东西：
+	// 账号体系短信登录可能返回一个云端通用 tenantId，把它当成学校 tenant
+	// 会把 host 覆盖成 publictenant.campusphere.net，业务接口直接 404。
+	// 这类学校已有明确门户时，保留学校 host，不用响应租户覆盖。
+	keepSchoolHost := keepSchoolHostForSMS(account)
 	tenantChanged := result.TenantID != "" && result.TenantID != account.TenantID
-	if tenantChanged {
+	if tenantChanged && !keepSchoolHost {
 		account.TenantID = result.TenantID
 	}
 	host := ""
-	if !tenantChanged {
+	if keepSchoolHost {
+		host = cpdaily.NormalizeHost(account.Host)
+		log.Printf("[auth] NOTCLOUD 学校保留门户 host=%s（忽略响应租户 %s）", host, result.TenantID)
+	}
+	if host == "" && !tenantChanged {
 		host = cpdaily.NormalizeHost(account.Host)
 	}
 	if host == "" && result.TenantID != "" {
@@ -292,6 +301,12 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		return nil, errors.New("该校登录未下发换票票据，且账号会话无法访问业务接口；请改用扫码授权或账密登录")
 	}
 	return fresh, nil
+}
+
+// keepSchoolHostForSMS 判断短信登录后是否应保留账号已有的学校门户。
+// NOTCLOUD 学校门户与账号体系租户不是一回事，响应租户不能覆盖门户。
+func keepSchoolHostForSMS(account *store.Account) bool {
+	return strings.EqualFold(account.JoinType, "NOTCLOUD") && cpdaily.NormalizeHost(account.Host) != ""
 }
 
 // describeLoginResult 把登录响应的关键状态拼成一行，供日志排查使用（不含票值）。
