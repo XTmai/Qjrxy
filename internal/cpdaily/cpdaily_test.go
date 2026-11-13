@@ -860,3 +860,72 @@ func TestLooksLikeHTMLPage(t *testing.T) {
 		}
 	}
 }
+
+// TestFetchTaskSignState 校验回查正判：signedTasks 里有 → 已签到；
+// 只在 unSignedTasks → 未签到；两边都没有 → missing。
+// 回归：nut/siit 类学校提交成功后列表延迟约 20 秒才翻转，
+// 「从待办里消失」的单次反查把真成功误判成「待核对」。
+func TestFetchTaskSignState(t *testing.T) {
+	listJSON := `{"code":"0","message":"SUCCESS","datas":{
+		"unSignedTasks":[{"signInstanceWid":"w1","signWid":"s1","taskName":"晚间查寝","signStatus":"0"}],
+		"signedTasks":[{"signInstanceWid":"w2","signWid":"s2","taskName":"晚间查寝","signStatus":"4"}],
+		"leaveTasks":[]}}`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(listJSON))
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: srv.Client(), Timeout: 5 * time.Second}, nil)
+	host := strings.TrimPrefix(srv.URL, "https://")
+	ctx := context.Background()
+
+	if got, err := client.FetchTaskSignState(ctx, host, KindAttendance, "w2"); err != nil || got != TaskSigned {
+		t.Errorf("signedTasks 里的任务应判已签到，得到 %v err=%v", got, err)
+	}
+	if got, err := client.FetchTaskSignState(ctx, host, KindAttendance, "w1"); err != nil || got != TaskUnsigned {
+		t.Errorf("待办里的任务应判未签到，得到 %v err=%v", got, err)
+	}
+	if got, err := client.FetchTaskSignState(ctx, host, KindAttendance, "w9"); err != nil || got != TaskMissing {
+		t.Errorf("两边都没有的任务应判 missing，得到 %v err=%v", got, err)
+	}
+
+	// 待办缓存语义不变：signed 不进待办列表（否则首页会多出「已签到」的任务）
+	tasks, err := client.listTasks(ctx, host, KindAttendance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].SignInstanceWID != "w1" {
+		t.Fatalf("待办列表应只有 w1，得到 %+v", tasks)
+	}
+	for _, tk := range tasks {
+		if tk.Status != "pending" && tk.Status != "leave" {
+			t.Errorf("待办列表不应包含已签到任务：%+v", tk)
+		}
+	}
+
+	// FetchSignedTasks 返回已签到任务，供事后回填使用
+	signed, err := client.FetchSignedTasks(ctx, host, KindAttendance)
+	if err != nil || len(signed) != 1 || signed[0].SignInstanceWID != "w2" {
+		t.Fatalf("已签到列表应为 w2，得到 %+v err=%v", signed, err)
+	}
+}
+
+// TestTaskDetailSignStatusFlex 校验详情里的 signStatus 是数字也能解析
+// （部分学校不把它包成字符串；解析失败会让整个提交链路挂掉）。
+func TestTaskDetailSignStatusFlex(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"code":"0","message":"SUCCESS","datas":{"signInstanceWid":"w1","taskName":"查寝","signStatus":4,"isPhoto":0}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: srv.Client(), Timeout: 5 * time.Second}, nil)
+	host := strings.TrimPrefix(srv.URL, "https://")
+	detail, err := client.FetchDetail(context.Background(), host, KindAttendance, Task{SignInstanceWID: "w1", SignWID: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(detail.SignStatus) != "4" {
+		t.Errorf("signStatus 应解析为 4，得到 %q", string(detail.SignStatus))
+	}
+}

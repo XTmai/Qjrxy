@@ -200,16 +200,31 @@ func SendAppSMSCode(ctx context.Context, device DeviceProfile, tenantID, phone s
 	return err
 }
 
+// SMSChannel* 是短信登录的验证码渠道值（载荷字段 e）。
+const (
+	SMSChannelCpdaily = "CPDAILY" // 今日校园渠道下发的验证码
+	SMSChannelMob     = "MOB"     // MobTech 渠道下发的验证码
+)
+
 // AppMobileLogin 用手机号 + 验证码登录今日校园账号，返回学校 CAS 票与会话。
-func AppMobileLogin(ctx context.Context, device DeviceProfile, tenantID, phone, code string) (*AppLoginResult, error) {
+//
+// channel 是验证码的下发渠道：IPA 逆向（9.9.22）证实该字段在
+// "CPDAILY"（今日校园渠道发码）与 "MOB"（MobTech 渠道发码）之间切换，
+// 由登录页的 isMobSMSLogin 决定。渠道必须与收到的验证码匹配，
+// 用错渠道服务端会拒——NOTCLOUD 学校的验证码可能走 MOB 渠道。
+func AppMobileLogin(ctx context.Context, device DeviceProfile, tenantID, phone, code, channel string) (*AppLoginResult, error) {
 	phone = strings.TrimSpace(phone)
 	code = strings.TrimSpace(code)
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		channel = SMSChannelCpdaily
+	}
 	if phone == "" || code == "" {
 		return nil, errors.New("手机号或验证码为空")
 	}
 	payload, _ := json.Marshal(map[string]string{
 		"d": code,
-		"e": "CPDAILY",
+		"e": channel,
 		"c": phone,
 		"f": "86",
 	})

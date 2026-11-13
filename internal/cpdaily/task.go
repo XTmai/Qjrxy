@@ -107,14 +107,33 @@ type Task struct {
 
 // TaskDetail 是任务详情（仅取提交所需字段）。
 type TaskDetail struct {
-	SignInstanceWID string          `json:"signInstanceWid"`
-	TaskName        string          `json:"taskName"`
-	IsPhoto         FlexInt         `json:"isPhoto"`
-	IsNeedExtra     FlexInt         `json:"isNeedExtra"`
-	IsMalposition   FlexInt         `json:"isMalposition"`
-	ExtraFields     []ExtraField    `json:"extraField"`
-	SignPlaces      []SignPlace     `json:"signPlaceSelected"`
-	Raw             json.RawMessage `json:"-"`
+	SignInstanceWID string       `json:"signInstanceWid"`
+	TaskName        string       `json:"taskName"`
+	IsPhoto         FlexInt      `json:"isPhoto"`
+	IsNeedExtra     FlexInt      `json:"isNeedExtra"`
+	IsMalposition   FlexInt      `json:"isMalposition"`
+	ExtraFields     []ExtraField `json:"extraField"`
+	SignPlaces      []SignPlace  `json:"signPlaceSelected"`
+	// SignStatus 是详情里的签到状态（0/1 未签，2 未到时间，3 已过期，4 已签到）。
+	// 提交前用它挡掉「已经签过」的任务，避免重试路径重复提交。
+	SignStatus FlexString      `json:"signStatus"`
+	SignTime   FlexString      `json:"signTime"`
+	Raw        json.RawMessage `json:"-"`
+}
+
+// FlexString 兼容服务端把字符串写成数字的情况（如 signStatus: 4）。
+type FlexString string
+
+// UnmarshalJSON 接受字符串或数字，统一存成去掉引号的字符串。
+func (s *FlexString) UnmarshalJSON(b []byte) error {
+	str := strings.TrimSpace(string(b))
+	if str == "null" {
+		*s = ""
+		return nil
+	}
+	str = strings.Trim(str, `"`)
+	*s = FlexString(str)
+	return nil
 }
 
 // ExtraField 是签到附加题。
@@ -199,8 +218,33 @@ func (f *FlexFloat) UnmarshalJSON(b []byte) error {
 // Float 返回 float64 值。
 func (f FlexFloat) Float() float64 { return float64(f) }
 
-// listTasks 查询某类任务的未完成列表。
-func (c *Client) listTasks(ctx context.Context, host string, kind TaskKind) ([]Task, error) {
+// rawTask 是列表接口返回的单条任务。
+type rawTask struct {
+	SignInstanceWID string `json:"signInstanceWid"`
+	SignWID         string `json:"signWid"`
+	StuSignWID      string `json:"stuSignWid"`
+	TaskName        string `json:"taskName"`
+	Sender          string `json:"senderUserName"`
+	SignStatus      string `json:"signStatus"`
+	TaskType        string `json:"taskType"`
+	RateSignDate    string `json:"rateSignDate"`
+	RateBeginTime   string `json:"rateTaskBeginTime"`
+	RateEndTime     string `json:"rateTaskEndTime"`
+	SingleBegin     string `json:"singleTaskBeginTime"`
+	SingleEnd       string `json:"singleTaskEndTime"`
+}
+
+// taskLists 是当日任务列表的三个分区。
+type taskLists struct {
+	UnSigned []rawTask
+	Signed   []rawTask
+	Leave    []rawTask
+}
+
+// fetchTaskLists 拉取某类任务的当日列表（含已签到分区）。
+//
+// 第一次请求用于获取 cookie（部分学校需要），忽略结果。
+func (c *Client) fetchTaskLists(ctx context.Context, host string, kind TaskKind) (*taskLists, error) {
 	// host 可能是用户手填的（带 scheme/路径），拼上 "https://" 就会变成
 	// https://https://…；这里统一成纯域名，所有任务请求都经过这一处。
 	host = NormalizeHost(host)
@@ -208,7 +252,6 @@ func (c *Client) listTasks(ctx context.Context, host string, kind TaskKind) ([]T
 		return nil, errors.New("学校域名无效，请检查账号的 host 设置")
 	}
 	endpoints := EndpointsFor(kind)
-	// 第一次请求用于获取 cookie（部分学校需要），忽略结果。
 	if _, err := c.postJSON(ctx, "https://"+host+endpoints.List, nil, nil); err != nil {
 		return nil, err
 	}
@@ -216,67 +259,111 @@ func (c *Client) listTasks(ctx context.Context, host string, kind TaskKind) ([]T
 	if err != nil {
 		return nil, err
 	}
-
-	type rawTask struct {
-		SignInstanceWID string `json:"signInstanceWid"`
-		SignWID         string `json:"signWid"`
-		StuSignWID      string `json:"stuSignWid"`
-		TaskName        string `json:"taskName"`
-		Sender          string `json:"senderUserName"`
-		SignStatus      string `json:"signStatus"`
-		TaskType        string `json:"taskType"`
-		RateSignDate    string `json:"rateSignDate"`
-		RateBeginTime   string `json:"rateTaskBeginTime"`
-		RateEndTime     string `json:"rateTaskEndTime"`
-		SingleBegin     string `json:"singleTaskBeginTime"`
-		SingleEnd       string `json:"singleTaskEndTime"`
-	}
 	var payload struct {
 		UnSigned []rawTask `json:"unSignedTasks"`
+		Signed   []rawTask `json:"signedTasks"`
 		Leave    []rawTask `json:"leaveTasks"`
 	}
 	if err := json.Unmarshal(resp.Data, &payload); err != nil {
 		return nil, fmt.Errorf("解析任务列表失败：%w", err)
 	}
+	return &taskLists{UnSigned: payload.UnSigned, Signed: payload.Signed, Leave: payload.Leave}, nil
+}
 
-	out := make([]Task, 0, len(payload.UnSigned)+len(payload.Leave))
-	build := func(t rawTask, status string) Task {
-		start, end := t.SingleBegin, t.SingleEnd
-		// 单次任务时间为空时，用「日期 + 时段」组装展示文本
-		if start == "" && t.RateSignDate != "" {
-			date := strings.SplitN(t.RateSignDate, " ", 2)[0]
-			if t.RateBeginTime != "" {
-				start = date + " " + t.RateBeginTime
-			} else {
-				start = date
-			}
-			if t.RateEndTime != "" {
-				end = date + " " + t.RateEndTime
-			}
+// buildTask 把列表里的一条原始任务转成 Task。
+func buildTask(t rawTask, kind TaskKind, status string) Task {
+	start, end := t.SingleBegin, t.SingleEnd
+	// 单次任务时间为空时，用「日期 + 时段」组装展示文本
+	if start == "" && t.RateSignDate != "" {
+		date := strings.SplitN(t.RateSignDate, " ", 2)[0]
+		if t.RateBeginTime != "" {
+			start = date + " " + t.RateBeginTime
+		} else {
+			start = date
 		}
-		return Task{
-			Kind: kind, KindLabel: kind.Label(),
-			SignInstanceWID: t.SignInstanceWID,
-			SignWID:         t.SignWID,
-			StuSignWID:      t.StuSignWID,
-			TaskName:        t.TaskName,
-			Sender:          t.Sender,
-			StartTime:       start,
-			EndTime:         end,
-			Status:          status,
-			SignDate:        t.RateSignDate,
-			BeginClock:      t.RateBeginTime,
-			EndClock:        t.RateEndTime,
-			SignStatus:      t.SignStatus,
-			SignStatusText:  signStatusText(t.SignStatus),
-			TaskType:        t.TaskType,
+		if t.RateEndTime != "" {
+			end = date + " " + t.RateEndTime
 		}
 	}
-	for _, t := range payload.UnSigned {
-		out = append(out, build(t, "pending"))
+	return Task{
+		Kind: kind, KindLabel: kind.Label(),
+		SignInstanceWID: t.SignInstanceWID,
+		SignWID:         t.SignWID,
+		StuSignWID:      t.StuSignWID,
+		TaskName:        t.TaskName,
+		Sender:          t.Sender,
+		StartTime:       start,
+		EndTime:         end,
+		Status:          status,
+		SignDate:        t.RateSignDate,
+		BeginClock:      t.RateBeginTime,
+		EndClock:        t.RateEndTime,
+		SignStatus:      t.SignStatus,
+		SignStatusText:  signStatusText(t.SignStatus),
+		TaskType:        t.TaskType,
 	}
-	for _, t := range payload.Leave {
-		out = append(out, build(t, "leave"))
+}
+
+// listTasks 查询某类任务的未完成列表（待办 + 请假；已签到不进待办缓存）。
+func (c *Client) listTasks(ctx context.Context, host string, kind TaskKind) ([]Task, error) {
+	lists, err := c.fetchTaskLists(ctx, host, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Task, 0, len(lists.UnSigned)+len(lists.Leave))
+	for _, t := range lists.UnSigned {
+		out = append(out, buildTask(t, kind, "pending"))
+	}
+	for _, t := range lists.Leave {
+		out = append(out, buildTask(t, kind, "leave"))
+	}
+	return out, nil
+}
+
+// TaskSignState 是单个任务在当日列表里的状态。
+type TaskSignState int
+
+const (
+	// TaskUnsigned 任务仍在待办（未签到，或学校列表尚未更新）。
+	TaskUnsigned TaskSignState = iota
+	// TaskSigned 学校已把任务挪进已签到列表（正判）。
+	TaskSigned
+	// TaskMissing 两个列表里都找不到（可能已被学校撤销）。
+	TaskMissing
+)
+
+// FetchTaskSignState 查询指定任务当天的签到状态。
+//
+// 用「signedTasks 里有它」做正判，替代「从待办里消失」的反向推断：
+// 后者区分不了已签到与被撤销，也读不出列表延迟——实测部分学校
+// （siit、nut）提交成功后约 20 秒内列表仍是旧数据。
+func (c *Client) FetchTaskSignState(ctx context.Context, host string, kind TaskKind, signInstanceWid string) (TaskSignState, error) {
+	lists, err := c.fetchTaskLists(ctx, host, kind)
+	if err != nil {
+		return TaskMissing, err
+	}
+	for _, t := range lists.Signed {
+		if t.SignInstanceWID == signInstanceWid {
+			return TaskSigned, nil
+		}
+	}
+	for _, t := range lists.UnSigned {
+		if t.SignInstanceWID == signInstanceWid {
+			return TaskUnsigned, nil
+		}
+	}
+	return TaskMissing, nil
+}
+
+// FetchSignedTasks 返回当日已签到的任务（用于事后回填「待核对」记录）。
+func (c *Client) FetchSignedTasks(ctx context.Context, host string, kind TaskKind) ([]Task, error) {
+	lists, err := c.fetchTaskLists(ctx, host, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Task, 0, len(lists.Signed))
+	for _, t := range lists.Signed {
+		out = append(out, buildTask(t, kind, "done"))
 	}
 	return out, nil
 }
@@ -595,6 +682,17 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 	detail, err := c.FetchDetail(ctx, host, opts.Kind, opts.Task)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// 任务已经签过就不再提交：可能来自上一轮「待核对」的自动重试，
+	// 也可能是学生在 App 里自己签过。详情里的 signStatus 是权威状态，
+	// 重复提交不仅多余，还会让审计多出一条「成功」的糊涂账。
+	if strings.TrimSpace(string(detail.SignStatus)) == "4" {
+		return &SignResult{
+			Success: true,
+			Code:    "0",
+			Message: "该任务已签到，无需重复提交",
+		}, detail, nil
 	}
 
 	check := detail.CheckRange(opts.Lon, opts.Lat)

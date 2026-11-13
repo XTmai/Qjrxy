@@ -62,6 +62,25 @@ func (db *DB) UpdateLog(ctx context.Context, id int64, status, message, detail s
 	return err
 }
 
+// MarkPendingLogsSigned 把同账号、同类、同名、当天创建的待核对记录回填为成功。
+//
+// 触发时机：任务同步发现该任务已出现在学校「已签到」列表里。
+// 只按当天约束——同名任务每天都会下发，昨天的待核对不能被今天的已签到误回填。
+// 额度不补扣：pending 本来就没扣过费。
+func (db *DB) MarkPendingLogsSigned(ctx context.Context, accountID int64, kind, taskName string) (int64, error) {
+	today := time.Now().Format("2006-01-02")
+	res, err := db.ExecContext(ctx, `
+		UPDATE logs SET status = ?, message = ?
+		WHERE account_id = ? AND kind = ? AND task_name = ? AND status = ?
+		  AND substr(created_at, 1, 10) = ?`,
+		StatusSuccess, "已核实：学校列表确认该任务已签到（事后回填）",
+		accountID, kind, taskName, StatusPending, today)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // RecoverStaleLogs 把进程中断遗留的「执行中」记录收尾为待核对。
 //
 // executing 是一种只能存在于运行期间的中间态：服务重启、崩溃或收尾

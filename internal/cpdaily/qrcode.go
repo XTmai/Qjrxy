@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -305,8 +306,10 @@ func QRLoginFollow(ctx context.Context, redirectURL string) (*QRLoginCookies, er
 	req.Header.Set("User-Agent", uaApp)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
+	log.Printf("[qr-login] 跟随跳转链开始：%s", redirectURL)
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[qr-login] 跳转链请求失败：%v（已访问 %v）", err, visitedURLHosts(visited))
 		return nil, fmt.Errorf("跟随跳转链失败: %w", err)
 	}
 	defer resp.Body.Close()
@@ -314,6 +317,7 @@ func QRLoginFollow(ctx context.Context, redirectURL string) (*QRLoginCookies, er
 	if resp.Request != nil && resp.Request.URL != nil {
 		visited = append(visited, resp.Request.URL)
 	}
+	log.Printf("[qr-login] 跳转链共 %d 跳，最终落点 %s（HTTP %d）", len(visited), resp.Request.URL, resp.StatusCode)
 	// 中央域也要查一遍：CASTGC / uniauth 会话不在学校租户域上。
 	visited = append(visited, parseURL("https://api.campushoy.com"), parseURL("https://uniauth.campusphere.net"))
 
@@ -323,23 +327,94 @@ func QRLoginFollow(ctx context.Context, redirectURL string) (*QRLoginCookies, er
 	// 命中的 Cookie 就属于那个 URL 的主机。
 	out := &QRLoginCookies{Cookies: map[string]string{}}
 	schoolHosts := map[string]bool{}
-	for _, u := range visited {
-		if u == nil {
-			continue
-		}
-		host := u.Hostname()
-		for _, c := range jar.Cookies(u) {
-			key := host + "|" + c.Name
-			if _, ok := out.Cookies[key]; !ok {
-				out.Cookies[key] = c.Value
+	collectCookies := func(jar *cookiejar.Jar, urls []*url.URL) {
+		for _, u := range urls {
+			if u == nil {
+				continue
 			}
-			// 学校域名判断：campusphere 租户且非中央域（与原实现口径一致）
-			if strings.Contains(host, "campusphere.net") &&
-				!strings.Contains(host, "api.campushoy.com") &&
-				!strings.Contains(host, "uniauth.campusphere.net") {
-				schoolHosts[host] = true
+			host := u.Hostname()
+			var names []string
+			for _, c := range jar.Cookies(u) {
+				names = append(names, c.Name)
+				key := host + "|" + c.Name
+				if _, ok := out.Cookies[key]; !ok {
+					out.Cookies[key] = c.Value
+				}
+				// 学校域名判断：campusphere 租户且非中央域（与原实现口径一致）
+				if strings.Contains(host, "campusphere.net") &&
+					!strings.Contains(host, "api.campushoy.com") &&
+					!strings.Contains(host, "uniauth.campusphere.net") {
+					schoolHosts[host] = true
+				}
+			}
+			if len(names) > 0 {
+				log.Printf("[qr-login] 主机 %s 携带 Cookie：%v", host, names)
 			}
 		}
+	}
+	collectCookies(jar, visited)
+
+	// 第一段链路的终点是 campushoy 的 authTransit 中转页：它本该在 App
+	// WebView 里通过原生桥拿 cookie_token 再跳 /connect/oauth2/authorize，
+	// 纯服务端走不了桥。但 uniauth 链路已经种下了 campushoy 账号会话
+	// （MOD_AUTH_CAS=campushoy:…），带上它直接打标准 OAuth authorize，
+	// 就能换到学校门户的业务会话——实测跳转链的 redirect_uri 里带着
+	// 门户地址（…/iap/oauthCallback），这正是扫码登录真正的落点。
+	transitHit := false
+	if out.TenantHost == "" && resp.Request != nil && resp.Request.URL != nil {
+		final := resp.Request.URL
+		if strings.Contains(final.Path, "/h5/authTransit/") && final.Query().Get("redirect_uri") != "" {
+			transitHit = true
+			casCookie := ""
+			for key, val := range out.Cookies {
+				if strings.HasSuffix(key, "|MOD_AUTH_CAS") && strings.HasPrefix(val, "campushoy:") {
+					casCookie = val
+					break
+				}
+			}
+			log.Printf("[qr-login] 命中 authTransit 中转页，改带 campushoy 会话直打 OAuth authorize（会话 %s…）", casCookie[:min(len(casCookie), 20)])
+			if casCookie != "" {
+				authURL := *final
+				authURL.Scheme = "https"
+				authURL.Host = "api.campushoy.com"
+				authURL.Path = "/connect/oauth2/authorize"
+				authorizeVisited := []*url.URL{&authURL}
+				authorizeClient := &http.Client{
+					Jar:     jar,
+					Timeout: 30 * time.Second,
+					Transport: &http.Transport{
+						TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
+					},
+					CheckRedirect: func(req *http.Request, via []*http.Request) error {
+						if len(via) >= 15 {
+							return fmt.Errorf("重定向超过 15 次，终止跳转链")
+						}
+						authorizeVisited = append(authorizeVisited, req.URL)
+						return nil
+					},
+				}
+				authReq, aerr := http.NewRequestWithContext(ctx, http.MethodGet, authURL.String(), nil)
+				if aerr == nil {
+					authReq.Header.Set("User-Agent", uaApp)
+					authReq.Header.Set("Cookie", "MOD_AUTH_CAS="+casCookie)
+					authResp, aerr := authorizeClient.Do(authReq)
+					if aerr != nil {
+						log.Printf("[qr-login] OAuth authorize 请求失败：%v", aerr)
+					} else {
+						defer authResp.Body.Close()
+						io.Copy(io.Discard, authResp.Body)
+						if authResp.Request != nil && authResp.Request.URL != nil {
+							authorizeVisited = append(authorizeVisited, authResp.Request.URL)
+						}
+						log.Printf("[qr-login] OAuth authorize 完成：最终落点 %s（HTTP %d）", authResp.Request.URL, authResp.StatusCode)
+						collectCookies(jar, authorizeVisited)
+					}
+				}
+			}
+		}
+	}
+	if out.TenantHost == "" {
+		log.Printf("[qr-login] 未识别学校域名：访问过的主机 %v，Cookie 明细 %v", visitedURLHosts(visited), out.Cookies)
 	}
 
 	// 提取学校 host
@@ -357,6 +432,10 @@ func QRLoginFollow(ctx context.Context, redirectURL string) (*QRLoginCookies, er
 	}
 
 	if out.TenantHost == "" {
+		if transitHit {
+			return nil, fmt.Errorf("campushoy 新版扫码授权需要在 App 内完成换票（authTransit 中转页依赖 App 原生桥铸造 cookie_token），网页端无法完成；" +
+				"请改用「短信验证码」登录")
+		}
 		return nil, fmt.Errorf("未能从跳转链 Cookie 中识别学校域名")
 	}
 	return out, nil
@@ -368,6 +447,18 @@ func QRLoginImageURL(qrId string) string {
 }
 
 // ---------- 内部工具 ----------
+
+// visitedURLHosts 汇总已访问 URL 的主机名（日志排查用）。
+func visitedURLHosts(urls []*url.URL) []string {
+	out := make([]string, 0, len(urls))
+	for _, u := range urls {
+		if u == nil {
+			continue
+		}
+		out = append(out, u.Hostname())
+	}
+	return out
+}
 
 func parseURL(raw string) *url.URL {
 	u, _ := url.Parse(raw)

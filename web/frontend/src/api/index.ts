@@ -84,7 +84,7 @@ export const api = {
       body,
     ),
   qrLoginPoll: (body: { ticket: string }) =>
-    http.post<{ status: string; account?: Account }>(
+    http.post<{ status: string; message?: string; account?: Account }>(
       "/accounts/qr-login/poll",
       body,
     ),

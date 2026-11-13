@@ -346,3 +346,56 @@ func TestCascadeDelete(t *testing.T) {
 		t.Error("删除账号应级联删除记录")
 	}
 }
+
+// TestMarkPendingLogsSigned 校验待核对记录的回填约束：
+// 只回填同账号、同类、同名、当天创建的 pending；跨天/他人/已终态的不动。
+// 回归：nut 类学校提交成功当场被记「待核对」，事后学校列表确认已签到，
+// 审计里那条记录此前永远挂着，没有任何回填机制。
+func TestMarkPendingLogsSigned(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	u := mustUser(t, db)
+	acc, _ := db.CreateAccount(ctx, &Account{UserID: u.ID, SchoolName: "nut", Username: "1", Host: "nut.campusphere.net"})
+	other, _ := db.CreateAccount(ctx, &Account{UserID: u.ID, SchoolName: "nut", Username: "2", Host: "nut.campusphere.net"})
+
+	yesterday := time.Now().AddDate(0, 0, -1).Format(time.RFC3339)
+	mk := func(accountID int64, name, status, createdAt string) int64 {
+		id, err := db.CreateLog(ctx, &Log{
+			UserID: u.ID, AccountID: accountID, TaskName: name, Kind: "attendance",
+			Status: status, Message: "服务端返回成功，但学校列表延迟，稍后自动核实", CreatedAt: createdAt,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	todayPending := mk(acc.ID, "晚间查寝", StatusPending, "")            // 应被回填
+	yesterdayPending := mk(acc.ID, "晚间查寝", StatusPending, yesterday) // 跨天：不回填
+	otherPending := mk(other.ID, "晚间查寝", StatusPending, "")          // 他人：不回填
+	doneID := mk(acc.ID, "晚间查寝", StatusSuccess, "")                  // 已终态：不回填
+	otherTask := mk(acc.ID, "早查寝", StatusPending, "")                // 同名不同任务：不回填
+
+	n, err := db.MarkPendingLogsSigned(ctx, acc.ID, "attendance", "晚间查寝")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("应恰好回填 1 条，得到 %d", n)
+	}
+
+	assertStatus := func(id int64, want string) {
+		t.Helper()
+		l, err := db.LogByID(ctx, u.ID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if l.Status != want {
+			t.Errorf("log %d 状态应为 %s，得到 %s", id, want, l.Status)
+		}
+	}
+	assertStatus(todayPending, StatusSuccess)
+	assertStatus(yesterdayPending, StatusPending)
+	assertStatus(otherPending, StatusPending)
+	assertStatus(doneID, StatusSuccess)
+	assertStatus(otherTask, StatusPending)
+}

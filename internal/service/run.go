@@ -159,10 +159,12 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		// 免得到下次重建 client 时又退回登录时那份旧票。
 		_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "authorized")
 		// 事后核对：服务端在「任务还没到签到时间」时也会返回 code=0 SUCCESS，
-		// 靠响应字段无法区分。这里回查一次任务列表，确认该任务确实从
-		//「未签到」里消失了，才算真成功。
-		confirmed, checkErr := s.confirmSigned(ctx, account, task)
-		if checkErr != nil {
+		// 靠响应字段无法区分。这里轮询回查任务列表，拿到确定结论才算数：
+		// 多数学校提交后列表立即可见；实测 siit/nut 这类学校列表有约 20 秒延迟，
+		// 单次回查会把真成功误判成「待核对」（2026-11-13 南昌理工 21:40 实锤）。
+		state, checkErr := s.confirmTaskState(ctx, account, task)
+		switch {
+		case checkErr != nil:
 			// 回查失败 ≠ 签到成功：把它当「待核对」处理，保留当天机会让调度器重试。
 			// 学校列表接口偶发 5xx/超时是真实发生过的（diag 里见过 522）。
 			_ = s.db.UpdateLog(ctx, logID, store.StatusPending,
@@ -174,18 +176,19 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 				Hint:    "提交请求本身已成功。稍后可在任务页「拉取今日任务」确认是否已签到",
 				Task:    task.TaskName,
 			}, nil
-		}
-		if !confirmed {
+		case state == cpdaily.TaskUnsigned:
+			// 轮询窗口内列表一直是旧的：保持「待核对」，等下一次同步回填。
 			_ = s.db.UpdateLog(ctx, logID, store.StatusPending,
-				"服务端返回成功，但任务仍在待办列表中", detailJSON)
+				"服务端返回成功，但学校列表延迟，稍后自动核实", detailJSON)
 			return &RunOutcome{
 				LogID:   logID,
 				Status:  store.StatusPending,
-				Message: "服务端返回成功，但任务仍在待办列表中",
-				Hint:    "可能是当前不在该任务的签到时段。请核对任务时间，到时间后再执行",
+				Message: "服务端返回成功，但学校列表延迟，稍后自动核实",
+				Hint:    "提交请求本身已成功。系统会在任务同步时自动核实，无需重新提交",
 				Task:    task.TaskName,
 			}, nil
 		}
+		// TaskSigned（正判已签到）或 TaskMissing（已不在当日列表）：都按成功处理。
 
 		_ = s.db.UpdateLog(ctx, logID, store.StatusSuccess, defaultIfEmpty(result.Message, "已完成"), detailJSON)
 		_ = s.db.MarkTaskDone(ctx, account.ID, task.Kind, task.SignInstanceWID)
@@ -375,23 +378,69 @@ func noRunnableTaskMessage(cached []store.Task) string {
 	return "当前没有待处理的查寝任务"
 }
 
-// confirmSigned 回查任务列表，确认任务是否真的完成了。
+// confirmPollDelays 是回查轮询的等待间隔。
 //
-// 返回 (true, nil) 表示已不在待办中（成功）；
-// (false, nil) 表示仍在待办中（未真正签到）；
-// 查询失败时返回 err，调用方应视为「无法确认」而不是失败。
-func (s *Service) confirmSigned(ctx context.Context, account *store.Account, task *store.Task) (bool, error) {
+// 多数学校提交后列表立即可见（第一次就命中）；实测 siit、nut 这类学校的
+// 列表有秒级延迟——siit 在 2026-11-13 17:41 的提交直到约 21 秒后才翻转到
+// 已签到。单次回查必然读到旧数据，把真成功误判成「待核对」。
+// 窗口按 22 秒 + 请求耗时设计，覆盖实测最慢的学校。
+var confirmPollDelays = []time.Duration{0, 3 * time.Second, 8 * time.Second, 15 * time.Second, 22 * time.Second}
+
+// confirmTaskState 轮询回查任务状态，直到拿到确定结论或窗口结束。
+//
+// 返回值语义：
+//   - TaskSigned：学校列表已把它挪进「已签到」（正判，最可靠）；
+//   - TaskMissing：待办和已签到里都找不到——与旧版「消失即成功」的语义一致，
+//     且该任务已无法再提交，按成功处理；
+//   - TaskUnsigned：整个轮询窗口内一直挂在待办里，视为未确认；
+//   - err：整个窗口内每次回查都失败，调用方应视为「无法确认」而不是失败。
+func (s *Service) confirmTaskState(ctx context.Context, account *store.Account, task *store.Task) (cpdaily.TaskSignState, error) {
 	client := s.clientFor(account)
-	list, err := client.ListAllTasks(ctx, account.Host, []cpdaily.TaskKind{cpdaily.KindAttendance})
-	if err != nil {
-		return false, err
-	}
-	for _, t := range list {
-		if t.SignInstanceWID == task.SignInstanceWID {
-			return false, nil // 还在待办里，说明没签上
+	sawList := false
+	for i, delay := range confirmPollDelays {
+		if i > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return cpdaily.TaskMissing, ctx.Err()
+			}
+		}
+		state, err := client.FetchTaskSignState(ctx, account.Host, cpdaily.KindAttendance, task.SignInstanceWID)
+		if err != nil {
+			continue
+		}
+		sawList = true
+		if state != cpdaily.TaskUnsigned {
+			return state, nil // 终态，立即返回
 		}
 	}
-	return true, nil
+	if !sawList {
+		return cpdaily.TaskMissing, errors.New("回查任务列表持续失败")
+	}
+	return cpdaily.TaskUnsigned, nil
+}
+
+// reconcilePendingSignLogs 用学校侧已签到列表回填同账号当天的「待核对」记录。
+//
+// 之前的待核对记录没有任何回填机制：任务后来真签上了，审计里也永远挂着。
+// 触发时机是任务同步成功后（每小时探测 / 手动拉取），尽力而为——
+// 查询失败静默跳过，等下一次同步再试。
+func (s *Service) reconcilePendingSignLogs(ctx context.Context, account *store.Account) {
+	client := s.clientFor(account)
+	signed, err := client.FetchSignedTasks(ctx, account.Host, cpdaily.KindAttendance)
+	if err != nil {
+		return
+	}
+	changed := false
+	for _, t := range signed {
+		n, err := s.db.MarkPendingLogsSigned(ctx, account.ID, string(cpdaily.KindAttendance), t.TaskName)
+		if err == nil && n > 0 {
+			changed = true
+		}
+	}
+	if changed {
+		s.notify(account.UserID, events.TopicLogs)
+	}
 }
 
 // buildLogDetail 组装可回溯的执行详情。

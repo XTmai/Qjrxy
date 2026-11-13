@@ -107,6 +107,13 @@ export function QRLoginDialog({ schoolName, onClose }: Props) {
           updateState("success");
           setTimeout(() => onClose(true), 800);
           return;
+        case "failed":
+          // 服务端明确失败（如 NOTCLOUD 跳转链拿不到门户会话）：
+          // 如实展示原因并停住，绝不能落到「二维码已过期」误导用户。
+          clearTimers();
+          setError(res.message || "扫码登录失败");
+          updateState("error");
+          return;
         case "scanned":
           if (countdownRef.current) clearInterval(countdownRef.current);
           countdownRef.current = null;

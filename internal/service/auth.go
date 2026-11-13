@@ -199,7 +199,30 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		return nil, err
 	}
 	device := deviceProfile(account, account.Lon, account.Lat)
-	result, err := cpdaily.AppMobileLogin(ctx, device, account.TenantID, phone, code)
+	// 渠道自适应：验证码按下发渠道校验。CLOUD 账号体系默认 CPDAILY；
+	// NOTCLOUD 学校的验证码可能走 MOB 渠道（IPA 逆向 9.9.22 实锤
+	// isMobSMSLogin 在 CPDAILY/MOB 之间切换），渠道不符会被拒。
+	channels := []string{cpdaily.SMSChannelCpdaily, cpdaily.SMSChannelMob}
+	if strings.EqualFold(account.JoinType, "NOTCLOUD") {
+		channels = []string{cpdaily.SMSChannelMob, cpdaily.SMSChannelCpdaily}
+	}
+	var result *cpdaily.AppLoginResult
+	var lastErr error
+	for i, channel := range channels {
+		result, lastErr = cpdaily.AppMobileLogin(ctx, device, account.TenantID, phone, code, channel)
+		if lastErr == nil {
+			if i > 0 {
+				log.Printf("[auth] 短信登录渠道 %s 成功（备选渠道生效）", channel)
+			}
+			break
+		}
+		if i < len(channels)-1 {
+			log.Printf("[auth] 短信登录渠道 %s 失败，尝试 %s：%v", channel, channels[i+1], lastErr)
+		}
+	}
+	if lastErr != nil {
+		return nil, fmt.Errorf("短信登录失败：%w", lastErr)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -779,5 +802,8 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 		return nil, err
 	}
 	s.notify(userID, events.TopicTasks)
+	// 学校侧已签到的任务，把当天的「待核对」执行记录回填成成功（尽力而为）。
+	// 南昌理工这类列表有延迟的学校，提交当场会被记成待核对，靠这里收口。
+	s.reconcilePendingSignLogs(ctx, account)
 	return s.db.TasksByAccount(ctx, account.ID)
 }

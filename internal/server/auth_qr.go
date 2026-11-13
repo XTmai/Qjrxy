@@ -197,7 +197,17 @@ func (s *Server) handleQRLoginPoll(w http.ResponseWriter, r *http.Request) {
 
 		cookieResult, ferr := cpdaily.QRLoginFollow(r.Context(), res.RedirectURL)
 		if ferr != nil {
-			writeError(w, badRequest("获取登录态失败："+ferr.Error()))
+			// 跳转链失败（典型：NOTCLOUD 学校链路绕进学校自建认证）。
+			// OAuth 码已被这次失败消费掉，同一个码不可能重来——
+			// 会话删掉并用 failed 状态如实告知，前端展示真实原因，
+			// 不能让下一次轮询的 status=5 把它盖成「二维码已过期」。
+			qrMu.Lock()
+			delete(qrSessions, in.Ticket)
+			qrMu.Unlock()
+			writeData(w, http.StatusOK, map[string]any{
+				"status":  "failed",
+				"message": "获取登录态失败：" + ferr.Error(),
+			})
 			return
 		}
 
