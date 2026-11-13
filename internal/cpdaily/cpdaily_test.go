@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -802,5 +803,37 @@ func TestIsAuthExpiredDetectsLoginPage(t *testing.T) {
 		if IsAuthExpired(err) {
 			t.Errorf("不应判定为会话失效：%v", err)
 		}
+	}
+}
+
+// TestIsAuthExpiredThroughMultiError 校验多任务部分失败时仍能识别会话失效。
+func TestIsAuthExpiredThroughMultiError(t *testing.T) {
+	inner := &APIError{Code: "401", Message: "登录状态已失效，需要重新登录"}
+	multi := &MultiError{Errors: []error{fmt.Errorf("查寝：%w", inner)}}
+	if !IsAuthExpired(multi) {
+		t.Fatal("MultiError 中的 401 应被识别为会话失效")
+	}
+}
+
+// TestListAllTasksLoginPageIsAuthExpired 校验业务接口返回登录页时，
+// ListAllTasks 的错误能被识别为会话失效（否则不会触发自动续期）。
+func TestListAllTasksLoginPageIsAuthExpired(t *testing.T) {
+	loginPage := `<!DOCTYPE html><html lang="en"><head><title>统一身份认证平台</title>` +
+		`<link href="/iap/login/chunk.css"></head><body>login</body></html>`
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(loginPage))
+	}))
+	defer srv.Close()
+
+	client := NewClient(ClientOptions{HTTPClient: srv.Client(), Timeout: 5 * time.Second}, nil)
+	host := strings.TrimPrefix(srv.URL, "https://")
+	_, err := client.ListAllTasks(context.Background(), host,
+		[]TaskKind{KindAttendance, KindSign, KindCollect})
+	if err == nil {
+		t.Fatal("登录页响应应返回错误")
+	}
+	if !IsAuthExpired(err) {
+		t.Fatalf("登录页错误应被识别为会话失效，得到：%v", err)
 	}
 }

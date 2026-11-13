@@ -591,8 +591,14 @@ func (s *Service) renewSessionWithTGC(ctx context.Context, account *store.Accoun
 		}
 		return errors.New("账号没有保存 CAS 票或 sessionToken，请手动登录")
 	}
+	if exchangeErr != nil {
+		log.Printf("[auth] 账号 %d 旧 CAS 票换票失败，改用 sessionToken 刷新：%v", account.ID, exchangeErr)
+	} else {
+		log.Printf("[auth] 账号 %d 无 CAS 票，改用 sessionToken 刷新", account.ID)
+	}
 	res, err := cpdaily.RefreshTGCBySession(ctx, device, account.TenantID, sessionToken, tgc)
 	if err != nil {
+		log.Printf("[auth] 账号 %d 用 sessionToken 刷新 CAS 票失败：%v", account.ID, err)
 		return fmt.Errorf("刷新 CAS 票失败：%w", err)
 	}
 	if strings.TrimSpace(res.TGC) == "" {
@@ -625,6 +631,7 @@ func (s *Service) renewSessionWithTGC(ctx context.Context, account *store.Accoun
 	}
 	account.Cookies = encoded
 	account.LoginStatus = "authorized"
+	log.Printf("[auth] 账号 %d CAS 票已刷新并换取业务会话", account.ID)
 	return nil
 }
 

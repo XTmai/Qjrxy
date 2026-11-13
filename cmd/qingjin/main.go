@@ -7,10 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"net"
 	"os/signal"
 	"runtime"
 	"syscall"
@@ -52,6 +52,8 @@ func main() {
 		// 容器里常缺 tzdata，退回到固定偏移（中国无夏令时，等价）
 		time.Local = time.FixedZone("CST", 8*3600)
 	}
+
+	log.Printf("Qjrxy %s 启动", buildinfo.Version)
 
 	if *addr != "" {
 		os.Setenv("QINGJIN_ADDR", *addr)
@@ -195,4 +197,3 @@ func openBrowser(url string) error {
 		return exec.Command("xdg-open", url).Start()
 	}
 }
-
