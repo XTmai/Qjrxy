@@ -23,11 +23,13 @@ import (
 // 登录成功后服务端返回学校 CAS 票（tgc），再用它换取业务域会话。
 // 因此只要手机号绑定了学校账号，所有学校通用。
 const (
-	appSMSHost   = "https://mobile.campushoy.com"
 	appSMSKey    = "fafUY9659kyengTR"
 	appSMSIVHex  = "01020304050607080901020304050607"
 	appSMSVerTag = "first_v4"
 )
+
+// appSMSHost 是账号体系域名；变量形式便于单测用 httptest 替换。
+var appSMSHost = "https://mobile.campushoy.com"
 
 // AppLoginResult 是手机号登录成功后的关键信息。
 type AppLoginResult struct {
@@ -233,6 +235,87 @@ func AppMobileLogin(ctx context.Context, device DeviceProfile, tenantID, phone, 
 		// 把服务端的状态码带上：不同学校的失败形态不一样（选租户、待绑定、
 		// 票据二次校验），没有这两个字段只能看到一句「没凭证」，无从排查。
 		return nil, fmt.Errorf("登录未返回有效凭证（status=%s, tgcStatus=%s）",
+			orDash(res.Status), orDash(res.TGCStatus))
+	}
+	return &res, nil
+}
+
+// RefreshTGCBySession 用账号体系的 sessionToken 换取/刷新学校 CAS 票。
+//
+// 背景：部分学校短信登录只返回 sessionToken、不返回 tgc（CASTGC），
+// 业务票（MOD_AUTH_CAS）过期后就没有可续期的票据。App 自己会带
+// sessionToken 调 validation 接口拿一张新 tgc，这里复刻该流程。
+//
+// tgc 为空或已过期都可以传空串；服务端会基于 sessionToken 重新签发。
+func RefreshTGCBySession(ctx context.Context, device DeviceProfile, tenantID, sessionToken, tgc string) (*AppLoginResult, error) {
+	sessionToken = strings.TrimSpace(sessionToken)
+	if sessionToken == "" {
+		return nil, errors.New("缺少 sessionToken，无法刷新 CAS 票")
+	}
+	body := map[string]string{"tgc": "", "idsToken": ""}
+	if tgc = strings.TrimSpace(tgc); tgc != "" {
+		if enc, err := DESEncrypt(tgc, desKeyToken); err == nil {
+			body["tgc"] = enc
+		}
+	}
+	payload, _ := json.Marshal(body)
+
+	h := appSMSHeaders(device, tenantID)
+	h["Cookie"] = fmt.Sprintf("clientType=cpdaily_student; sessionToken=%s; standAlone=0; tenantId=%s",
+		sessionToken, tenantID)
+	h["sessionTokenKey"] = sessionToken
+
+	// 注意：这个接口收的是明文 JSON（不是 appSMSPost 的 {a,b} 加密信封）。
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		appSMSHost+"/v6/auth/authentication/new/validation/v-9012",
+		strings.NewReader(string(payload)))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range h {
+		req.Header.Set(k, v)
+	}
+	resp, err := (&http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
+		TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
+	}}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求 CAS 票服务失败：%w", err)
+	}
+	defer resp.Body.Close()
+	rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var outer struct {
+		ErrCode int             `json:"errCode"`
+		ErrMsg  string          `json:"errMsg"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(rawBody, &outer); err != nil {
+		return nil, fmt.Errorf("CAS 票服务响应异常（HTTP %d）", resp.StatusCode)
+	}
+	if outer.ErrCode != 0 {
+		msg := outer.ErrMsg
+		if msg == "" {
+			msg = fmt.Sprintf("code=%d", outer.ErrCode)
+		}
+		return nil, fmt.Errorf("刷新 CAS 票被拒绝：%s", msg)
+	}
+	raw := outer.Data
+	// 该接口通常返回明文 data 对象；兼容被加密返回的旧版本。
+	var res AppLoginResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		var encrypted string
+		if json.Unmarshal(raw, &encrypted) != nil {
+			return nil, errors.New("解析 CAS 票响应失败")
+		}
+		dec, derr := appSMSDecrypt(encrypted)
+		if derr != nil {
+			return nil, fmt.Errorf("解析 CAS 票响应失败：%w", derr)
+		}
+		if err := json.Unmarshal(dec, &res); err != nil {
+			return nil, fmt.Errorf("解析 CAS 票响应失败：%w", err)
+		}
+	}
+	if res.TGC == "" && res.SessionToken == "" {
+		return nil, fmt.Errorf("账号体系未返回票据（status=%s, tgcStatus=%s）",
 			orDash(res.Status), orDash(res.TGCStatus))
 	}
 	return &res, nil

@@ -548,29 +548,82 @@ func hasCredentials(a *store.Account) bool {
 	return strings.TrimSpace(a.PasswordEnc) != ""
 }
 
-// renewSessionWithTGC 用登录时保存的 CAS 票重新换取业务会话。
+// renewSessionWithTGC 续期业务会话。两条路：
 //
-// 这是票过期后的首选恢复手段：不依赖密码、不触发图形验证码、也不需要
-// 用户重新收短信。CAS 的 TGT 在有效期内可以反复换 service ticket，
-// 前提是票本身没过期——过期的票换不动，会退回到密码重登/人工处理。
+//  1. 用保存的 CAS 票（tgc）直接换 service ticket；
+//  2. 票为空/已过期时，用账号体系的 sessionToken 调 validation 换一张新票。
+//
+// 第 2 条是短信登录的关键：部分学校短信登录只下发 sessionToken、不下发 tgc，
+// 旧实现到这里就直接失败，导致「验证码登录活不过一个业务票周期」。
 func (s *Service) renewSessionWithTGC(ctx context.Context, account *store.Account) error {
-	if strings.TrimSpace(account.TGCEnc) == "" {
-		return errors.New("该账号没有保存 CAS 票")
-	}
-	tgc, err := secure.Decrypt(s.cfg.SecretKey, account.TGCEnc)
-	if err != nil || strings.TrimSpace(tgc) == "" {
-		return errors.New("CAS 票解析失败，请重新登录")
-	}
-	client := s.clientFor(account)
 	device := deviceProfile(account, account.Lon, account.Lat)
-	if err := cpdaily.ExchangeTGC(ctx, client, account.Host, tgc, device, account.TenantID); err != nil {
+
+	var tgc string
+	if strings.TrimSpace(account.TGCEnc) != "" {
+		if v, err := secure.Decrypt(s.cfg.SecretKey, account.TGCEnc); err == nil {
+			tgc = strings.TrimSpace(v)
+		}
+	}
+
+	// 1) 先用已有 CAS 票换票
+	var exchangeErr error
+	if tgc != "" {
+		client := s.clientFor(account)
+		if err := cpdaily.ExchangeTGC(ctx, client, account.Host, tgc, device, account.TenantID); err == nil {
+			cookies := encodeCookies(client.Cookies())
+			if err := s.db.UpdateAccountSession(ctx, account.ID, cookies, "authorized"); err != nil {
+				return err
+			}
+			account.Cookies = cookies
+			account.LoginStatus = "authorized"
+			return nil
+		} else {
+			exchangeErr = err
+		}
+	}
+
+	// 2) 用 sessionToken 刷新 CAS 票，再换业务会话
+	cookies := decodeCookies(account.Cookies)
+	sessionToken := strings.TrimSpace(cookies["sessionToken"])
+	if sessionToken == "" {
+		if exchangeErr != nil {
+			return fmt.Errorf("CAS 票续期失败：%w；账号也没有 sessionToken，请手动登录", exchangeErr)
+		}
+		return errors.New("账号没有保存 CAS 票或 sessionToken，请手动登录")
+	}
+	res, err := cpdaily.RefreshTGCBySession(ctx, device, account.TenantID, sessionToken, tgc)
+	if err != nil {
+		return fmt.Errorf("刷新 CAS 票失败：%w", err)
+	}
+	if strings.TrimSpace(res.TGC) == "" {
+		return errors.New("账号体系未返回新的 CAS 票，请手动登录")
+	}
+	enc, err := secure.Encrypt(s.cfg.SecretKey, res.TGC)
+	if err != nil {
+		return fmt.Errorf("保存新 CAS 票失败：%w", err)
+	}
+	if err := s.db.UpdateAccountTGC(ctx, account.ID, enc); err != nil {
+		return fmt.Errorf("保存新 CAS 票失败：%w", err)
+	}
+	account.TGCEnc = enc
+	if res.SessionToken != "" {
+		cookies["sessionToken"] = res.SessionToken
+	}
+	account.Cookies = encodeCookies(cookies)
+
+	client := s.clientFor(account)
+	if err := cpdaily.ExchangeTGC(ctx, client, account.Host, res.TGC, device, account.TenantID); err != nil {
 		return err
 	}
-	cookies := encodeCookies(client.Cookies())
-	if err := s.db.UpdateAccountSession(ctx, account.ID, cookies, "authorized"); err != nil {
+	finalCookies := client.Cookies()
+	if res.SessionToken != "" {
+		finalCookies["sessionToken"] = res.SessionToken
+	}
+	encoded := encodeCookies(finalCookies)
+	if err := s.db.UpdateAccountSession(ctx, account.ID, encoded, "authorized"); err != nil {
 		return err
 	}
-	account.Cookies = cookies
+	account.Cookies = encoded
 	account.LoginStatus = "authorized"
 	return nil
 }

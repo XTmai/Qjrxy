@@ -1,8 +1,13 @@
 package cpdaily
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +76,44 @@ func TestIAPLoginURLCarriesService(t *testing.T) {
 	// CAS 需要 service 才知道把票据签给哪个业务域，缺了它换票永远失败。
 	if got, want := u.Query().Get("service"), "https://nut.campusphere.net/portal/login"; got != want {
 		t.Fatalf("service 应为 %q，得到 %q", want, got)
+	}
+}
+
+// TestRefreshTGCBySession 校验 sessionToken 换取 CAS 票的请求与解析。
+func TestRefreshTGCBySession(t *testing.T) {
+	var gotPath, gotCookie, gotSessionKey, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotCookie = r.Header.Get("Cookie")
+		gotSessionKey = r.Header.Get("sessionTokenKey")
+		raw, _ := io.ReadAll(r.Body)
+		gotBody = string(raw)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errCode":0,"errMsg":null,"data":{"tgc":"iap-1-TGT-new","sessionToken":"session-new","openId":"2024000001","tgcStatus":"tgcValidate"}}`))
+	}))
+	defer srv.Close()
+
+	oldHost := appSMSHost
+	appSMSHost = srv.URL
+	defer func() { appSMSHost = oldHost }()
+
+	res, err := RefreshTGCBySession(context.Background(), DeviceProfile{DeviceID: "device-x"}, "tenant-x", "session-old", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.TGC != "iap-1-TGT-new" || res.SessionToken != "session-new" || res.OpenID != "2024000001" {
+		t.Fatalf("解析异常：%+v", res)
+	}
+	if gotPath != "/v6/auth/authentication/new/validation/v-9012" {
+		t.Errorf("请求路径异常：%s", gotPath)
+	}
+	if !strings.Contains(gotCookie, "sessionToken=session-old") {
+		t.Errorf("Cookie 未带 sessionToken：%s", gotCookie)
+	}
+	if gotSessionKey != "session-old" {
+		t.Errorf("sessionTokenKey 头异常：%s", gotSessionKey)
+	}
+	if !strings.Contains(gotBody, `"tgc":""`) || !strings.Contains(gotBody, `"idsToken":""`) {
+		t.Errorf("请求体异常：%s", gotBody)
 	}
 }
