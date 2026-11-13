@@ -301,7 +301,7 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, headers map[string
 		// 会话失效时服务端直接返回 IAP 登录页 HTML，而不是 JSON。
 		// 这里必须构造 APIError 并带上 401 语义，否则 IsAuthExpired 无法识别，
 		// 自动重登录就不会触发，用户只能看到「响应不是有效 JSON」。
-		if looksLikeLoginPage(raw) {
+		if looksLikeLoginPage(raw) || looksLikeHTMLPage(raw) {
 			return nil, &APIError{Code: "401", Message: "登录状态已失效，需要重新登录"}
 		}
 		return nil, fmt.Errorf("响应不是有效 JSON：%s", truncate(string(raw), 200))
@@ -371,12 +371,20 @@ func IsAuthExpired(err error) bool {
 	return false
 }
 
-// looksLikeLoginPage 判断响应体是否是统一身份认证的登录页。
+// looksLikeHTMLPage 判断响应体是否是一个 HTML 页面。
 //
-// 今日校园业务接口在会话失效时不返回 401，而是重定向/返回 IAP 登录页 HTML。
-// 识别这个特征才能把它当成「需要重新登录」，进而触发自动重登录。
+// 业务接口正常只返回 JSON；返回 HTML 基本只有一种情况：会话失效，
+// 被重定向/回退到登录页。因此即使登录页文案变了，也能识别。
+func looksLikeHTMLPage(raw []byte) bool {
+	s := strings.ToLower(strings.TrimLeft(string(raw), "\ufeff \t\r\n"))
+	return strings.HasPrefix(s, "<!doctype") || strings.HasPrefix(s, "<html")
+}
+
 func looksLikeLoginPage(raw []byte) bool {
-	s := string(raw)
+	// 部分学校（实测 fdm.lntu.edu.cn）返回的登录页前面带 1~2 个 UTF-8 BOM。
+	// 必须先剥掉 BOM 和空白再判断首字符，否则会被当成「不是有效 JSON」的
+	// 普通错误，IsAuthExpired 识别不到，自动续期永远不会触发。
+	s := strings.TrimLeft(string(raw), "\ufeff \t\r\n")
 	if len(s) == 0 || s[0] != '<' {
 		return false
 	}

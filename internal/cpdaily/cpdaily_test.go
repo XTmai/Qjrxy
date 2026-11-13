@@ -762,6 +762,9 @@ func TestLooksLikeLoginPage(t *testing.T) {
 		`<html><head><title>统一身份认证平台</title></head></html>`,
 		`<html><form id="casLoginForm"></form></html>`,
 		`<html><script>location.href="/authserver/login"</script></html>`,
+		// 回归：fdm.lntu.edu.cn 的登录页前面带两个 UTF-8 BOM
+		"\ufeff\ufeff<!DOCTYPE html><html><head><title>统一身份认证平台</title></head></html>",
+		"  \n<!DOCTYPE html><html><title>统一身份认证平台</title></html>",
 	}
 	for _, p := range pages {
 		if !looksLikeLoginPage([]byte(p)) {
@@ -818,8 +821,8 @@ func TestIsAuthExpiredThroughMultiError(t *testing.T) {
 // TestListAllTasksLoginPageIsAuthExpired 校验业务接口返回登录页时，
 // ListAllTasks 的错误能被识别为会话失效（否则不会触发自动续期）。
 func TestListAllTasksLoginPageIsAuthExpired(t *testing.T) {
-	loginPage := `<!DOCTYPE html><html lang="en"><head><title>统一身份认证平台</title>` +
-		`<link href="/iap/login/chunk.css"></head><body>login</body></html>`
+	// 故意不带任何登录页关键字，验证「业务接口返回 HTML 即会话失效」兜底
+	loginPage := `<!DOCTYPE html><html><body>custom portal</body></html>`
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write([]byte(loginPage))
@@ -835,5 +838,25 @@ func TestListAllTasksLoginPageIsAuthExpired(t *testing.T) {
 	}
 	if !IsAuthExpired(err) {
 		t.Fatalf("登录页错误应被识别为会话失效，得到：%v", err)
+	}
+}
+
+// TestLooksLikeHTMLPage 校验带 BOM/空白前缀的 HTML 页面也能识别。
+func TestLooksLikeHTMLPage(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"<!DOCTYPE html><html></html>", true},
+		{"\ufeff\ufeff<html><body>x</body></html>", true},
+		{"  \r\n<!doctype html><html></html>", true},
+		{`{"code":"0"}`, false},
+		{"<xml>not html</xml>", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := looksLikeHTMLPage([]byte(c.in)); got != c.want {
+			t.Errorf("looksLikeHTMLPage(%q)=%v, want %v", c.in, got, c.want)
+		}
 	}
 }
