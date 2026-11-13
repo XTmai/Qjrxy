@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,6 +161,17 @@ func (s *Server) handleQRLoginPoll(w http.ResponseWriter, r *http.Request) {
 	// 轮询 campushoy validation
 	res, err := cpdaily.QRLoginPoll(r.Context(), sess.QRId)
 	if err != nil {
+		// 服务端明确报错（errCode != 0）要终止轮询并告知用户；
+		// 之前一律回 waiting，票据失效时用户会无限等下去。
+		// 网络抖动仍然按 waiting 处理，下一轮再试。
+		var apiErr *cpdaily.QRCodeAPIError
+		if errors.As(err, &apiErr) {
+			qrMu.Lock()
+			delete(qrSessions, in.Ticket)
+			qrMu.Unlock()
+			writeError(w, badRequest("扫码登录失败："+apiErr.Error()))
+			return
+		}
 		writeData(w, http.StatusOK, map[string]any{"status": "waiting"})
 		return
 	}

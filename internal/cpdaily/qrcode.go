@@ -2,7 +2,6 @@ package cpdaily
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,6 +53,17 @@ type validationResp struct {
 		Status      int    `json:"status"` // 1=waiting 2/3=scanned 4=confirmed 5=expired
 		RedirectURL string `json:"redirectUrl"`
 	} `json:"data"`
+}
+
+// QRCodeAPIError 表示 campushoy 接口明确返回了错误（errCode != 0）。
+// 与网络层错误区分：前者应当终止轮询并提示用户，后者可以继续等。
+type QRCodeAPIError struct {
+	Code int
+	Msg  string
+}
+
+func (e *QRCodeAPIError) Error() string {
+	return fmt.Sprintf("[%d] %s", e.Code, e.Msg)
 }
 
 // QRLoginPollResult 是一次轮询的结果。
@@ -157,7 +167,7 @@ func GetQROAuthParams(ctx context.Context, host string) (*QRLoginParams, error) 
 		Jar:     jar,
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
 		},
 	}
 
@@ -235,8 +245,8 @@ func QRLoginStart(ctx context.Context, params *QRLoginParams) (qrId string, err 
 
 // QRLoginPoll 轮询 validation/{qrId}。
 func QRLoginPoll(ctx context.Context, qrId string) (*QRLoginPollResult, error) {
-	url := fmt.Sprintf(qrBaseURL+"/connect/qrcode/validation/%s", qrId)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader("{}"))
+	pollURL := fmt.Sprintf(qrBaseURL+"/connect/qrcode/validation/%s", qrId)
+	req, err := http.NewRequestWithContext(ctx, "POST", pollURL, strings.NewReader("{}"))
 	if err != nil {
 		return nil, err
 	}
@@ -253,6 +263,11 @@ func QRLoginPoll(ctx context.Context, qrId string) (*QRLoginPollResult, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
 		return nil, fmt.Errorf("解析 validation 响应失败: %w", err)
 	}
+	// errCode 非 0 说明服务端拒绝了这次轮询（票据失效、参数错误等）。
+	// 不读它的话 status 落到零值 0，上层会把错误当成「还在等待」无限轮询下去。
+	if res.ErrCode != 0 {
+		return nil, &QRCodeAPIError{Code: res.ErrCode, Msg: res.ErrMsg}
+	}
 	return &QRLoginPollResult{
 		Status:      res.Data.Status,
 		RedirectURL: res.Data.RedirectURL,
@@ -265,11 +280,21 @@ func QRLoginPoll(ctx context.Context, qrId string) (*QRLoginPollResult, error) {
 // Cookie 会自动在每跳之间流转，最终拿到 CASTGC + MOD_AUTH_CAS 等完整登录态。
 func QRLoginFollow(ctx context.Context, redirectURL string) (*QRLoginCookies, error) {
 	jar, _ := cookiejar.New(nil)
+	// 跳转链上访问过的每个 URL：cookiejar.Cookies 返回的 Cookie 只填
+	// Name/Value，Domain 恒为空串，域归属只能靠「用哪个 URL 去查」来还原。
+	visited := []*url.URL{parseURL(redirectURL)}
 	client := &http.Client{
 		Jar:     jar,
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 15 {
+				return fmt.Errorf("重定向超过 15 次，终止跳转链")
+			}
+			visited = append(visited, req.URL)
+			return nil
 		},
 	}
 
@@ -286,28 +311,33 @@ func QRLoginFollow(ctx context.Context, redirectURL string) (*QRLoginCookies, er
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
+	if resp.Request != nil && resp.Request.URL != nil {
+		visited = append(visited, resp.Request.URL)
+	}
+	// 中央域也要查一遍：CASTGC / uniauth 会话不在学校租户域上。
+	visited = append(visited, parseURL("https://api.campushoy.com"), parseURL("https://uniauth.campusphere.net"))
 
-	// 从 CookieJar 提取所有 Cookie
+	// 从 CookieJar 提取所有 Cookie。Go 的 cookiejar.Cookies(u) 只会填
+	// Name/Value（Domain 恒为空），所以 Cookie 的域归属必须用
+	// 「拿哪个 URL 去查」来还原：依次用跳转链上的每个 URL 查询，
+	// 命中的 Cookie 就属于那个 URL 的主机。
 	out := &QRLoginCookies{Cookies: map[string]string{}}
 	schoolHosts := map[string]bool{}
-	for _, u := range []*url.URL{
-		parseURL(redirectURL),
-		parseURL("https://api.campushoy.com"),
-		parseURL("https://uniauth.campusphere.net"),
-	} {
+	for _, u := range visited {
 		if u == nil {
 			continue
 		}
+		host := u.Hostname()
 		for _, c := range jar.Cookies(u) {
-			key := c.Domain + "|" + c.Name
+			key := host + "|" + c.Name
 			if _, ok := out.Cookies[key]; !ok {
 				out.Cookies[key] = c.Value
 			}
-			// 学校域名判断：非 campushoy.com / campushoy.net 中央域
-			if !strings.Contains(c.Domain, "api.campushoy.com") &&
-				!strings.Contains(c.Domain, "uniauth.campusphere.net") &&
-				strings.Contains(c.Domain, "campusphere.net") {
-				schoolHosts[strings.TrimPrefix(c.Domain, ".")] = true
+			// 学校域名判断：campusphere 租户且非中央域（与原实现口径一致）
+			if strings.Contains(host, "campusphere.net") &&
+				!strings.Contains(host, "api.campushoy.com") &&
+				!strings.Contains(host, "uniauth.campusphere.net") {
+				schoolHosts[host] = true
 			}
 		}
 	}
@@ -348,7 +378,9 @@ func httpDo(ctx context.Context, req *http.Request) (*http.Response, error) {
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			// 与主链路一致的证书校验策略：只对管理页白名单里的主机跳过校验，
+			// 不再对扫码链路整体关闭校验（这条链路上有 CASTGC / MOD_AUTH_CAS）。
+			TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
 		},
 	}
 	return client.Do(req)

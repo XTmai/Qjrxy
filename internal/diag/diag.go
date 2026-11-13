@@ -40,6 +40,7 @@ var (
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 	startOnce sync.Once
+	closed    bool  // Close 已执行；Record 在同一把读锁下检查，避免向已关闭 channel 发送
 	dropped   int64 // 队列满被丢弃的条数（诊断自身出问题时看的）
 	droppedMu sync.Mutex
 )
@@ -107,17 +108,21 @@ func start() {
 	mu.RLock()
 	dir := cfg.dataDir
 	mu.RUnlock()
+	mu.Lock()
 	ch = make(chan Entry, 256)
+	mu.Unlock()
 	wg.Add(1)
 	go worker(dir)
 }
 
 // Record 提交一条诊断记录（异步）。未启用或队列满时静默丢弃。
 func Record(e Entry) {
+	// 整个「检查 + 发送」都持有读锁：Close 拿写锁先关标志再 close(ch)，
+	// 两条路互斥，避免向已关闭的 channel 发送而 panic
+	// （select 的 default 分支救不了向 closed channel 的 send）。
 	mu.RLock()
-	on := cfg.enabled
-	mu.RUnlock()
-	if !on || ch == nil {
+	defer mu.RUnlock()
+	if !cfg.enabled || closed || ch == nil {
 		return
 	}
 	if e.TS == "" {
@@ -142,10 +147,13 @@ func DroppedCount() int64 {
 // Close 停止 worker 并把队列里剩余的记录写完。进程退出时调用。
 func Close() {
 	closeOnce.Do(func() {
+		mu.Lock()
+		closed = true
 		if ch != nil {
 			close(ch)
-			wg.Wait()
 		}
+		mu.Unlock()
+		wg.Wait()
 	})
 }
 

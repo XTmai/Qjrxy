@@ -77,6 +77,13 @@ func main() {
 	if err := bootstrapAdmin(context.Background(), svc, cfg); err != nil {
 		log.Printf("初始化管理员失败：%v", err)
 	}
+	// 上一进程没来得及收尾的「执行中」记录在这里明确收尾，
+	// 否则它们永远停在 executing，统计口径还把它们算进 pending。
+	if n, err := db.RecoverStaleLogs(context.Background()); err != nil {
+		log.Printf("恢复中断的执行记录失败：%v", err)
+	} else if n > 0 {
+		log.Printf("已把 %d 条中断的执行记录收尾为「待核对」", n)
+	}
 
 	static, err := web.Handler()
 	if err != nil {
@@ -136,7 +143,6 @@ func main() {
 
 	log.Println("正在关闭服务……")
 	sched.Stop()
-	diag.Close()
 	// 先结束 SSE 长连接，否则 http.Server.Shutdown 会一直等它们自然断开，
 	// 每次退出都要耗满超时时间。
 	api.Close()
@@ -145,6 +151,10 @@ func main() {
 	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("关闭 HTTP 服务出错：%v", err)
 	}
+	// diag.Close 必须放在所有可能发诊断日志的协程结束之后：
+	// Record 向已关闭的 channel 发送会 panic，而图片下载等请求协程外的
+	// goroutine panic 会直接终止进程。之前排在 Shutdown 前面就是这个顺序。
+	diag.Close()
 	_ = db.PurgeExpiredSessions(context.Background())
 	log.Println("已退出")
 }

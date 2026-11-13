@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -21,6 +22,9 @@ type RedeemCode struct {
 // 用「条件 UPDATE + 影响行数」做原子占用：并发兑换同一个码时，
 // 只有第一个请求能把 used_by 从 NULL 改掉，其余拿到 0 行而失败。
 // 早期实现只校验格式就固定返回 30，任意 QJ-XXXX-XXXX 都能无限次兑换。
+//
+// 注意：这个方法只烧码不加额度。加额度请用 RedeemAndGrant——
+// 两者分开的话，烧码提交后加额度失败，卡密就白白作废了。
 func (db *DB) RedeemCode(ctx context.Context, code string, userID int64) (int, error) {
 	code = normalizeCode(code)
 	tx, err := db.BeginTx(ctx, nil)
@@ -45,6 +49,50 @@ func (db *DB) RedeemCode(ctx context.Context, code string, userID int64) (int, e
 		return 0, ErrNotFound
 	}
 	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return amount, nil
+}
+
+// RedeemAndGrant 在同一个事务里消费卡密并给用户加额度。
+//
+// 之前的实现分两步：RedeemCode 的事务先提交（卡密标记已用），
+// GrantQuota 是另一条独立 UPDATE。两步之间一旦失败（进程退出、DB 抖动），
+// 卡密已被烧掉、额度没加上，且重试永远返回「卡密无效或已被使用」。
+// 现在加额度和烧码同生共死：任一步失败整体回滚，卡密回到未使用状态。
+func (db *DB) RedeemAndGrant(ctx context.Context, code string, userID int64) (int, error) {
+	code = normalizeCode(code)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE redeem_codes SET used_by = ?, used_at = ? WHERE code = ? AND used_by IS NULL`,
+		userID, now(), code)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, ErrNotFound
+	}
+
+	var amount int
+	err = tx.QueryRowContext(ctx, `SELECT amount FROM redeem_codes WHERE code = ?`, code).Scan(&amount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
+	if amount <= 0 {
+		return 0, fmt.Errorf("卡密面额非法（%d）", amount)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET quota = quota + ? WHERE id = ?`, amount, userID); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

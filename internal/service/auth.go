@@ -404,6 +404,11 @@ func (s *Service) finishSession(ctx context.Context, account *store.Account, cli
 		return nil, err
 	}
 	s.notify(account.UserID, events.TopicAccounts)
+	// 登录产物验证失败时必须报错，而不是返回空票让 handler 回「登录成功」：
+	// 那种情况下账号已被标记 expired，用户以为自己登录好了，任务页却全是「需重新登录」。
+	if status == "expired" {
+		return nil, errors.New("登录流程完成，但学校会话验证失败（返回登录页），请稍后重试或重新登录")
+	}
 	return &LoginTicket{ID: "", AccountID: account.ID}, nil
 }
 

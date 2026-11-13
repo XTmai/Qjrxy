@@ -391,11 +391,13 @@ func (s *Server) handleUploadPhoto(w http.ResponseWriter, r *http.Request) {
 	if account.PhotoPath != "" && account.PhotoPath != rel {
 		_ = os.Remove(s.svc.PhotoAbsPath(account.PhotoPath))
 	}
-	account.PhotoPath = rel
-	if err := s.svc.DB().UpdateAccount(r.Context(), account); err != nil {
+	// 只更新照片字段：这里拿到的 account 是 multipart 解析前的快照，
+	// 整行 UPDATE 会把并发写入的 cookies / login_status / device_id / 坐标回滚成旧值。
+	if err := s.svc.DB().UpdateAccountPhotoPath(r.Context(), user.ID, account.ID, rel); err != nil {
 		writeError(w, err)
 		return
 	}
+	account.PhotoPath = rel
 	s.svc.Events().Publish(user.ID, events.TopicAccounts)
 	writeData(w, http.StatusOK, map[string]any{"account": toAccountView(account)})
 }
@@ -477,16 +479,14 @@ func (s *Server) handleRedeemQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 卡密必须在库里预置且未被使用过；面额取自库，不再由格式推断。
-	amount, err := s.svc.DB().RedeemCode(r.Context(), code, user.ID)
+	// 烧码与加额度必须在同一个事务里：分两步的话，烧码提交后加额度失败，
+	// 卡密就被白白作废且无法重试（重试会返回「已被使用」）。
+	amount, err := s.svc.DB().RedeemAndGrant(r.Context(), code, user.ID)
 	if errors.Is(err, store.ErrNotFound) {
 		writeError(w, badRequest("卡密无效或已被使用"))
 		return
 	}
 	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := s.svc.DB().GrantQuota(r.Context(), user.ID, amount); err != nil {
 		writeError(w, err)
 		return
 	}

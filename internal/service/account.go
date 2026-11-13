@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -106,8 +108,12 @@ func (s *Service) ApplyRuntimeSettings() {
 
 	// 服务器运行模式：settings 覆盖环境变量，直接写回共享的 cfg 指针，
 	// 所有读取 cfg 的路径（鉴权、额度、systemInfo）立即看到新值。
+	// settings 表一旦写过某个键就永久压过环境变量——这个优先级对部署者
+	// 并不显而易见，覆盖发生时必须打到日志里，否则「env 设了多用户却没生效」
+	// 会变成一笔查不到的糊涂账。
 	if v := settings["server.multiUser"]; v != "" {
 		s.cfg.SingleUser = v == "0"
+		log.Printf("运行模式由 settings 覆盖环境变量：多用户=%v", !s.cfg.SingleUser)
 	}
 	if v := settings["server.registerOpen"]; v != "" {
 		s.cfg.RegisterOpen = v == "1"
@@ -119,6 +125,9 @@ func (s *Service) ApplyRuntimeSettings() {
 		hosts := splitHosts(v)
 		s.cfg.TLSInsecureHosts = hosts
 		cpdaily.ConfigureTLSInsecureHosts(hosts)
+		// clientFor 用的是 s.opts 的快照，不同步的话 UI 显示保存成功，
+		// 登录/签到的 HTTP 客户端却永远用启动时那份白名单。
+		s.opts.InsecureHosts = hosts
 	}
 }
 
@@ -537,6 +546,11 @@ func (s *Service) PhotoPoolUsage() (used int64, count int) {
 	root := s.cfg.PhotosDir()
 	entries, err := os.ReadDir(root)
 	if err != nil {
+		// 目录不存在是首次使用的正常状态；其余错误不能静默当 0，
+		// 否则容量上限检查会放行超限上传。
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("统计照片池用量失败（按 0 处理，容量检查可能放行超限）：%v", err)
+		}
 		return 0, 0
 	}
 	for _, entry := range entries {

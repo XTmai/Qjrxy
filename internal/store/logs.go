@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -39,6 +40,11 @@ func (db *DB) CreateLog(ctx context.Context, l *Log) (int64, error) {
 	if l.CreatedAt == "" {
 		l.CreatedAt = now()
 	}
+	if strings.TrimSpace(l.Detail) == "" {
+		// 执行中的记录 detail 先落 "{}"：聚合查询会对 detail 做 json_extract，
+		// 空串是非法 JSON，只要存在一条就会让 /api/stats/7d 整体报错。
+		l.Detail = "{}"
+	}
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO logs (user_id, account_id, plan_id, trace_id, task_name, kind, source, status, message, detail, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
@@ -54,6 +60,21 @@ func (db *DB) UpdateLog(ctx context.Context, id int64, status, message, detail s
 	_, err := db.ExecContext(ctx,
 		`UPDATE logs SET status = ?, message = ?, detail = ? WHERE id = ?`, status, message, detail, id)
 	return err
+}
+
+// RecoverStaleLogs 把进程中断遗留的「执行中」记录收尾为待核对。
+//
+// executing 是一种只能存在于运行期间的中间态：服务重启、崩溃或收尾
+// 写入失败都会让记录永远停在 executing，统计口径还会把它算进 pending。
+// 启动时跑一次，把上一进程没来得及收尾的记录明确标出来。
+func (db *DB) RecoverStaleLogs(ctx context.Context) (int64, error) {
+	res, err := db.ExecContext(ctx, `
+		UPDATE logs SET status = ?, message = ? WHERE status = ?`,
+		StatusPending, "执行被中断（服务重启），结果未知，请核对任务列表", StatusExecuting)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // LogFilter 是执行记录查询条件。
@@ -255,10 +276,16 @@ type LogStats7d struct {
 }
 
 // AggregateLogs7d 统计最近 7 天的执行情况。
+//
+// detail 上所有 json_extract 都要用 json_valid 先挡一道：
+// executing 状态的记录在落库时 detail 是空串（老数据）或非法 JSON，
+// 直接 extract 会让整条聚合 SQL 报 malformed JSON，/api/stats/7d 整体失败。
 func (db *DB) AggregateLogs7d(ctx context.Context, userID int64) (LogStats7d, error) {
 	since := startOfToday().AddDate(0, 0, -6).Format(time.RFC3339)
 	rows, err := db.QueryContext(ctx, `
-		SELECT status, COUNT(*), COALESCE(AVG(CAST(json_extract(detail, '$.latencyMs') AS REAL)), 0)
+		SELECT status, COUNT(*),
+			COALESCE(SUM(CASE WHEN json_valid(detail) THEN CAST(json_extract(detail, '$.latencyMs') AS REAL) END), 0),
+			COALESCE(SUM(CASE WHEN json_valid(detail) AND json_extract(detail, '$.latencyMs') IS NOT NULL THEN 1 ELSE 0 END), 0)
 		FROM logs
 		WHERE user_id = ? AND created_at >= ?
 		GROUP BY status`, userID, since)
@@ -272,18 +299,16 @@ func (db *DB) AggregateLogs7d(ctx context.Context, userID int64) (LogStats7d, er
 	for rows.Next() {
 		var status string
 		var n int
-		var avgLat float64
-		if err := rows.Scan(&status, &n, &avgLat); err != nil {
+		var sumLat, cntLat float64
+		if err := rows.Scan(&status, &n, &sumLat, &cntLat); err != nil {
 			return out, err
 		}
 		out.Total += n
 		if status == StatusSuccess {
 			out.Success += n
 		}
-		if avgLat > 0 {
-			latencySum += avgLat * float64(n)
-			latencyCount += float64(n)
-		}
+		latencySum += sumLat
+		latencyCount += cntLat
 	}
 	if err := rows.Err(); err != nil {
 		return out, err
@@ -300,7 +325,7 @@ func (db *DB) AggregateLogs7d(ctx context.Context, userID int64) (LogStats7d, er
 		SELECT COALESCE(AVG(CAST(json_extract(detail, '$.geoOffsetM') AS REAL)), 0)
 		FROM logs
 		WHERE user_id = ? AND created_at >= ?
-		  AND json_extract(detail, '$.geoOffsetM') IS NOT NULL`, userID, since).Scan(&out.AvgGeoOffset)
+		  AND json_valid(detail) AND json_extract(detail, '$.geoOffsetM') IS NOT NULL`, userID, since).Scan(&out.AvgGeoOffset)
 	return out, nil
 }
 

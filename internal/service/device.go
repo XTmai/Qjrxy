@@ -72,10 +72,7 @@ func (s *Service) CreateDeviceTicket(ctx context.Context, userID, accountID int6
 //
 // 这里不删除票据——主页面要靠轮询来读取结果。
 func (s *Service) SubmitDeviceInfo(ticket string, info DeviceInfo) error {
-	if strings.TrimSpace(info.DeviceID) == "" {
-		return errors.New("未获取到设备 ID")
-	}
-
+	// 先验票据（这是授权凭据），再验字段：伪造票据不该拿到字段级的错误提示。
 	deviceMu.Lock()
 	defer deviceMu.Unlock()
 
@@ -88,7 +85,24 @@ func (s *Service) SubmitDeviceInfo(ticket string, info DeviceInfo) error {
 		return errors.New("二维码已过期，请在电脑端重新生成")
 	}
 
+	info.DeviceID = strings.TrimSpace(info.DeviceID)
+	// 与 validateDeviceInput 同口径：扫码授权是生产上唯一真正写入
+	// CpUUID 的路径，不能只查非空就把任意长度/带控制符的值放进提交请求。
+	if len(info.DeviceID) < 8 || len(info.DeviceID) > 128 {
+		return errors.New("设备 ID 长度需在 8-128 之间")
+	}
+	for _, r := range info.DeviceID {
+		if r <= 0x20 || r == 0x7f {
+			return errors.New("设备 ID 不能包含空白或控制字符")
+		}
+	}
+	if len(info.UserAgent) > 512 {
+		return errors.New("User-Agent 过长（最多 512 字符）")
+	}
+
 	info.CollectedAt = time.Now().Format(time.RFC3339)
+	// 票据载荷里保留归一化结果供前端展示；落库是否覆盖平台由
+	// CollectDeviceInfo 按原始 SystemName 显式判断（见该函数注释）。
 	info.Platform = normalizePlatform(info.SystemName)
 	t.Result = &info
 	deviceTickets[ticket] = t
@@ -137,32 +151,55 @@ func (s *Service) CollectDeviceInfo(ctx context.Context, userID int64, ticket st
 		return nil, err
 	}
 
-	account.DeviceID = strings.TrimSpace(info.DeviceID)
+	deviceID := strings.TrimSpace(info.DeviceID)
 	// 机型/版本/构建号/指纹：只在扫码确实取到时覆盖，避免把已有的好值冲成空
+	deviceModel := account.DeviceModel
 	if v := strings.TrimSpace(info.DeviceModel); v != "" && v != "unknown" {
-		account.DeviceModel = v
+		deviceModel = v
 	}
+	systemVersion := account.SystemVersion
 	if v := strings.TrimSpace(info.SystemVersion); v != "" && v != "unknown" {
-		account.SystemVersion = v
+		systemVersion = v
 	}
+	buildID := account.BuildID
 	if v := strings.TrimSpace(info.BuildID); v != "" {
-		account.BuildID = v
+		buildID = v
 	}
+	wisDeviceID := account.WisDeviceID
 	if v := strings.TrimSpace(info.WisDeviceID); v != "" {
-		account.WisDeviceID = v
+		wisDeviceID = v
 	}
+	userAgent := account.UserAgent
 	if v := strings.TrimSpace(info.UserAgent); v != "" {
-		account.UserAgent = v
+		userAgent = v
 	}
-	if info.Platform != "" {
-		account.Platform = info.Platform
+	appVersion := account.AppVersion
+	if v := strings.TrimSpace(info.AppVersion); v != "" {
+		// 之前漏掉这个字段：扫码页明明上报了 appVersion 却从未落库，
+		// 导致提交请求里 UA 与 Cpdaily-Extension 的 appVersion 互相矛盾。
+		appVersion = v
 	}
-	if err := s.db.UpdateAccount(ctx, account); err != nil {
+	// 平台只在扫码确实上报了可识别的系统名时才覆盖：
+	// normalizePlatform 对未知值一律返回 android，直接拿来覆盖会把 iOS 账号改成 android，
+	// 之后所有提交静默切到 Android 协议。
+	platform := account.Platform
+	switch strings.ToLower(strings.TrimSpace(info.SystemName)) {
+	case "ios", "iphone", "ipad":
+		platform = "ios"
+	case "android":
+		platform = "android"
+	}
+
+	if err := s.db.UpdateAccountDevice(ctx, userID, account.ID, store.AccountDevice{
+		DeviceID: deviceID, DeviceModel: deviceModel, SystemVersion: systemVersion,
+		Platform: platform, WisDeviceID: wisDeviceID, UserAgent: userAgent,
+		AppVersion: appVersion, BuildID: buildID,
+	}); err != nil {
 		return nil, err
 	}
 	// 扫码授权常在手机端完成：桌面端账号卡片应立刻从「未绑定设备」变成已绑定。
 	s.notify(userID, events.TopicAccounts)
-	return account, nil
+	return s.db.AccountByID(ctx, userID, account.ID)
 }
 
 // ChangePassword 修改平台登录密码。

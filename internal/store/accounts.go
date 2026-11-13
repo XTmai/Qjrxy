@@ -199,6 +199,40 @@ func (db *DB) UpdateAccountTGC(ctx context.Context, id int64, tgcEnc string) err
 	return err
 }
 
+// AccountDevice 是账号的设备信息字段，随扫码授权整体写入。
+type AccountDevice struct {
+	DeviceID      string
+	DeviceModel   string
+	SystemVersion string
+	Platform      string
+	WisDeviceID   string
+	UserAgent     string
+	AppVersion    string
+	BuildID       string
+}
+
+// UpdateAccountDevice 只更新设备信息字段。
+//
+// 与 UpdateAccountSession 同理：扫码授权和登录态/照片上传可能并发，
+// 用整行快照 UPDATE 会把并发写入的 cookies、坐标等回滚成旧值（丢失更新）。
+func (db *DB) UpdateAccountDevice(ctx context.Context, userID, id int64, d AccountDevice) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE accounts SET device_id = ?, device_model = ?, system_version = ?, platform = ?,
+			wis_device_id = ?, user_agent = ?, app_version = ?, build_id = ?, updated_at = ?
+		WHERE id = ? AND user_id = ?`,
+		d.DeviceID, d.DeviceModel, d.SystemVersion, d.Platform,
+		d.WisDeviceID, d.UserAgent, d.AppVersion, d.BuildID, now(), id, userID)
+	return err
+}
+
+// UpdateAccountPhotoPath 只更新单张兜底照片的路径。
+func (db *DB) UpdateAccountPhotoPath(ctx context.Context, userID, id int64, photoPath string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE accounts SET photo_path = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+		photoPath, now(), id, userID)
+	return err
+}
+
 // RecordProbe 记录一次登录态探测的结果。
 func (db *DB) RecordProbe(ctx context.Context, id int64, status, message string) error {
 	_, err := db.ExecContext(ctx,

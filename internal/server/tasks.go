@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -135,8 +136,12 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 	}
 	// 只对「真正签到成功」扣一次额度。
 	// 失败与待核对不该向用户收费——那等于当天没签上还要掉一次额度。
+	// 用解耦后的 runCtx 而不是 r.Context()：客户端断开（刷新/切网）后
+	// r.Context() 已取消，扣费会静默失败，成功执行却不计额度。
 	if s.svc.Config().QuotaEnabled && outcome.Status == store.StatusSuccess {
-		_, _ = s.svc.DB().ConsumeQuota(r.Context(), user.ID)
+		if _, qerr := s.svc.DB().ConsumeQuota(runCtx, user.ID); qerr != nil {
+			log.Printf("扣减额度失败（user=%d log=%d）：%v", user.ID, outcome.LogID, qerr)
+		}
 	}
 	writeData(w, http.StatusOK, outcome)
 }

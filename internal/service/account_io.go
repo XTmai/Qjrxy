@@ -53,6 +53,10 @@ type ExportFile struct {
 	WithSession  bool            `json:"withSession"`
 	WithPassword bool            `json:"withPassword"`
 	Accounts     []ExportAccount `json:"accounts"`
+	// Warnings 记录导出时没能带上的数据：TGC/密码解密失败会被跳过，
+	// 不留痕的话文件头仍宣称 withSession/withPassword，用户拿到的是
+	// 一份「看起来带登录态、实际缺凭据」的迁移文件。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // ImportResult 是导入的逐条结果。
@@ -84,6 +88,7 @@ func (s *Service) ExportAccounts(ctx context.Context, userID int64, withSession,
 		WithPassword: withPassword,
 		Accounts:     make([]ExportAccount, 0, len(list)),
 	}
+	var warnings []string
 	for i := range list {
 		a := &list[i]
 		item := ExportAccount{
@@ -99,16 +104,23 @@ func (s *Service) ExportAccounts(ctx context.Context, userID int64, withSession,
 			if a.TGCEnc != "" {
 				if tgc, derr := secure.Decrypt(s.cfg.SecretKey, a.TGCEnc); derr == nil {
 					item.TGC = tgc
+				} else {
+					warnings = append(warnings,
+						fmt.Sprintf("账号 %s：续期票据解密失败，导出文件不含 TGC，导入后无法自动续期", a.Username))
 				}
 			}
 		}
 		if withPassword && a.PasswordEnc != "" {
 			if pwd, derr := secure.Decrypt(s.cfg.SecretKey, a.PasswordEnc); derr == nil {
 				item.Password = pwd
+			} else {
+				warnings = append(warnings,
+					fmt.Sprintf("账号 %s：密码解密失败，导出文件不含密码，导入后无法自动重登", a.Username))
 			}
 		}
 		out.Accounts = append(out.Accounts, item)
 	}
+	out.Warnings = warnings
 	return out, nil
 }
 
@@ -123,9 +135,17 @@ func (s *Service) ImportAccounts(ctx context.Context, userID int64, items []Expo
 		status, err := s.importOne(ctx, userID, item)
 		line := ImportItem{Username: item.Username, School: item.SchoolName, Status: status}
 		if err != nil {
-			line.Status = "failed"
-			line.Error = err.Error()
-			res.Failed++
+			if status != "" {
+				// 账号本体已入库、后续步骤（写登录态/设备）才失败：
+				// 如实记 partial 并计入 updated，不能报成「没导进来」。
+				line.Status = "partial"
+				line.Error = err.Error()
+				res.Updated++
+			} else {
+				line.Status = "failed"
+				line.Error = err.Error()
+				res.Failed++
+			}
 		} else if status == "updated" {
 			res.Updated++
 		} else {

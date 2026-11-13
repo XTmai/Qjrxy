@@ -132,9 +132,14 @@ func (s *Server) handleUploadAccountPhotos(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 		photo := &store.AccountPhoto{UserID: user.ID, AccountID: account.ID, Path: rel}
-		if err := s.svc.DB().CreateAccountPhoto(r.Context(), photo); err != nil {
+		// 每张都在带写锁的事务里「数一张、插一张」，并发上传也突破不了上限。
+		if err := s.svc.DB().CreateAccountPhotoWithinLimit(r.Context(), photo, maxPoolPhotos); err != nil {
 			_ = os.Remove(s.svc.PhotoAbsPath(rel))
-			failed = append(failed, photoUploadFailure{Name: header.Filename, Error: "保存照片记录失败"})
+			msg := "保存照片记录失败"
+			if errors.Is(err, store.ErrPoolFull) {
+				msg = "照片池最多 10 张"
+			}
+			failed = append(failed, photoUploadFailure{Name: header.Filename, Error: msg})
 			continue
 		}
 		created = append(created, toAccountPhotoView(account.ID, photo))

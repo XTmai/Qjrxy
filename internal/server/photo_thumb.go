@@ -36,6 +36,16 @@ func photoThumbnailFromBytes(data []byte, maxW int) ([]byte, error) {
 	thumbnailConcurrency <- struct{}{}
 	defer func() { <-thumbnailConcurrency }()
 
+	// 先读图片头拿到尺寸，超限直接拒绝：
+	// jpeg/png 解码按完整像素分配内存，几十 KB 的构造文件可以声明
+	// 数亿像素，一次请求就能把小内存 VPS 打爆（原文件 ≤5MB 挡不住）。
+	const maxPixels = 40_000_000 // 约 40MP / 解码后 ~160MB，远超手机实拍
+	if cfg, _, cerr := image.DecodeConfig(bytes.NewReader(data)); cerr == nil {
+		if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxPixels {
+			return nil, errors.New("图片尺寸异常，拒绝解码")
+		}
+	}
+
 	var img image.Image
 	var err error
 	switch {
@@ -164,9 +174,12 @@ func parseTIFFOrientation(tiff []byte) int {
 	}
 	ifd0 := u16(tiff[4:6]) // IFD 偏移是 32 位，但小文件里高 16 位为 0
 	if len(tiff) >= 8 {
-		ifd0 = int(uint32(tiff[4]) | uint32(tiff[5])<<8 | uint32(tiff[6])<<16 | uint32(tiff[7])<<24)
+		// 修正字节序：之前两条分支正好写反，LE 文件按 BE 读、BE 文件按 LE 读，
+		// orientation 永远解析不出，竖拍照片的缩略图一律侧躺。
 		if le {
-			ifd0 = int(uint32(tiff[7]) | uint32(tiff[6])<<8 | uint32(tiff[5])<<16 | uint32(tiff[4])<<24)
+			ifd0 = int(uint32(tiff[4]) | uint32(tiff[5])<<8 | uint32(tiff[6])<<16 | uint32(tiff[7])<<24)
+		} else {
+			ifd0 = int(uint32(tiff[4])<<24 | uint32(tiff[5])<<16 | uint32(tiff[6])<<8 | uint32(tiff[7]))
 		}
 	}
 	if ifd0 < 8 || ifd0+2 > len(tiff) {

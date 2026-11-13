@@ -499,7 +499,23 @@ function AdminPanel() {
             </div>
             <Switch
               checked={cfg?.server.multiUser ?? false}
-              onCheckedChange={(v) => void save({ multiUser: v }, v ? "已切换到多用户模式" : "已切换到单用户模式")}
+              onCheckedChange={(v) => {
+                if (!v) {
+                  void save({ multiUser: false }, "已切换到单用户模式");
+                  return;
+                }
+                // 单用户本地用户的密码是随机生成且从未展示的，
+                // 不设一个可用密码，开启后会话一丢就登不回来。
+                const pwd = window.prompt(
+                  "开启多用户前，请为当前账号设置一个登录密码（至少 6 位，请牢记）：",
+                );
+                if (pwd === null) return;
+                if (pwd.trim().length < 6) {
+                  toast({ title: "管理员密码至少 6 位", variant: "destructive" });
+                  return;
+                }
+                void save({ multiUser: true, adminPassword: pwd.trim() }, "已切换到多用户模式");
+              }}
             />
           </div>
           <div className="flex items-center justify-between">

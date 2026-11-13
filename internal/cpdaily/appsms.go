@@ -371,6 +371,7 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		return fmt.Errorf("构造换票凭证失败：%w", err)
 	}
 	target := iapLoginURL(host)
+	originSite := registrableDomain(host)
 
 	// 记录进入前已有的 MOD_AUTH_CAS：它通常是过期票。若把它当成换票成功，
 	// 调用方会以为会话已恢复，实际后续业务请求仍然 401。
@@ -399,7 +400,16 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		},
 	}
 
+	offSite := ""
 	for hop := 0; hop < 6; hop++ {
+		// 逐跳前先校验目标是否还在本校站点内：换票链路带着明文
+		// CASTGC/AUTHTGC 和加密 TGC 头，跳到中央域或第三方主机等于把
+		// CAS 票送出去。跳出站点时不带凭据硬闯，而是停下——
+		// 若此时已换到新票就正常返回，否则在循环外报错说明原因。
+		if u, perr := url.Parse(target); perr != nil || !sameSite(u.Hostname(), originSite) {
+			offSite = target
+			break
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			return err
@@ -445,7 +455,37 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 	}
 
 	if !newSession() {
+		if offSite != "" {
+			return fmt.Errorf("换票链路跳出了学校站点（%s），已中止以免票据外泄，且未拿到新的业务会话", offSite)
+		}
 		return errors.New("登录已通过，但未拿到新的业务会话（MOD_AUTH_CAS），请重试")
 	}
 	return nil
+}
+
+// registrableDomain 取主机名的可注册域（xx.edu.cn 类二级域取三段，
+// 其余取两段），用于判断两台主机是否属于同一站点。
+func registrableDomain(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	parts := strings.Split(host, ".")
+	if len(parts) <= 2 {
+		return host
+	}
+	tail := strings.Join(parts[len(parts)-2:], ".")
+	if tail == "edu.cn" || tail == "gov.cn" || tail == "com.cn" || tail == "net.cn" || tail == "org.cn" {
+		if len(parts) >= 3 {
+			return strings.Join(parts[len(parts)-3:], ".")
+		}
+	}
+	return tail
+}
+
+// sameSite 判断两台主机是否属于同一站点（可注册域相同）。
+// originSite 为空时视为不确定，一律放行（保持旧行为，不误伤）。
+func sameSite(host, originSite string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" || originSite == "" {
+		return true
+	}
+	return registrableDomain(host) == originSite
 }

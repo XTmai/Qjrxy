@@ -3,15 +3,24 @@
 // 值由调用方负责序列化与加密（如 API key 先过 secure.Encrypt）。
 package store
 
-import "context"
+import (
+	"context"
+	"database/sql"
+	"errors"
+)
 
 // GetSetting 读取单个配置项；不存在时返回 ("", nil)。
+// 其余错误原样返回：把 DB 故障当成「没配过」会让照片池上限这类
+// 管理员配置静默回落到默认值。
 func (db *DB) GetSetting(ctx context.Context, key string) (string, error) {
 	var v string
 	err := db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		// 没配过不算错误，调用方按默认值处理
 		return "", nil
+	}
+	if err != nil {
+		return "", err
 	}
 	return v, nil
 }

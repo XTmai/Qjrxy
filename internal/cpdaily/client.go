@@ -363,7 +363,7 @@ func IsAuthExpired(err error) bool {
 	}
 	// 兜底：错误链里直接带着登录页特征或会话提示的情况
 	msg := err.Error()
-	for _, kw := range []string{"登录状态已失效", "需要重新登录", "登录页", "未授权"} {
+	for _, kw := range []string{"登录状态已失效", "登录已失效", "登录失效", "需要重新登录", "登录页", "未授权"} {
 		if strings.Contains(msg, kw) {
 			return true
 		}

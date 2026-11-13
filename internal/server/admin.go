@@ -65,12 +65,16 @@ type adminConfig struct {
 }
 
 type adminConfigUpdate struct {
-	DiagEnabled         *bool   `json:"diagEnabled"`
-	DiagKeepDays        *int    `json:"diagKeepDays"`
-	VisionAPIKey        *string `json:"visionApiKey"`
-	VisionBaseURL       *string `json:"visionBaseURL"`
-	VisionModel         *string `json:"visionModel"`
-	MultiUser           *bool   `json:"multiUser"`
+	DiagEnabled   *bool   `json:"diagEnabled"`
+	DiagKeepDays  *int    `json:"diagKeepDays"`
+	VisionAPIKey  *string `json:"visionApiKey"`
+	VisionBaseURL *string `json:"visionBaseURL"`
+	VisionModel   *string `json:"visionModel"`
+	MultiUser     *bool   `json:"multiUser"`
+	// AdminPassword 在开启多用户时为当前账号设置登录密码。
+	// 单用户模式的本地用户密码是进程内随机生成、从未展示的，
+	// 不在这里设一个可用的密码，会话一旦丢失就无法再登录（永久锁死）。
+	AdminPassword       *string `json:"adminPassword"`
 	RegisterOpen        *bool   `json:"registerOpen"`
 	QuotaEnabled        *bool   `json:"quotaEnabled"`
 	TLSInsecureHosts    *string `json:"tlsInsecureHosts"`
@@ -211,6 +215,26 @@ func (s *Server) handleAdminSaveConfig(w http.ResponseWriter, r *http.Request) {
 				}
 				user.Role = "admin"
 				changed = append(changed, "当前用户已提升为管理员")
+			}
+			// 开多用户的同时必须给当前账号一个可用的登录密码：
+			// 单用户本地用户的密码是进程内随机生成的，从没展示给任何人，
+			// 不设的话会话一丢就永久锁死。
+			if in.AdminPassword != nil && strings.TrimSpace(*in.AdminPassword) != "" {
+				pwd := strings.TrimSpace(*in.AdminPassword)
+				if len(pwd) < 6 {
+					writeError(w, badRequest("管理员密码至少 6 位"))
+					return
+				}
+				hash, perr := secure.HashPassword(pwd)
+				if perr != nil {
+					writeError(w, perr)
+					return
+				}
+				if perr := s.svc.DB().UpdateUserPassword(ctx, user.ID, hash); perr != nil {
+					writeError(w, perr)
+					return
+				}
+				changed = append(changed, "当前账号已设置登录密码")
 			}
 			if err := s.svc.DB().SetSetting(ctx, "server.multiUser", "1"); err != nil {
 				writeError(w, err)

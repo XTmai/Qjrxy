@@ -188,6 +188,7 @@ export const api = {
     visionBaseURL?: string;
     visionModel?: string;
     multiUser?: boolean;
+    adminPassword?: string;
     registerOpen?: boolean;
     quotaEnabled?: boolean;
     tlsInsecureHosts?: string;

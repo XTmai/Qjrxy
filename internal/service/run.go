@@ -43,14 +43,12 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	if err != nil {
 		return nil, err
 	}
-	// 会话缺失或已过期时，先用保存的密码自动重新登录，
-	// 避免「隔了几天再执行就报会话过期」需要手动处理。
+	// 会话缺失或已过期时，先自动恢复：
+	// 优先用 CAS 票续期（扫码/短信账号没有保存密码，走不了密码重登），
+	// 票不可用且有保存密码时才密码重登。避免「隔了几天再执行就报会话过期」需要手动处理。
 	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
-		if !hasCredentials(account) {
-			return nil, errors.New("账号尚未登录，请先在账号页完成账密登录")
-		}
-		if account, err = s.AutoRelogin(ctx, account); err != nil {
-			return nil, fmt.Errorf("自动登录失败：%w", err)
+		if account, err = s.recoverSession(ctx, account); err != nil {
+			return nil, fmt.Errorf("自动恢复会话失败：%w", err)
 		}
 	}
 	// 设备 ID 为空时直接拒绝：拿空值提交等于用一台陌生设备去撞服务端，
@@ -133,9 +131,10 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	}
 
 	result, detail, err := client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
-	// 提交时才发现会话失效：自动重登一次并重试，用户无感知。
-	if err == nil && !result.Success && hasCredentials(account) && cpdaily.IsAuthExpired(errors.New(result.Message)) {
-		if updated, reErr := s.AutoRelogin(ctx, account); reErr == nil {
+	// 提交时才发现会话失效：自动恢复一次并重试，用户无感知。
+	// recoverSession 先试 CAS 票续期（扫码/短信账号没有密码可用），再试密码重登。
+	if err == nil && !result.Success && cpdaily.IsAuthExpired(errors.New(result.Message)) {
+		if updated, reErr := s.recoverSession(ctx, account); reErr == nil {
 			account = updated
 			client = s.clientFor(account)
 			result, detail, err = client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
@@ -163,7 +162,20 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		// 靠响应字段无法区分。这里回查一次任务列表，确认该任务确实从
 		//「未签到」里消失了，才算真成功。
 		confirmed, checkErr := s.confirmSigned(ctx, account, task)
-		if checkErr == nil && !confirmed {
+		if checkErr != nil {
+			// 回查失败 ≠ 签到成功：把它当「待核对」处理，保留当天机会让调度器重试。
+			// 学校列表接口偶发 5xx/超时是真实发生过的（diag 里见过 522）。
+			_ = s.db.UpdateLog(ctx, logID, store.StatusPending,
+				"服务端返回成功，但回查任务列表失败，无法确认", detailJSON)
+			return &RunOutcome{
+				LogID:   logID,
+				Status:  store.StatusPending,
+				Message: "服务端返回成功，但回查任务列表失败，无法确认",
+				Hint:    "提交请求本身已成功。稍后可在任务页「拉取今日任务」确认是否已签到",
+				Task:    task.TaskName,
+			}, nil
+		}
+		if !confirmed {
 			_ = s.db.UpdateLog(ctx, logID, store.StatusPending,
 				"服务端返回成功，但任务仍在待办列表中", detailJSON)
 			return &RunOutcome{
@@ -517,21 +529,28 @@ type clockWindow struct {
 
 // parseTaskWindow 解析任务的日期与时段。
 //
-// signDate 形如 "2026-11-03" 或 "2026-11-03 (周二)"，beginClock/endClock 形如 "21:00"。
-// 时段可能跨天（如 23:30-00:30），此时把结束时间推到次日。
+// 优先用周期任务的 signDate + beginClock~endClock；解析不出时退回
+// 单次任务自带的起止时间（singleTaskBeginTime/EndTime）——只下发单次
+// 时间的任务之前会被当成「随时可执行」放行，提交后被服务端拒绝。
 func parseTaskWindow(task *store.Task) clockWindow {
 	if task == nil {
 		return clockWindow{}
 	}
+	if w := parseRateWindow(task); w.ok {
+		return w
+	}
+	return parseSingleWindow(task)
+}
+
+// parseRateWindow 解析周期任务时段：signDate 形如 "2026-11-03" 或
+// "2026-11-03 (周二)"，beginClock/endClock 形如 "21:00"。
+// 时段可能跨天（如 23:30-00:30），此时把结束时间推到次日。
+func parseRateWindow(task *store.Task) clockWindow {
 	dateRaw := strings.TrimSpace(task.SignDate)
 	if i := strings.IndexAny(dateRaw, " (（"); i > 0 {
 		dateRaw = dateRaw[:i]
 	}
 	if dateRaw == "" || task.BeginClock == "" || task.EndClock == "" {
-		return clockWindow{}
-	}
-	day, err := time.ParseInLocation("2006-01-02", dateRaw, time.Local)
-	if err != nil {
 		return clockWindow{}
 	}
 	start, err1 := time.ParseInLocation("2006-01-02 15:04", dateRaw+" "+task.BeginClock, time.Local)
@@ -542,7 +561,41 @@ func parseTaskWindow(task *store.Task) clockWindow {
 	if !end.After(start) {
 		end = end.AddDate(0, 0, 1) // 跨天时段
 	}
-	_ = day
+	return clockWindow{start: start, end: end, ok: true}
+}
+
+// singleTimeLayouts 是单次任务时间字段可能出现的格式。
+var singleTimeLayouts = []string{
+	"2006-01-02 15:04",
+	"2006-01-02 15:04:05",
+	"2006-01-02T15:04",
+	"2006-01-02T15:04:05",
+}
+
+// parseSingleTime 解析单个时间字段，兼容空格/T 分隔与可选的秒。
+func parseSingleTime(raw string) (time.Time, bool) {
+	raw = strings.TrimSpace(raw)
+	if i := strings.IndexByte(raw, '.'); i > 0 { // 去掉 ".000" 毫秒后缀
+		raw = raw[:i]
+	}
+	for _, layout := range singleTimeLayouts {
+		if t, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// parseSingleWindow 解析单次任务自带的起止时间（形如 "2026-11-13 17:00"）。
+func parseSingleWindow(task *store.Task) clockWindow {
+	start, ok1 := parseSingleTime(task.StartTime)
+	end, ok2 := parseSingleTime(task.EndTime)
+	if !ok1 || !ok2 {
+		return clockWindow{}
+	}
+	if !end.After(start) {
+		end = end.AddDate(0, 0, 1) // 跨天时段
+	}
 	return clockWindow{start: start, end: end, ok: true}
 }
 
@@ -556,12 +609,12 @@ func checkTaskWindowByClock(task *store.Task, now time.Time) error {
 		return nil // 没有可解析的时间信息，交给服务端判定
 	}
 	if now.Before(w.start) {
-		return fmt.Errorf("「%s」还没到签到时间（%s-%s），请到时间后再执行",
-			task.TaskName, task.BeginClock, task.EndClock)
+		return fmt.Errorf("「%s」还没到签到时间（%s 起），请到时间后再执行",
+			task.TaskName, w.start.Format("01-02 15:04"))
 	}
 	if now.After(w.end) {
-		return fmt.Errorf("「%s」已过签到时间（%s-%s），无法补签",
-			task.TaskName, task.BeginClock, task.EndClock)
+		return fmt.Errorf("「%s」已过签到时间（%s 止），无法补签",
+			task.TaskName, w.end.Format("01-02 15:04"))
 	}
 	return nil
 }

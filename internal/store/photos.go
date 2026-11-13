@@ -38,6 +38,44 @@ func (db *DB) CreateAccountPhoto(ctx context.Context, p *AccountPhoto) error {
 	return nil
 }
 
+// ErrPoolFull 表示账号照片池已达单账号上限。
+var ErrPoolFull = errors.New("照片池已满")
+
+// CreateAccountPhotoWithinLimit 在同一个立即事务里「数一张、插一张」。
+//
+// 之前的实现是请求开头 COUNT 一次，然后循环逐张 INSERT：并发上传时
+// 两个请求都读到旧数量，各自插入，实际张数可以突破上限。
+// BEGIN IMMEDIATE 会在事务内拿到写锁，COUNT 与 INSERT 之间不会再插入别人。
+func (db *DB) CreateAccountPhotoWithinLimit(ctx context.Context, p *AccountPhoto, max int) error {
+	p.CreatedAt = now()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var n int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM account_photos WHERE user_id = ? AND account_id = ?`,
+		p.UserID, p.AccountID).Scan(&n); err != nil {
+		return err
+	}
+	if n >= max {
+		return ErrPoolFull
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO account_photos (user_id, account_id, path, created_at)
+		VALUES (?, ?, ?, ?)`,
+		p.UserID, p.AccountID, p.Path, p.CreatedAt)
+	if err != nil {
+		return err
+	}
+	if p.ID, err = res.LastInsertId(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // ListAccountPhotos 返回账号的池内照片（上传顺序）。
 func (db *DB) ListAccountPhotos(ctx context.Context, userID, accountID int64) ([]AccountPhoto, error) {
 	rows, err := db.QueryContext(ctx, `
