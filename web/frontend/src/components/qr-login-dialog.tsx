@@ -24,8 +24,12 @@ interface Props {
 
 type QRState = "loading" | "waiting" | "scanned" | "success" | "expired" | "error";
 
-/** 提前于 campushoy 的约 60 秒 TTL 刷新 */
-const REFRESH_SECONDS = 50;
+// campushoy 对同一个 qrId 的 validation 有频率限制：约 10 次后会直接返回
+// status=5（二维码作废）。实测 1.5-2s 轮询 20 秒就失效，3-5s 可撑到 60s。
+// 因此未扫码时 6 秒查一次，45 秒主动换码，把单个 qrId 的请求数压在 8 次内。
+const REFRESH_SECONDS = 45;
+const POLL_INTERVAL_MS = 6000;
+const SCANNED_POLL_INTERVAL_MS = 2000;
 
 export function QRLoginDialog({ schoolName, onClose }: Props) {
   const [state, setState] = useState<QRState>("loading");
@@ -118,7 +122,10 @@ export function QRLoginDialog({ schoolName, onClose }: Props) {
     } catch {
       // 网络错误，继续轮询
     }
-    if (!stopRef.current) pollTimerRef.current = setTimeout(poll, 1500);
+    if (!stopRef.current) {
+      const interval = stateRef.current === "scanned" ? SCANNED_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+      pollTimerRef.current = setTimeout(poll, interval);
+    }
   };
 
   useEffect(() => {

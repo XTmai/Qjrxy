@@ -115,7 +115,12 @@ func (s *Server) handleQRLoginStart(w http.ResponseWriter, r *http.Request) {
 	qrURL := cpdaily.QRLoginImageURL(qrId)
 	qrImage := ""
 	if imgData, ierr := s.fetchQRImage(r.Context(), qrURL); ierr == nil {
-		qrImage = "data:image/png;base64," + base64.StdEncoding.EncodeToString(imgData)
+		// campushoy 实际返回的是 JPEG，不能写死 png。
+		mime := http.DetectContentType(imgData)
+		if !strings.HasPrefix(mime, "image/") {
+			mime = "image/png"
+		}
+		qrImage = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(imgData)
 	}
 
 	writeData(w, http.StatusOK, map[string]any{
