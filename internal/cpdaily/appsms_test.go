@@ -117,3 +117,16 @@ func TestRefreshTGCBySession(t *testing.T) {
 		t.Errorf("请求体异常：%s", gotBody)
 	}
 }
+
+// TestFreshMODAuthCAS 校验旧票不能算换票成功，只有新值才算。
+func TestFreshMODAuthCAS(t *testing.T) {
+	if freshMODAuthCAS("old", map[string]string{"MOD_AUTH_CAS": "old"}) {
+		t.Fatal("旧票不应算作新会话")
+	}
+	if !freshMODAuthCAS("old", map[string]string{"MOD_AUTH_CAS": "new"}) {
+		t.Fatal("新票应算作换票成功")
+	}
+	if !freshMODAuthCAS("", map[string]string{"MOD_AUTH_CAS": "new"}) {
+		t.Fatal("进入前无票时应算成功")
+	}
+}

@@ -338,6 +338,13 @@ func iapLoginURL(host string) string {
 	return "https://" + host + "/iap/login?service=" + url.QueryEscape(service)
 }
 
+// freshMODAuthCAS 判断 MOD_AUTH_CAS 是否是本次换票新拿到的。
+// 进入前已有的旧票（通常是过期票）不能算成功。
+func freshMODAuthCAS(initial string, cookies map[string]string) bool {
+	cur := strings.TrimSpace(cookies["MOD_AUTH_CAS"])
+	return cur != "" && cur != strings.TrimSpace(initial)
+}
+
 // ExchangeTGC 用学校 CAS 票（tgc）换取业务域会话（MOD_AUTH_CAS）。
 //
 // 两个容易踩的点：
@@ -364,6 +371,12 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		return fmt.Errorf("构造换票凭证失败：%w", err)
 	}
 	target := iapLoginURL(host)
+
+	// 记录进入前已有的 MOD_AUTH_CAS：它通常是过期票。若把它当成换票成功，
+	// 调用方会以为会话已恢复，实际后续业务请求仍然 401。
+	// 只有拿到「不同的新票」才算成功。
+	initialMOD := strings.TrimSpace(client.Cookies()["MOD_AUTH_CAS"])
+	newSession := func() bool { return freshMODAuthCAS(initialMOD, client.Cookies()) }
 
 	jar := map[string]string{"AUTHTGC": tgc, "CASTGC": tgc}
 	cookieHeader := func() string {
@@ -417,7 +430,7 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		loc := resp.Header.Get("Location")
 		resp.Body.Close()
 
-		if _, ok := client.Cookies()["MOD_AUTH_CAS"]; ok {
+		if newSession() {
 			return nil
 		}
 		if loc == "" {
@@ -431,8 +444,8 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		target = loc
 	}
 
-	if _, ok := client.Cookies()["MOD_AUTH_CAS"]; !ok {
-		return errors.New("登录已通过，但未拿到业务会话（MOD_AUTH_CAS），请重试")
+	if !newSession() {
+		return errors.New("登录已通过，但未拿到新的业务会话（MOD_AUTH_CAS），请重试")
 	}
 	return nil
 }

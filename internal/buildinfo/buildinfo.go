@@ -7,4 +7,4 @@ package buildinfo
 
 // Version 是产品版本号。发布时改这里，构建机也可用
 // -ldflags "-X qjrxy/internal/buildinfo.Version=x.y.z" 覆盖。
-var Version = "1.3.3"
+var Version = "1.3.4"
