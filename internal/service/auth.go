@@ -477,6 +477,19 @@ func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) Prob
 		res.Relogged = true
 	}
 
+	// 主动续期兜底：没有 CAS 票、但有账号体系 sessionToken 的账号，
+	// 探测时直接刷新一张票。不能只依赖「识别到登录页」再续期——部分
+	// 学校的登录页带 BOM/自定义文案，识别失败时会一直静默掉线。
+	if !res.Relogged && strings.TrimSpace(account.TGCEnc) == "" {
+		if st := strings.TrimSpace(decodeCookies(account.Cookies)["sessionToken"]); st != "" {
+			if err := s.renewSessionWithTGC(ctx, account); err != nil {
+				log.Printf("[auth] 账号 %d 主动刷新 CAS 票失败：%v", account.ID, err)
+			} else {
+				res.Relogged = true
+			}
+		}
+	}
+
 	// 用当前会话拉任务；失效则先 CAS 票续期、再密码重登，然后重试一次
 	tasks, err := s.SyncTasks(ctx, account.UserID, account.ID)
 	if err != nil && cpdaily.IsAuthExpired(err) && !res.Relogged {
