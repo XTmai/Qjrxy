@@ -528,6 +528,14 @@ function DeviceTab({
       run: () => setShowLogin(true),
     },
     {
+      key: "qr-login",
+      title: "扫码登录（免密码）",
+      desc: "用今日校园 App 扫码，直接获取登录态",
+      icon: QrCode,
+      done: account.loginStatus === "authorized",
+      run: () => setShowQRLogin(true),
+    },
+    {
       key: "range",
       title: "设置签到位置",
       desc: account.address
@@ -606,6 +614,7 @@ function DeviceTab({
 
       {showQRLogin && (
         <QRLoginDialog
+          schoolName={account.schoolName}
           onClose={(loggedIn) => {
             setShowQRLogin(false);
             if (loggedIn) {

@@ -15,12 +15,13 @@ import {
 } from "@/components/ui/dialog";
 
 interface Props {
+  schoolName?: string;
   onClose: (loggedIn: boolean) => void;
 }
 
 type QRState = "loading" | "waiting" | "scanned" | "success" | "expired" | "error";
 
-export function QRLoginDialog({ onClose }: Props) {
+export function QRLoginDialog({ schoolName, onClose }: Props) {
   const [state, setState] = useState<QRState>("loading");
   const [qrImage, setQrImage] = useState("");
   const [error, setError] = useState("");
@@ -33,7 +34,7 @@ export function QRLoginDialog({ onClose }: Props) {
     setState("loading");
     setError("");
     try {
-      const res = await api.qrLoginStart({});
+      const res = await api.qrLoginStart({ schoolName });
       ticketRef.current = res.ticket;
       setQrImage(res.qrImage);
       setState("waiting");

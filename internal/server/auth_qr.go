@@ -65,42 +65,32 @@ func (s *Server) handleQRLoginStart(w http.ResponseWriter, r *http.Request) {
 	qrCleanupExpired()
 	qrMu.Unlock()
 
-	// 获取学校 OAuth 参数
-	var params *cpdaily.QRLoginParams
+	// 获取 OAuth 参数：优先走 uniauth（实测对所有学校类型稳定）。
+	// 学校名只用于拿到该校的 appId；扫码后的实际学校由 App 当前账号决定。
+	appID := ""
 	host := ""
 	if in.SchoolName != "" {
-		tenant, terr := cpdaily.ResolveTenant(r.Context(), in.SchoolName)
-		if terr != nil {
-			writeError(w, badRequest("解析学校失败：" + terr.Error()))
-			return
+		if tenant, terr := cpdaily.ResolveTenant(r.Context(), in.SchoolName); terr == nil {
+			appID = tenant.AppID
+			host = tenant.Host
 		}
-		host = tenant.Host
 	}
-	if host != "" {
-		params, err = cpdaily.GetQROAuthParams(r.Context(), host)
-		if err != nil {
-			// OAuth 参数提取失败时用通用参数兜底（uniauth 客户端）
-			params = &cpdaily.QRLoginParams{
-				ClientID:    "1603170513091",
-				RedirectURI: fmt.Sprintf("https://uniauth.campusphere.net/wec-devops-school-auth/login/gateway?service=%s&appId=default", "%2Fwec-counselor-stu-apps%2Fstu%2Fmobile%2Findex.html"),
-				Scope:       "get_user_info",
-				State:       "counsellor",
-			}
+	params, err := cpdaily.GetQROAuthParamsFromUniauth(r.Context(), appID)
+	if err != nil && host != "" {
+		// 兜底：从学校入口 302 里提取
+		if p2, e2 := cpdaily.GetQROAuthParams(r.Context(), host); e2 == nil {
+			params, err = p2, nil
 		}
-	} else {
-		// 未选学校：用通用参数，扫码后从 Cookie 域名判断学校
-		params = &cpdaily.QRLoginParams{
-			ClientID:    "1603170513091",
-			RedirectURI: fmt.Sprintf("https://uniauth.campusphere.net/wec-devops-school-auth/login/gateway?service=%s&appId=default", "%2Fwec-counselor-stu-apps%2Fstu%2Fmobile%2Findex.html"),
-			Scope:       "get_user_info",
-			State:       "counsellor",
-		}
+	}
+	if err != nil {
+		writeError(w, badRequest("获取扫码授权参数失败："+err.Error()))
+		return
 	}
 
 	// 调用 jsLogin
 	qrId, err := cpdaily.QRLoginStart(r.Context(), params)
 	if err != nil {
-		writeError(w, badRequest("生成二维码失败：" + err.Error()))
+		writeError(w, badRequest("生成二维码失败："+err.Error()))
 		return
 	}
 
@@ -190,14 +180,14 @@ func (s *Server) handleQRLoginPoll(w http.ResponseWriter, r *http.Request) {
 
 		cookieResult, ferr := cpdaily.QRLoginFollow(r.Context(), res.RedirectURL)
 		if ferr != nil {
-			writeError(w, badRequest("获取登录态失败：" + ferr.Error()))
+			writeError(w, badRequest("获取登录态失败："+ferr.Error()))
 			return
 		}
 
 		// 用 Cookie 创建或更新账号
 		account, aerr := s.qrLoginSaveAccount(r.Context(), user.ID, cookieResult, sess.SchoolName)
 		if aerr != nil {
-			writeError(w, badRequest("保存账号失败：" + aerr.Error()))
+			writeError(w, badRequest("保存账号失败："+aerr.Error()))
 			return
 		}
 
@@ -207,7 +197,7 @@ func (s *Server) handleQRLoginPoll(w http.ResponseWriter, r *http.Request) {
 
 		s.svc.Events().Publish(user.ID, events.TopicAccounts)
 		writeData(w, http.StatusOK, map[string]any{
-			"status": "success",
+			"status":  "success",
 			"account": toAccountView(account),
 		})
 	default:

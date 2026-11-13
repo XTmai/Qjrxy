@@ -24,6 +24,8 @@ type Tenant struct {
 	Host     string `json:"host"`
 	IDSURL   string `json:"idsUrl"`
 	AmpURL   string `json:"ampUrl"`
+	// AppID 是 uniauth 的学校应用 ID，用于生成扫码登录的 OAuth 参数。
+	AppID string `json:"appId"`
 }
 
 // School 是可搜索的学校条目。

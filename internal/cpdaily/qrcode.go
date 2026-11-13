@@ -75,6 +75,71 @@ type QRLoginCookies struct {
 
 const qrBaseURL = "https://api.campushoy.com"
 
+// 学生端 H5 入口，uniauth 用它生成扫码登录的 OAuth 参数。
+const (
+	uniauthBaseURL = "https://uniauth.campusphere.net"
+	qrStuService   = "/wec-counselor-stu-apps/stu/mobile/index.html"
+	// defaultQRAppID 是实测可用的 uniauth 应用 ID。
+	// 扫码后的学校由 App 当前登录的账号决定，不依赖这个 appId。
+	defaultQRAppID = "d7de360368c94a808225"
+)
+
+// GetQROAuthParamsFromUniauth 通过 uniauth 的 getQrcodePageUrl 生成 OAuth 参数。
+//
+// 这是实测最稳的方式：不依赖学校入口 302 的形态，CLOUD / NOTCLOUD 都适用。
+func GetQROAuthParamsFromUniauth(ctx context.Context, appID string) (*QRLoginParams, error) {
+	if strings.TrimSpace(appID) == "" {
+		appID = defaultQRAppID
+	}
+	body, _ := json.Marshal(map[string]string{
+		"appId":   appID,
+		"service": qrStuService,
+	})
+	req, err := http.NewRequestWithContext(ctx, "POST",
+		uniauthBaseURL+"/wec-devops-school-auth/login/getQrcodePageUrl",
+		strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", uaApp)
+
+	resp, err := httpDo(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("获取扫码授权地址失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out struct {
+		Code   string `json:"code"`
+		ErrMsg string `json:"message"`
+		Datas  struct {
+			QrcodePageURL string `json:"qrcodePageUrl"`
+		} `json:"datas"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("解析扫码授权地址失败: %w", err)
+	}
+	if out.Datas.QrcodePageURL == "" {
+		return nil, fmt.Errorf("扫码授权地址为空（%s）", out.ErrMsg)
+	}
+
+	u, err := url.Parse(out.Datas.QrcodePageURL)
+	if err != nil {
+		return nil, fmt.Errorf("解析扫码授权地址失败: %w", err)
+	}
+	q := u.Query()
+	if q.Get("client_id") == "" || q.Get("redirect_uri") == "" {
+		return nil, fmt.Errorf("扫码授权地址缺少 OAuth 参数")
+	}
+	return &QRLoginParams{
+		ClientID:    q.Get("client_id"),
+		RedirectURI: q.Get("redirect_uri"),
+		Scope:       q.Get("scope"),
+		State:       q.Get("state"),
+	}, nil
+}
+
 // GetQROAuthParams 访问学校入口页，跟随 302 提取 OAuth 参数。
 //
 // 入口 URL 使用辅导猫学生端 H5（所有学校类型统一）。

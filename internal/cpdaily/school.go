@@ -175,6 +175,7 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 			ID       string `json:"id"`
 			Name     string `json:"name"`
 			JoinType string `json:"joinType"`
+			AppID    string `json:"appId"`
 		} `json:"data"`
 	}
 	if err := httpGetJSON(ctx, tenantListURL, &list); err != nil {
@@ -185,6 +186,7 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		JoinType string `json:"joinType"`
+		AppID    string `json:"appId"`
 	}
 	for i := range list.Data {
 		if list.Data[i].Name == schoolName {
@@ -228,6 +230,7 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 		Host:     host,
 		IDSURL:   ids,
 		AmpURL:   entry.AmpURL,
+		AppID:    matched.AppID,
 	}, nil
 }
 

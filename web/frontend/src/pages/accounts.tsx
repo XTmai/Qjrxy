@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/api";
 import { AccountImportDialog } from "@/components/account-import-dialog";
+import { QRLoginDialog } from "@/components/qr-login-dialog";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
@@ -64,6 +65,7 @@ export function AccountsPage() {
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("tasks");
   const [showImport, setShowImport] = useState(false);
+  const [showQRLogin, setShowQRLogin] = useState(false);
   const { confirm, ConfirmDialog } = useConfirm();
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -233,6 +235,10 @@ export function AccountsPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            <Button variant="outline" size="sm" onClick={() => setShowQRLogin(true)}>
+              <QrCode className="size-3.5" />
+              扫码登录
+            </Button>
             <Button variant="default" size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="size-3.5" />
               添加账号
@@ -322,6 +328,18 @@ export function AccountsPage() {
           onClose={(deleted) => {
             setDetailId(null);
             if (deleted) void 0;
+          }}
+        />
+      )}
+
+      {showQRLogin && (
+        <QRLoginDialog
+          onClose={(loggedIn) => {
+            setShowQRLogin(false);
+            if (loggedIn) {
+              void queryClient.invalidateQueries({ queryKey: queryKeys.accounts.all() });
+              void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
+            }
           }}
         />
       )}
