@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"qjrxy/internal/captcha"
@@ -585,7 +586,9 @@ func (s *Service) savePhotoFile(dir, filename string, data []byte) (string, erro
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
+	// 纳秒在部分平台精度不足（Windows 实测约 1ms），两次快速上传可能
+	// 生成同名文件并互相覆盖；追加进程内序号保证唯一。
+	name := fmt.Sprintf("%d_%d%s", time.Now().UnixNano(), photoSeq.Add(1), ext)
 	abs := filepath.Join(dir, name)
 	if err := os.WriteFile(abs, data, 0o644); err != nil {
 		return "", err
@@ -596,6 +599,9 @@ func (s *Service) savePhotoFile(dir, filename string, data []byte) (string, erro
 	}
 	return filepath.ToSlash(rel), nil
 }
+
+// photoSeq 为照片文件名提供进程内单调序号。
+var photoSeq atomic.Uint64
 
 // formatStorage 把字节数格式化成管理员/错误提示里易读的容量。
 func formatStorage(n int64) string {
