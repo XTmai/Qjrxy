@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -69,26 +70,85 @@ func (s *Service) CreateScanLoginTicket(ctx context.Context, userID, accountID i
 
 // ScanLoginTicketTarget 返回票据对应的账号展示信息（供手机页确认）。
 //
-// 只给学校名/学号/备注：手机页要大字告诉用户「即将绑定到哪条记录」，
+// 只给学校名/学号/备注/域名：手机页要大字告诉用户「即将绑定到哪条记录」，
 // 用户看清后才点确认。绝不能在这里带出 cookie 或密码。
-func (s *Service) ScanLoginTicketTarget(ctx context.Context, ticket string) (schoolName, username, alias string, err error) {
+//
+// host 缺失时顺带自愈：老账号可能是在 host 解析逻辑修好之前建的，
+// 库里 host 为空但学校信息完整——这里按 tenantId 重新解析并落库，
+// 否则手机页只能报「还没有学校域名」，用户还得手动去补。
+func (s *Service) ScanLoginTicketTarget(ctx context.Context, ticket string) (schoolName, username, alias, host string, err error) {
 	scanLoginMu.Lock()
 	t, ok := scanLoginTickets[ticket]
 	scanLoginMu.Unlock()
 	if !ok {
-		return "", "", "", errors.New("扫码票据无效，请在电脑端重新生成二维码")
+		return "", "", "", "", errors.New("扫码票据无效，请在电脑端重新生成二维码")
 	}
 	if time.Now().After(t.ExpiresAt) {
 		scanLoginMu.Lock()
 		delete(scanLoginTickets, ticket)
 		scanLoginMu.Unlock()
-		return "", "", "", errors.New("二维码已过期，请在电脑端重新生成")
+		return "", "", "", "", errors.New("二维码已过期，请在电脑端重新生成")
 	}
 	account, err := s.db.AccountByID(ctx, t.UserID, t.AccountID)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	return account.SchoolName, account.Username, account.Alias, nil
+
+	host = cpdaily.NormalizeHost(account.Host)
+	if host == "" {
+		tenant, terr := s.resolveTenantByIDCached(ctx, account)
+		if terr != nil {
+			return account.SchoolName, account.Username, account.Alias, "",
+				fmt.Errorf("这条账号还没有学校域名，自动解析也失败了（%v）。请检查学校名称是否与今日校园一致", terr)
+		}
+		host = cpdaily.NormalizeHost(tenant.Host)
+		if host == "" {
+			return account.SchoolName, account.Username, account.Alias, "",
+				errors.New("这条账号还没有学校域名，且该学校未提供门户地址；请手动填写学校域名后再试")
+		}
+		// 解析成功就写回，避免下次再解析一次。
+		account.Host = host
+		if tenant.IDSURL != "" && strings.TrimSpace(account.IDSURL) == "" {
+			account.IDSURL = tenant.IDSURL
+		}
+		if err := s.db.UpdateAccount(ctx, account); err != nil {
+			return "", "", "", "", err
+		}
+	}
+	return account.SchoolName, account.Username, account.Alias, host, nil
+}
+
+// resolveTenantByIDCached 按 tenantId 解析学校入口，带进程内缓存。
+//
+// 与 resolveTenantCached（按校名）分开：这里已经有确定的 tenantId，
+// 不需要再拉一次 3000 条学校列表。
+func (s *Service) resolveTenantByIDCached(ctx context.Context, account *store.Account) (*cpdaily.Tenant, error) {
+	id := strings.TrimSpace(account.TenantID)
+	if id == "" {
+		// tenantId 也空（极老的记录）：退回按校名解析。
+		return s.resolveTenantCached(ctx, account.SchoolName)
+	}
+	s.tenantMu.Lock()
+	if s.tenantCache == nil {
+		s.tenantCache = map[string]*cpdaily.Tenant{}
+	}
+	if cached, ok := s.tenantCache[id]; ok && cached != nil {
+		s.tenantMu.Unlock()
+		return cached, nil
+	}
+	s.tenantMu.Unlock()
+
+	tenant, err := cpdaily.ResolveTenantByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if tenant != nil && tenant.Name == "" {
+		tenant.Name = account.SchoolName
+	}
+	s.tenantMu.Lock()
+	s.tenantCache[id] = tenant
+	s.tenantMu.Unlock()
+	return tenant, nil
 }
 
 // SubmitScanLogin 扫码页提交票据（无需登录，凭票据授权）。

@@ -38,7 +38,7 @@ func TestScanLoginTicketLifecycle(t *testing.T) {
 	}
 
 	// 手机页要能读到目标账号信息，用于二次确认
-	school, username, _, err := svc.ScanLoginTicketTarget(ctx, ticket)
+	school, username, _, _, err := svc.ScanLoginTicketTarget(ctx, ticket)
 	if err != nil {
 		t.Fatalf("读取目标账号失败：%v", err)
 	}
@@ -108,7 +108,7 @@ func TestScanLoginInvalidTicket(t *testing.T) {
 	if _, _, err := svc.PollScanLogin("no-such-ticket"); err == nil {
 		t.Error("无效票据应报错")
 	}
-	if _, _, _, err := svc.ScanLoginTicketTarget(context.Background(), "no-such-ticket"); err == nil {
+	if _, _, _, _, err := svc.ScanLoginTicketTarget(context.Background(), "no-such-ticket"); err == nil {
 		t.Error("无效票据读取目标应报错")
 	}
 	if err := svc.SubmitScanLogin("no-such-ticket", ScanLoginResult{Ticket: "x"}); err == nil {
@@ -173,5 +173,27 @@ func TestSubmitScanLoginValidation(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("过短的设备 ID 应被拒绝")
+	}
+}
+
+// TestScanLoginTargetReturnsHost 确认手机页能拿到 host（缺失时应自愈）。
+//
+// 老账号的 host 可能为空（建号早于 host 解析修复），此时扫码页必须能
+// 自己解析出来，而不是让用户去电脑端手填。
+func TestScanLoginTargetReturnsHost(t *testing.T) {
+	resetScanLoginTickets()
+	svc, user := newTestService(t)
+	acc := newTestAccount(t, svc, user.ID) // host = t.campusphere.net
+
+	ticket, _, err := svc.CreateScanLoginTicket(context.Background(), user.ID, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, host, err := svc.ScanLoginTicketTarget(context.Background(), ticket)
+	if err != nil {
+		t.Fatalf("读取目标失败：%v", err)
+	}
+	if host != acc.Host {
+		t.Errorf("host 应原样返回：got %q want %q", host, acc.Host)
 	}
 }

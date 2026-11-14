@@ -72,7 +72,7 @@ func (s *Server) handleScanLoginInfo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, badRequest("缺少票据"))
 		return
 	}
-	school, username, alias, err := s.svc.ScanLoginTicketTarget(r.Context(), ticket)
+	school, username, alias, host, err := s.svc.ScanLoginTicketTarget(r.Context(), ticket)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -81,6 +81,7 @@ func (s *Server) handleScanLoginInfo(w http.ResponseWriter, r *http.Request) {
 		"schoolName": school,
 		"username":   username,
 		"alias":      alias,
+		"host":       host,
 		"clientIds":  scanLoginClientIDs,
 	})
 }

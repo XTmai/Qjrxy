@@ -476,7 +476,7 @@
         $('targetCard').classList.remove('hidden');
 
         if (!state.host) {
-          banner('fail', '这条账号还没有学校域名，请先在电脑端补全学校信息');
+          banner('fail', '这条账号还没有学校域名，且自动解析失败。请在电脑端把学校名称改成今日校园里的全称后重试');
           return;
         }
         if (!state.clientIds.length) {
