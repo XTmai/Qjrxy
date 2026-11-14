@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 )
@@ -46,8 +47,17 @@ func TLSInsecureHosts() []string {
 }
 
 // hostAllowlisted 判断主机名是否落在白名单内（含子域）。
+//
+// 会剥掉可能出现的端口：TLS 的 ServerName 正常不含端口，但代理场景下
+// 若有人把 host:port 当 ServerName 传入，带端口会让后缀匹配全部失效。
 func hostAllowlisted(serverName string, allow []string) bool {
 	name := strings.ToLower(strings.TrimSuffix(serverName, "."))
+	if i := strings.LastIndex(name, ":"); i > 0 && !strings.Contains(name[i:], "]") {
+		// 仅在形如 host:port 时剥端口（IPv6 的 [::1] 已含方括号，跳过）
+		if _, _, err := net.SplitHostPort(name); err == nil {
+			name = name[:i]
+		}
+	}
 	if name == "" {
 		return false
 	}

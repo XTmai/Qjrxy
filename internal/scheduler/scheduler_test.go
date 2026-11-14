@@ -362,3 +362,57 @@ func TestShouldRunExplicitDates(t *testing.T) {
 		t.Error("当天已执行过不应重复")
 	}
 }
+
+// TestReleaseAttemptUnblocksWindowStart 校验「等窗口」不消耗 attemptGap 配额。
+//
+// 回归（2026-11-14 生产实测漏签）：调度器在 20:57 重启后扫到所有计划，
+// 各记一笔 attemptAt；21:00 窗口真正开始时，claimAttempt 发现距上次
+// 只有 2 分钟（< attemptGap），于是把 16 个计划全部挡回，当晚几乎漏签。
+//
+// 正确行为：只判断了窗口、没向学校提交 → 撤销记账 → 窗口开始即可执行。
+func TestReleaseAttemptUnblocksWindowStart(t *testing.T) {
+	s := &Scheduler{attemptAt: map[int64]time.Time{}}
+	// 20:57 重启后首次扫描：允许，并记账
+	scanAt := time.Date(2026, 11, 14, 20, 57, 48, 0, time.Local)
+	if !s.claimAttempt(1, scanAt) {
+		t.Fatal("首次扫描应被允许")
+	}
+	// 改前：窗口开始（21:00）会被节流挡住
+	windowStart := time.Date(2026, 11, 14, 21, 0, 0, 0, time.Local)
+	if s.claimAttempt(1, windowStart) {
+		t.Fatal("前提不成立：未撤销时应被节流拒绝（否则本测试无意义）")
+	}
+	// 撤销后：窗口开始必须放行
+	s.releaseAttempt(1)
+	if !s.claimAttempt(1, windowStart) {
+		t.Error("撤销记账后，窗口开始时应允许执行")
+	}
+}
+
+// TestReleaseAttemptDoesNotAffectOtherPlans 校验撤销只影响目标计划。
+func TestReleaseAttemptDoesNotAffectOtherPlans(t *testing.T) {
+	s := &Scheduler{attemptAt: map[int64]time.Time{}}
+	base := time.Date(2026, 11, 14, 20, 57, 0, 0, time.Local)
+	s.claimAttempt(1, base)
+	s.claimAttempt(2, base)
+
+	s.releaseAttempt(1)
+
+	if !s.claimAttempt(1, base.Add(time.Minute)) {
+		t.Error("计划 1 撤销后应可再次尝试")
+	}
+	if s.claimAttempt(2, base.Add(time.Minute)) {
+		t.Error("计划 2 未被撤销，应仍被节流")
+	}
+}
+
+// TestReleaseAttemptOnEmptyMap 校验空 map 上撤销不会 panic。
+func TestReleaseAttemptOnEmptyMap(t *testing.T) {
+	s := &Scheduler{}
+	s.releaseAttempt(99) // 不应 panic
+	if s.attemptAt != nil {
+		if _, ok := s.attemptAt[99]; ok {
+			t.Error("不应存在残留记录")
+		}
+	}
+}

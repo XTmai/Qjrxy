@@ -37,15 +37,19 @@ type Account struct {
 	// 保证请求特征与真实 App 一致。
 	UserAgent string `json:"userAgent"`
 	// AppVersion 扫码时上报的今日校园客户端版本，用于 UA 与设备信息
-	AppVersion string  `json:"appVersion"`
-	BuildID    string  `json:"buildId"`
-	Address    string  `json:"address"`
-	Lon        float64 `json:"lon"`
-	Lat        float64 `json:"lat"`
-	Abnormal   string  `json:"abnormalReason"`
-	PhotoPath  string  `json:"photoPath"`
-	CreatedAt  string  `json:"createdAt"`
-	UpdatedAt  string  `json:"updatedAt"`
+	AppVersion string `json:"appVersion"`
+	BuildID    string `json:"buildId"`
+	// AppUserID 是今日校园 App 账号体系的 userId（扫码取票时 setCookieByToken 返回）。
+	// 它用来防止「把别人手机上的登录态绑到这条记录上」：同一账号再次扫码时
+	// 若 userId 变了，说明手机登录的不是同一个人，拒绝写入。
+	AppUserID string  `json:"appUserId"`
+	Address   string  `json:"address"`
+	Lon       float64 `json:"lon"`
+	Lat       float64 `json:"lat"`
+	Abnormal  string  `json:"abnormalReason"`
+	PhotoPath string  `json:"photoPath"`
+	CreatedAt string  `json:"createdAt"`
+	UpdatedAt string  `json:"updatedAt"`
 }
 
 // ErrDuplicateAccount 表示同一学校下该学号已绑定。
@@ -60,7 +64,7 @@ func (a Account) HasCookie() bool {
 const accountColumns = `id, user_id, alias, school_name, username, password_enc, tgc_enc, tenant_id, host, ids_url,
 	join_type, cookies, login_status, last_login_at, last_probe_at, last_probe_msg,
 	device_id, device_model, system_version, platform,
-	wis_device_id, user_agent, app_version, build_id, address, lon, lat, abnormal, photo_path,
+	wis_device_id, user_agent, app_version, build_id, app_user_id, address, lon, lat, abnormal, photo_path,
 	created_at, updated_at`
 
 func scanAccount(scanner interface{ Scan(...any) error }) (*Account, error) {
@@ -69,7 +73,7 @@ func scanAccount(scanner interface{ Scan(...any) error }) (*Account, error) {
 		&a.TenantID, &a.Host, &a.IDSURL, &a.JoinType, &a.Cookies, &a.LoginStatus, &a.LastLoginAt,
 		&a.LastProbeAt, &a.LastProbeMsg,
 		&a.DeviceID, &a.DeviceModel, &a.SystemVersion, &a.Platform, &a.WisDeviceID, &a.UserAgent,
-		&a.AppVersion, &a.BuildID, &a.Address, &a.Lon, &a.Lat, &a.Abnormal, &a.PhotoPath,
+		&a.AppVersion, &a.BuildID, &a.AppUserID, &a.Address, &a.Lon, &a.Lat, &a.Abnormal, &a.PhotoPath,
 		&a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -105,12 +109,12 @@ func (db *DB) CreateAccount(ctx context.Context, a *Account) (*Account, error) {
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO accounts (user_id, alias, school_name, username, password_enc, tgc_enc, tenant_id, host, ids_url,
 			join_type, cookies, login_status, last_login_at, device_id, device_model, system_version,
-			platform, wis_device_id, user_agent, app_version, build_id, address, lon, lat, abnormal,
+			platform, wis_device_id, user_agent, app_version, build_id, app_user_id, address, lon, lat, abnormal,
 			photo_path, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		a.UserID, a.Alias, a.SchoolName, a.Username, a.PasswordEnc, a.TGCEnc, a.TenantID, a.Host, a.IDSURL,
 		a.JoinType, a.Cookies, a.LoginStatus, a.LastLoginAt, a.DeviceID, a.DeviceModel, a.SystemVersion,
-		a.Platform, a.WisDeviceID, a.UserAgent, a.AppVersion, a.BuildID, a.Address, a.Lon, a.Lat,
+		a.Platform, a.WisDeviceID, a.UserAgent, a.AppVersion, a.BuildID, a.AppUserID, a.Address, a.Lon, a.Lat,
 		a.Abnormal, a.PhotoPath, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -170,13 +174,24 @@ func (db *DB) UpdateAccount(ctx context.Context, a *Account) error {
 		UPDATE accounts SET alias = ?, school_name = ?, username = ?, password_enc = ?, tgc_enc = ?, tenant_id = ?,
 			host = ?, ids_url = ?, join_type = ?, cookies = ?, login_status = ?, last_login_at = ?,
 			device_id = ?, device_model = ?, system_version = ?, platform = ?, wis_device_id = ?,
-			user_agent = ?, app_version = ?, build_id = ?, address = ?, lon = ?, lat = ?,
+			user_agent = ?, app_version = ?, build_id = ?, app_user_id = ?, address = ?, lon = ?, lat = ?,
 			abnormal = ?, photo_path = ?, updated_at = ?
 		WHERE id = ? AND user_id = ?`,
 		a.Alias, a.SchoolName, a.Username, a.PasswordEnc, a.TGCEnc, a.TenantID, a.Host, a.IDSURL, a.JoinType,
 		a.Cookies, a.LoginStatus, a.LastLoginAt, a.DeviceID, a.DeviceModel, a.SystemVersion, a.Platform,
-		a.WisDeviceID, a.UserAgent, a.AppVersion, a.BuildID, a.Address, a.Lon, a.Lat, a.Abnormal,
+		a.WisDeviceID, a.UserAgent, a.AppVersion, a.BuildID, a.AppUserID, a.Address, a.Lon, a.Lat, a.Abnormal,
 		a.PhotoPath, a.UpdatedAt, a.ID, a.UserID)
+	return err
+}
+
+// UpdateAccountAppUserID 只更新「今日校园 App 账号指纹」。
+//
+// 与 UpdateAccountSession / UpdateAccountDevice 同理，不能整行 UPDATE：
+// 扫码取票与后台探测可能并发写同一账号，整行快照会把对方的写入回滚掉。
+func (db *DB) UpdateAccountAppUserID(ctx context.Context, id int64, appUserID string) error {
+	_, err := db.ExecContext(ctx,
+		`UPDATE accounts SET app_user_id = ?, updated_at = ? WHERE id = ?`,
+		appUserID, now(), id)
 	return err
 }
 

@@ -377,7 +377,7 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		return errors.New("未识别到学校门户域名（host），请填写今日校园里的学校全称后重试")
 	}
 	if tgc == "" {
-		return errors.New("该校登录未下发换票票据（tgc），无法换取业务会话；请改用扫码授权或账密登录")
+		return errors.New("该校登录未下发换票票据（tgc），无法换取业务会话；请改用账密登录或网页登录")
 	}
 	// TGC 头是 tgc 经 DES-CBC（XCE927== / IV 0102030405060708）加密后的 base64，
 	// 直接塞明文 CAS 票服务端不认，会跳回 portal/login 形成重定向循环。

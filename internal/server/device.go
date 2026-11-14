@@ -10,6 +10,25 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 )
 
+// absoluteURL 返回当前请求的外部可访问基地址（scheme://host）。
+//
+// 扫码页地址要被手机打开，必须是绝对地址；反代后面时 r.TLS 与 r.Host
+// 都不反映真实入口，所以要优先采信 X-Forwarded-* 头。
+func absoluteURL(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = strings.TrimSpace(strings.Split(proto, ",")[0])
+	}
+	host := r.Host
+	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
+		host = strings.TrimSpace(strings.Split(fwd, ",")[0])
+	}
+	return scheme + "://" + host
+}
+
 // handleDeviceTicket 为账号生成"扫码获取设备 ID"的票据与二维码。
 func (s *Server) handleDeviceTicket(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r.Context())
@@ -27,19 +46,7 @@ func (s *Server) handleDeviceTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	// 设备页需要用绝对地址，拼接当前请求的 host。
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = strings.TrimSpace(strings.Split(proto, ",")[0])
-	}
-	host := r.Host
-	if fwd := r.Header.Get("X-Forwarded-Host"); fwd != "" {
-		host = strings.TrimSpace(strings.Split(fwd, ",")[0])
-	}
-	deviceURL := scheme + "://" + host + "/device.html?t=" + ticket
+	deviceURL := absoluteURL(r) + "/device.html?t=" + ticket
 
 	var png []byte
 	if qr, err := qrcode.New(deviceURL, qrcode.Medium); err == nil {

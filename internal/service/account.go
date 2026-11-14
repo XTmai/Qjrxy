@@ -302,9 +302,15 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 	if err != nil {
 		return nil, false, err
 	}
-	passwordEnc, err := secure.Encrypt(s.cfg.SecretKey, in.Password)
-	if err != nil {
-		return nil, false, err
+	// 空密码（NOTCLOUD 扫码登录场景）不加密空串，直接留空：
+	// 否则会存一段「空密码」的密文，hasCredentials 会误判成「有密码可自动重登」。
+	var passwordEnc string
+	if strings.TrimSpace(in.Password) != "" {
+		var err error
+		passwordEnc, err = secure.Encrypt(s.cfg.SecretKey, in.Password)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	username := strings.TrimSpace(in.Username)
 
@@ -319,6 +325,27 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 	}
 	if !errors.Is(err, store.ErrNotFound) {
 		return nil, false, err
+	}
+
+	// NOTCLOUD 学校用自建统一身份认证，登录页形态各校不同（滑块、校内短信、
+	// 自定义表单），当前无法通用适配。
+	//
+	// 只在「确实要新建账号」时拦截：上面那条 rebind 分支必须放行——
+	// 已有账号（含早先为适配过的学校建的）仍要能改密码/重新绑定，
+	// 否则那些账号就被彻底锁死，连自救的机会都没有。
+	// NOTCLOUD 学校用自建统一身份认证，登录页形态各校不同（滑块、校内短信、
+	// 自定义表单），账密/短信登录无法通用适配。
+	//
+	// 但这类学校可以走「扫码获取登录态」：借 App 已登录的会话换出业务票据。
+	// 所以只在「要建账号」时要求密码留空——有密码说明用户想走账密登录，
+	// 那对 NOTCLOUD 学校一定会失败，不如当场说清；留空就建一条只有学校+学号
+	// 的记录，扫码补齐会话即可。
+	notCloud := !cpdaily.SchoolSupported(tenant.JoinType)
+	if notCloud && strings.TrimSpace(in.Password) != "" {
+		return nil, false, fmt.Errorf(
+			"「%s」使用学校自建统一身份认证，不支持账密/短信登录。"+
+				"请把密码留空创建账号，然后在账号卡片上点「扫码登录」获取登录态",
+			tenant.Name)
 	}
 
 	account := &store.Account{

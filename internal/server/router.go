@@ -67,6 +67,10 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("GET /api/events", s.withUser(s.handleEvents))
 	mux.HandleFunc("POST /api/auth/password", s.withUser(s.handleChangePassword))
 	mux.HandleFunc("POST /api/device/submit", s.handleDeviceSubmit)
+	// 扫码获取登录态：手机页凭票据读取目标账号、提交换到的学校票据。
+	// 三个端点都免登录——票据本身即授权，与 /api/device/submit 同一个模型。
+	mux.HandleFunc("GET /api/login-scan/info", s.handleScanLoginInfo)
+	mux.HandleFunc("POST /api/login-scan/submit", s.handleScanLoginSubmit)
 
 	// ---- 账号 ----
 	mux.HandleFunc("GET /api/accounts", s.withUser(s.handleListAccounts))
@@ -80,9 +84,6 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("POST /api/accounts/{id}/sms/login", s.withUser(s.handleSMSLogin))
 	mux.HandleFunc("POST /api/accounts/{id}/verify", s.withUser(s.handleVerifySession))
 	mux.HandleFunc("POST /api/accounts/probe", s.withUser(s.handleProbeAccounts))
-	// QR 扫码登录（官方 connect/qrcode/jsLogin 流程）
-	mux.HandleFunc("POST /api/accounts/qr-login/start", s.withUser(s.handleQRLoginStart))
-	mux.HandleFunc("POST /api/accounts/qr-login/poll", s.withUser(s.handleQRLoginPoll))
 	// 导入导出（含登录态凭证，前端做二次确认）
 	mux.HandleFunc("GET /api/accounts/export", s.withUser(s.handleExportAccounts))
 	mux.HandleFunc("POST /api/accounts/import", s.withUser(s.handleImportAccounts))
@@ -95,6 +96,9 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	mux.HandleFunc("DELETE /api/accounts/{id}/photos/{photoId}", s.withUser(s.handleDeleteAccountPhoto))
 	mux.HandleFunc("POST /api/accounts/{id}/device-ticket", s.withUser(s.handleDeviceTicket))
 	mux.HandleFunc("GET /api/device/poll/{ticket}", s.withUser(s.handleDevicePoll))
+	// 扫码获取登录态（与设备扫码是两个独立入口，互不影响）。
+	mux.HandleFunc("POST /api/accounts/{id}/login-scan", s.withUser(s.handleScanLoginTicket))
+	mux.HandleFunc("GET /api/accounts/{id}/login-scan/poll", s.withUser(s.handleScanLoginPoll))
 	mux.HandleFunc("GET /api/accounts/{id}/sign-range", s.withUser(s.handleFetchRange))
 	mux.HandleFunc("POST /api/accounts/{id}/sign-range", s.withUser(s.handleApplyRange))
 

@@ -57,9 +57,28 @@ func ListSchools(ctx context.Context) ([]School, error) {
 		if item.JoinType == "NONE" {
 			continue
 		}
-		out = append(out, School{ID: item.ID, Name: item.Name})
+		out = append(out, School{
+			ID:        item.ID,
+			Name:      item.Name,
+			JoinType:  item.JoinType,
+			Supported: SchoolSupported(item.JoinType),
+		})
 	}
 	return out, nil
+}
+
+// SchoolSupported 判断该接入类型的学校当前能否完成登录。
+//
+// NOTCLOUD 学校使用自建统一身份认证，登录页形态各校不同（滑块验证码、
+// 校内短信、自定义表单与加密），协议复刻无法通用覆盖，需要逐校适配。
+// 这类学校在选校阶段就明确拦下并引导联系，避免用户走到登录失败才发现。
+func SchoolSupported(joinType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(joinType)) {
+	case "NOTCLOUD":
+		return false
+	default:
+		return true
+	}
 }
 
 // tenantEntry 是租户信息接口返回的入口字段（只取用得到的部分）。
@@ -191,7 +210,6 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 			ID       string `json:"id"`
 			Name     string `json:"name"`
 			JoinType string `json:"joinType"`
-			AppID    string `json:"appId"`
 		} `json:"data"`
 	}
 	if err := httpGetJSON(ctx, tenantListURL, &list); err != nil {
@@ -202,7 +220,6 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		JoinType string `json:"joinType"`
-		AppID    string `json:"appId"`
 	}
 	for i := range list.Data {
 		if list.Data[i].Name == schoolName {
@@ -246,7 +263,6 @@ func ResolveTenant(ctx context.Context, schoolName string) (*Tenant, error) {
 		Host:     host,
 		IDSURL:   ids,
 		AmpURL:   entry.AmpURL,
-		AppID:    matched.AppID,
 	}, nil
 }
 

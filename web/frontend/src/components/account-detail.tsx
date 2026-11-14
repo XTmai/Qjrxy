@@ -34,8 +34,8 @@ import { PlansTab } from "./plans";
 import { PhotoTab } from "./photo-pool";
 import { DeviceScanDialog } from "./device-scan-dialog";
 import { DeviceManualDialog } from "./device-manual-dialog";
+import { LoginScanDialog } from "./login-scan-dialog";
 import { SchoolLoginDialog } from "./school-login-dialog";
-import { QRLoginDialog } from "./qr-login-dialog";
 import { LocationDialog } from "./location-dialog";
 
 export type DetailTab = "tasks" | "plans" | "records" | "photos" | "device";
@@ -480,7 +480,7 @@ function DeviceTab({
   const [showScan, setShowScan] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
-  const [showQRLogin, setShowQRLogin] = useState(false);
+  const [showLoginScan, setShowLoginScan] = useState(false);
   const [showLocation, setShowLocation] = useState(false);
 
   const remove = async () => {
@@ -528,12 +528,11 @@ function DeviceTab({
       run: () => setShowLogin(true),
     },
     {
-      key: "qr-login",
-      title: "扫码登录（免密码）",
-      desc: "用今日校园 App 扫码，直接获取登录态",
+      key: "scan-login",
+      title: "扫码获取登录态",
+      desc: "用已登录今日校园的手机扫码，免密码换出学校会话",
       icon: QrCode,
-      done: account.loginStatus === "authorized",
-      run: () => setShowQRLogin(true),
+      run: () => setShowLoginScan(true),
     },
     {
       key: "range",
@@ -612,19 +611,6 @@ function DeviceTab({
         />
       )}
 
-      {showQRLogin && (
-        <QRLoginDialog
-          schoolName={account.schoolName}
-          onClose={(loggedIn) => {
-            setShowQRLogin(false);
-            if (loggedIn) {
-              toast({ title: "扫码登录成功" });
-              onChanged();
-            }
-          }}
-        />
-      )}
-
       {showLocation && (
         <LocationDialog
           account={account}
@@ -655,6 +641,19 @@ function DeviceTab({
             setShowScan(false);
             if (collected) {
               toast({ title: "设备已绑定" });
+              onChanged();
+            }
+          }}
+        />
+      )}
+
+      {showLoginScan && (
+        <LoginScanDialog
+          accountId={account.id}
+          onClose={(collected) => {
+            setShowLoginScan(false);
+            if (collected) {
+              toast({ title: "登录态已更新" });
               onChanged();
             }
           }}

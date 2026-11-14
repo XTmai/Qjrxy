@@ -24,14 +24,19 @@ type Tenant struct {
 	Host     string `json:"host"`
 	IDSURL   string `json:"idsUrl"`
 	AmpURL   string `json:"ampUrl"`
-	// AppID 是 uniauth 的学校应用 ID，用于生成扫码登录的 OAuth 参数。
-	AppID string `json:"appId"`
 }
 
 // School 是可搜索的学校条目。
 type School struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	// JoinType 是学校的接入类型：CLOUD（托管认证）/ NOTCLOUD（学校自建统一身份认证）。
+	JoinType string `json:"joinType,omitempty"`
+	// Supported 表示本项目当前能否为该学校完成登录。
+	//
+	// 目前只支持 CLOUD：NOTCLOUD 学校的认证页形态各校不同（滑块、校内短信、
+	// 自定义表单），协议复刻覆盖不到，需要逐校适配。
+	Supported bool `json:"supported"`
 }
 
 // ClientOptions 控制 HTTP 行为。

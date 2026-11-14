@@ -29,8 +29,8 @@ import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/api";
+import { QQ_GROUP_URL } from "@/lib/links";
 import { AccountImportDialog } from "@/components/account-import-dialog";
-import { QRLoginDialog } from "@/components/qr-login-dialog";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   DropdownMenu,
@@ -49,6 +49,7 @@ import { toast } from "@/hooks/use-toast";
 import { AccountDetail, type DetailTab } from "@/components/account-detail";
 import { CaptchaDialog } from "@/components/captcha-dialog";
 import { DeviceScanDialog } from "@/components/device-scan-dialog";
+import { LoginScanDialog } from "@/components/login-scan-dialog";
 import { LoginBadge } from "@/components/status-badge";
 import { EmptyBanner } from "@/components/empty-banner";
 import { PageHeader } from "@/components/page-header";
@@ -65,11 +66,11 @@ export function AccountsPage() {
   const [detailId, setDetailId] = useState<number | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("tasks");
   const [showImport, setShowImport] = useState(false);
-  const [showQRLogin, setShowQRLogin] = useState(false);
   const { confirm, ConfirmDialog } = useConfirm();
   const [keyword, setKeyword] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [scanAccountId, setScanAccountId] = useState<number | null>(null);
+  const [loginScanAccountId, setLoginScanAccountId] = useState<number | null>(null);
   const probe = useProbeAccounts();
   const queryClient = useQueryClient();
 
@@ -235,10 +236,6 @@ export function AccountsPage() {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button variant="outline" size="sm" onClick={() => setShowQRLogin(true)}>
-              <QrCode className="size-3.5" />
-              扫码登录
-            </Button>
             <Button variant="default" size="sm" onClick={() => setShowCreate(true)}>
               <Plus className="size-3.5" />
               添加账号
@@ -314,6 +311,7 @@ export function AccountsPage() {
         planCounts={planCounts}
         onOpen={handleOpen}
         onScan={handleScan}
+        onScanLogin={setLoginScanAccountId}
         onLogin={handleLogin}
       />
 
@@ -328,18 +326,6 @@ export function AccountsPage() {
           onClose={(deleted) => {
             setDetailId(null);
             if (deleted) void 0;
-          }}
-        />
-      )}
-
-      {showQRLogin && (
-        <QRLoginDialog
-          onClose={(loggedIn) => {
-            setShowQRLogin(false);
-            if (loggedIn) {
-              void queryClient.invalidateQueries({ queryKey: queryKeys.accounts.all() });
-              void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
-            }
           }}
         />
       )}
@@ -370,6 +356,20 @@ export function AccountsPage() {
           }}
         />
       )}
+
+      {loginScanAccountId !== null && (
+        <LoginScanDialog
+          accountId={loginScanAccountId}
+          onClose={(collected) => {
+            setLoginScanAccountId(null);
+            if (collected) {
+              toast({ title: "登录态已更新" });
+              void queryClient.invalidateQueries({ queryKey: queryKeys.accounts.all() });
+              void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard() });
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -387,12 +387,14 @@ const AccountGrid = memo(function AccountGrid({
   planCounts,
   onOpen,
   onScan,
+  onScanLogin,
   onLogin,
 }: {
   accounts: Account[];
   planCounts: Map<number, number>;
   onOpen: (id: number, tab?: DetailTab) => void;
   onScan: (id: number) => void;
+  onScanLogin: (id: number) => void;
   onLogin: (id: number) => void;
 }) {
   return (
@@ -404,6 +406,7 @@ const AccountGrid = memo(function AccountGrid({
           planCount={planCounts.get(a.id) ?? 0}
           onOpen={onOpen}
           onScan={onScan}
+          onScanLogin={onScanLogin}
           onLogin={onLogin}
         />
       ))}
@@ -420,12 +423,14 @@ const AccountCard = memo(function AccountCard({
   planCount,
   onOpen,
   onScan,
+  onScanLogin,
   onLogin,
 }: {
   account: Account;
   planCount: number;
   onOpen: (id: number, tab?: DetailTab) => void;
   onScan: (id: number) => void;
+  onScanLogin: (id: number) => void;
   onLogin: (id: number) => void;
 }) {
   const needsLogin = account.loginStatus !== "authorized";
@@ -520,6 +525,12 @@ const AccountCard = memo(function AccountCard({
             {needsDevice ? "登录账号" : "重新登录"}
           </Button>
         )}
+        {needsLogin && (
+          <Button variant="outline" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onScanLogin(account.id)}>
+            <QrCode className="size-3.5" />
+            扫码登录
+          </Button>
+        )}
         {needsDevice && (
           <Button variant={needsLogin ? "outline" : "default"} size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onScan(account.id)}>
             <QrCode className="size-3.5" />
@@ -598,6 +609,8 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
   const create = useCreateAccount();
   const [school, setSchool] = useState("");
   const [schools, setSchools] = useState<School[]>([]);
+  // 选中自建认证的学校时记录校名，用于展示「密码留空 + 扫码登录」的说明
+  const [schoolUnsupported, setSchoolUnsupported] = useState("");
   const [showSchools, setShowSchools] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -649,12 +662,28 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
     };
   }, [school]);
 
+  // 已从下拉里拿到、但当前未适配的学校名集合。
+  // 手输的校名若不在候选里就放行——后端 CreateAccount 会再校验一次。
+  const unsupportedNames = new Set(
+    schools.filter((s) => !s.supported).map((s) => s.name),
+  );
+  const isUnsupportedSchool = (name: string) => unsupportedNames.has(name);
+
   const save = async () => {
     if (busy) return;
     setError("");
     if (!school.trim()) return setError("请填写学校全称");
+    // NOTCLOUD 学校走扫码登录，不需要密码：只建一条学校+学号的记录，
+    // 登录态在卡片上点「扫码登录」获取。
+    const unsupported = isUnsupportedSchool(school.trim());
+    if (unsupported && password) {
+      setSchoolUnsupported(school.trim());
+      return setError(
+        `「${school.trim()}」使用学校自建统一身份认证，不支持账密登录。请把密码留空后保存，再用「扫码登录」获取登录态`,
+      );
+    }
     if (!username.trim()) return setError("请填写学号");
-    if (!password) return setError("请填写密码");
+    if (!unsupported && !password) return setError("请填写密码");
     setBusy(true);
     try {
       setStep("logging");
@@ -667,6 +696,16 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
       const accountId = created.account.id;
       const existed = !!created.existed;
       setCreatedId(accountId);
+
+      // NOTCLOUD 学校没有密码，账密登录必然失败——直接收尾，让用户去扫码。
+      if (unsupported) {
+        toast({
+          title: existed ? "账号已存在" : "账号已添加",
+          description: "请点卡片上的「扫码登录」获取登录态",
+        });
+        onClose(true);
+        return;
+      }
 
       // 账号已经入库，后面登录失败只能提示「登录未完成」，不能再报成「创建失败」：
       // 那样用户以为没保存，重试又撞上「已绑定」，列表也没刷新，看起来就像白添加了一次。
@@ -757,16 +796,52 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
                               onClick={() => {
                                 setSchool(s.name);
                                 setShowSchools(false);
+                                // 未适配的学校：直接给出明确说明 + 反馈群入口，
+                                // 不让用户填完学号密码才在登录环节失败。
+                                if (!s.supported) {
+                                  setSchoolUnsupported(s.name);
+                                } else {
+                                  setSchoolUnsupported("");
+                                }
                               }}
-                              className="hover:bg-muted block w-full px-3 py-2 text-left text-sm"
+                              className={`block w-full px-3 py-2 text-left text-sm ${
+                                s.supported
+                                  ? "hover:bg-muted"
+                                  : "text-muted-foreground hover:bg-muted/60"
+                              }`}
                             >
                               {s.name}
+                              {!s.supported && (
+                                <span className="ml-2 text-[10px] text-brand">需扫码登录</span>
+                              )}
                             </button>
                           ))}
                         </div>
                       )}
                     </div>
                     <FieldDescription>输入几个字会自动匹配，从下拉中选择即可。</FieldDescription>
+                    {schoolUnsupported && (
+                      <div className="bg-brand-soft text-brand mt-2 space-y-1.5 rounded-lg px-3 py-2 text-[11px] leading-relaxed">
+                        <p>
+                          「{schoolUnsupported}」使用学校自建统一身份认证，不支持账密或短信登录。
+                        </p>
+                        <p>
+                          请把<strong>密码留空</strong>保存账号，然后在账号卡片上点「
+                          <strong>扫码登录</strong>
+                          」——用已登录今日校园的手机扫一次码即可获取登录态，不需要密码。
+                          该校未适配请加
+                          <a
+                            href={QQ_GROUP_URL}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mx-1 font-medium underline"
+                          >
+                            反馈群
+                          </a>
+                          登记。
+                        </p>
+                      </div>
+                    )}
                   </Field>
                 </div>
                 <Field>
@@ -774,14 +849,19 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
                   <Input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
                 </Field>
                 <Field>
-                  <FieldLabel>密码</FieldLabel>
+                  <FieldLabel>{schoolUnsupported ? "密码（留空即可）" : "密码"}</FieldLabel>
                   <Input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     autoComplete="new-password"
+                    placeholder={schoolUnsupported ? "该校不支持账密登录，留空" : undefined}
                   />
-                  <FieldDescription>AES-256-GCM 加密保存在你的服务器，仅用于自动登录。</FieldDescription>
+                  <FieldDescription>
+                    {schoolUnsupported
+                      ? "该校走扫码登录，密码无需填写。"
+                      : "AES-256-GCM 加密保存在你的服务器，仅用于自动登录。"}
+                  </FieldDescription>
                 </Field>
                 {error && <p className="text-destructive text-sm">{error}</p>}
               </>

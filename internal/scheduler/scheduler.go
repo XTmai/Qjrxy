@@ -334,6 +334,18 @@ func (s *Scheduler) claimAttempt(planID int64, now time.Time) bool {
 	return true
 }
 
+// releaseAttempt 撤销一次「尝试」记账。
+//
+// 只用于「判断了窗口但并没有真正提交」的路径。等窗口不是尝试：若把它
+// 算作尝试，attemptGap 的配额就浪费在本地判断上——调度器重启/整点探测
+// 恰好在窗口开始前几分钟扫过一次时，窗口真正开始的那一刻会被自己的
+// 节流挡回去（2026-11-14 实测：20:57 重启，21:00 的窗口全部被吃掉）。
+func (s *Scheduler) releaseAttempt(planID int64) {
+	s.attemptMu.Lock()
+	delete(s.attemptAt, planID)
+	s.attemptMu.Unlock()
+}
+
 func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time) {
 	// 节流闸门：同一计划 10 分钟内只尝试一次。
 	// 任务未到窗口时不能写 last_run_at（会丢掉当天机会），若不节流就会
@@ -358,6 +370,9 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 	if w, ok := s.svc.NextTaskWindow(ctx, account.ID, kind); ok {
 		if !w.Ready {
 			s.scheduleWake(plan.ID, w.Start)
+			// 只是等窗口，没有向学校发请求：撤销本次尝试记账，
+			// 保证窗口开始时不被 attemptGap 挡住。
+			s.releaseAttempt(plan.ID)
 			log.Printf("计划 %d 等待任务窗口：%s 于 %s 开始", plan.ID, w.TaskName,
 				w.Start.Format("15:04"))
 			return
@@ -368,16 +383,20 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 		if _, err := s.svc.SyncTasks(ctx, account.UserID, account.ID); err != nil {
 			// 同步失败多数是临时问题（网络、会话），不能占用当天机会，
 			// 否则一次抖动就会让计划当天彻底不执行。
+			s.releaseAttempt(plan.ID)
 			log.Printf("计划 %d 同步任务失败，稍后重试：%v", plan.ID, err)
 			return
 		}
 		w, ok := s.svc.NextTaskWindow(ctx, account.ID, kind)
 		if !ok {
+			// 只读了本地缓存/同步结果，没有提交：撤销记账。
+			s.releaseAttempt(plan.ID)
 			log.Printf("计划 %d 当前无可用查寝任务，等待下个周期", plan.ID)
 			return
 		}
 		if !w.Ready {
 			s.scheduleWake(plan.ID, w.Start)
+			s.releaseAttempt(plan.ID)
 			log.Printf("计划 %d 等待任务窗口：%s 于 %s 开始", plan.ID, w.TaskName,
 				w.Start.Format("15:04"))
 			return
@@ -395,6 +414,8 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 		// 「还没到签到时间」属于正常等待，不能算当天已执行——
 		// 否则一旦在错误的时间点触发一次，当天就再也不会重试了。
 		if isWaitingForWindow(err) {
+			// 前置校验就拦下了，请求没发出去：同样不算一次尝试。
+			s.releaseAttempt(plan.ID)
 			log.Printf("计划 %d 等待签到窗口：%v", plan.ID, err)
 			return
 		}

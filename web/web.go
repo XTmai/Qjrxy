@@ -62,17 +62,19 @@ func Handler() (http.Handler, error) {
 		}
 
 		// HTML 入口不做缓存，保证引用的资源指纹总是最新
-		if path == "index.html" || path == "device.html" {
+		if path == "index.html" || path == "device.html" || path == "scan-login.html" {
 			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeContent(w, r, path, time.Time{}, strings.NewReader(mustRead(sub, path)))
 			return
 		}
 
 		if _, err := fs.Stat(sub, path); err != nil {
-			// SPA / device 页回退
+			// SPA / device / scan-login 页回退
 			fallback := "index.html"
 			if strings.HasPrefix(r.URL.Path, "/device") {
 				fallback = "device.html"
+			} else if strings.HasPrefix(r.URL.Path, "/scan-login") {
+				fallback = "scan-login.html"
 			}
 			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeContent(w, r, fallback, time.Time{}, strings.NewReader(mustRead(sub, fallback)))

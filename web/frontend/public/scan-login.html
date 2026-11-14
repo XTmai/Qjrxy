@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>扫码获取登录态</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --ink: #1a1d21;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --ok: #16a34a;
+    --ok-soft: #f0fdf4;
+    --warn: #b45309;
+    --warn-soft: #fffbeb;
+    --fail: #b91c1c;
+    --fail-soft: #fef2f2;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px 16px 32px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 14px; padding: 16px; margin-bottom: 12px;
+  }
+  .card--target { border-color: #bfdbfe; background: var(--accent-soft); }
+  .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .target-school { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
+  .target-user { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 17px; margin-top: 4px; }
+  .target-alias { color: var(--accent); font-size: 13px; margin-top: 6px; }
+
+  .step { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; }
+  .step + .step { border-top: 1px solid var(--line); }
+  .dot {
+    flex: 0 0 20px; height: 20px; margin-top: 2px;
+    border-radius: 50%; border: 2px solid var(--line);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: var(--muted);
+  }
+  .step.is-running .dot { border-color: var(--accent); color: var(--accent); }
+  .step.is-done .dot { border-color: var(--ok); background: var(--ok); color: #fff; }
+  .step.is-fail .dot { border-color: var(--fail); background: var(--fail); color: #fff; }
+  .step-body { flex: 1; min-width: 0; }
+  .step-title { font-size: 14px; }
+  .step-note { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
+  .step.is-fail .step-note { color: var(--fail); }
+
+  .meta { font-size: 12px; color: var(--muted); }
+  .meta b { color: var(--ink); font-weight: 600; }
+
+  button {
+    width: 100%; border: 0; border-radius: 12px; padding: 15px;
+    font-size: 16px; font-weight: 600; color: #fff; background: var(--accent);
+    margin-top: 4px;
+  }
+  button:disabled { background: #c7cbd1; }
+  button.secondary { background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+
+  .banner { border-radius: 12px; padding: 12px 14px; font-size: 14px; margin-bottom: 12px; }
+  .banner--ok { background: var(--ok-soft); color: var(--ok); border: 1px solid #bbf7d0; }
+  .banner--warn { background: var(--warn-soft); color: var(--warn); border: 1px solid #fde68a; }
+  .banner--fail { background: var(--fail-soft); color: var(--fail); border: 1px solid #fecaca; }
+
+  .tip { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 12px; }
+  .hidden { display: none !important; }
+  .fx { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>扫码获取登录态</h1>
+  <p class="sub">借今日校园 App 的已登录状态换出学校会话，无需输入密码</p>
+
+  <div id="targetCard" class="card card--target hidden">
+    <div class="label">即将绑定到这条记录</div>
+    <div id="targetSchool" class="target-school">—</div>
+    <div id="targetUser" class="target-user">—</div>
+    <div id="targetAlias" class="target-alias"></div>
+  </div>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <div class="card">
+    <div id="step1" class="step">
+      <div class="dot">1</div>
+      <div class="step-body">
+        <div class="step-title">读取手机设备信息</div>
+        <div id="step1Note" class="step-note">等待 App 注入原生接口…</div>
+      </div>
+    </div>
+    <div id="step2" class="step">
+      <div class="dot">2</div>
+      <div class="step-body">
+        <div class="step-title">换取今日校园账号凭证</div>
+        <div id="step2Note" class="step-note">尚未开始</div>
+      </div>
+    </div>
+    <div id="step3" class="step">
+      <div class="dot">3</div>
+      <div class="step-body">
+        <div class="step-title">换出学校业务会话</div>
+        <div id="step3Note" class="step-note">尚未开始</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultCard" class="card hidden">
+    <div class="label">本次换到的凭证</div>
+    <div class="meta">登录票据：<b id="ticketMask" class="fx">—</b></div>
+    <div class="meta">设备型号：<b id="deviceMask">—</b></div>
+  </div>
+
+  <button id="confirmBtn" class="hidden" disabled>确认绑定</button>
+  <button id="retryBtn" class="secondary hidden">重新尝试</button>
+
+  <p class="tip">
+    <b>请先确认上面的学校与学号是你本人。</b><br>
+    凭证来自这台手机上当前登录的今日校园账号。若手机登录的不是本人，绑定后会用别人的身份签到。
+  </p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var params = new URLSearchParams(location.search);
+  var TICKET = params.get('t') || '';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var API_ORIGIN = 'https://api.campushoy.com';
+  var SET_COOKIE_URL = API_ORIGIN + '/connect/oauth2/setCookieByToken';
+
+  var state = {
+    target: null,
+    clientIds: [],
+    host: '',
+    device: null,
+    ticket: '',
+    appUserId: '',
+    busy: false
+  };
+
+  // ---------- 展示工具 ----------
+  function setStep(n, phase, note) {
+    var el = $('step' + n);
+    if (!el) return;
+    el.className = 'step' + (phase ? ' is-' + phase : '');
+    if (note) $('step' + n + 'Note').textContent = note;
+  }
+
+  function banner(kind, text) {
+    var el = $('banner');
+    el.className = 'banner banner--' + kind;
+    el.textContent = text;
+    el.classList.remove('hidden');
+  }
+
+  function mask(ticket) {
+    if (!ticket) return '—';
+    if (ticket.length <= 24) return ticket;
+    return ticket.slice(0, 16) + '…' + ticket.slice(-6);
+  }
+
+  // 从 UA 兜底解析机型（原生接口不可用时用）
+  function parseUA(ua) {
+    var out = {};
+    var m = /cpdaily\/([\d.]+)/i.exec(ua || '');
+    if (m) out.appVersion = m[1];
+    if (/iPhone/i.test(ua)) { out.systemName = 'ios'; out.deviceModel = 'iPhone'; }
+    else if (/iPad/i.test(ua)) { out.systemName = 'ios'; out.deviceModel = 'iPad'; }
+    else if (/Android/i.test(ua)) {
+      out.systemName = 'android';
+      var a = /Android\s([\d.]+)/i.exec(ua);
+      if (a) out.systemVersion = a[1];
+      var d = /;\s*([^;)]+)\s+Build\//i.exec(ua);
+      if (d) out.deviceModel = d[1].trim();
+    }
+    return out;
+  }
+
+  // 把各种形态的插件返回归一成扁平对象
+  function flatten(root) {
+    if (!root) return null;
+    if (typeof root === 'string') {
+      try { root = JSON.parse(root); } catch (e) { return null; }
+    }
+    var candidates = [root, root.data, root.deviceInfo, root.value, root.data && root.data.value];
+    for (var i = 0; i < candidates.length; i++) {
+      var c = candidates[i];
+      if (!c || typeof c !== 'object') continue;
+      var id = c.device_id || c.deviceId || c.uuid || c.id;
+      if (id && String(id).length >= 8) {
+        return {
+          deviceId: String(id),
+          uuid: c.uuid || '',
+          deviceModel: c.model || c.deviceModel || '',
+          systemVersion: c.version || c.systemVersion || '',
+          buildId: c.buildId || c.buildID || '',
+          systemName: c.platform || c.systemName || '',
+          wisDeviceId: c.wisDeviceId || c.wisDeviceID || ''
+        };
+      }
+    }
+    return null;
+  }
+
+  // ---------- 原生桥 ----------
+  function exec(svc, action, args) {
+    return new Promise(function (resolve, reject) {
+      if (!window.cordova || !window.cordova.exec) {
+        reject(new Error('不在今日校园 App 内'));
+        return;
+      }
+      var done = false;
+      var timer = setTimeout(function () {
+        if (!done) { done = true; reject(new Error('原生接口无响应')); }
+      }, 20000);
+      try {
+        window.cordova.exec(
+          function (res) { if (!done) { done = true; clearTimeout(timer); resolve(res); } },
+          function (err) { if (!done) { done = true; clearTimeout(timer); reject(normalizeErr(err)); } },
+          svc, action, args
+        );
+      } catch (e) {
+        if (!done) { done = true; clearTimeout(timer); reject(e); }
+      }
+    });
+  }
+
+  function normalizeErr(err) {
+    if (!err) return new Error('未知错误');
+    if (typeof err === 'string') return new Error(err);
+    return new Error(err.errmsg || err.message || JSON.stringify(err));
+  }
+
+  // needAuth:false 是绕过原生 appKey 授权的关键：
+  // 设成 true 会返回 40003/50004，false 时原生照样带上 App 自己的 cookie 容器。
+  function nativeGet(url) {
+    return exec('MAMPHTTP', 'sendGetRequest', [{
+      appKey: '', needAuth: false, url: url, headers: {}, params: {}
+    }]);
+  }
+
+  function bodyOf(res) {
+    var b = res && (res.data !== undefined ? res.data : res);
+    if (typeof b === 'string') return b;
+    if (b === undefined || b === null) return '';
+    return JSON.stringify(b);
+  }
+
+  function headerOf(res, name) {
+    var h = (res && res.headers) || {};
+    var want = String(name).toLowerCase();
+    for (var k in h) {
+      if (Object.prototype.hasOwnProperty.call(h, k) && k.toLowerCase() === want) return h[k] || '';
+    }
+    return '';
+  }
+
+  function grabModAuthCAS(setCookie) {
+    var m = /MOD_AUTH_CAS=([^;]+)/.exec(setCookie || '');
+    return m ? m[1] : '';
+  }
+
+  // ---------- 取设备 ----------
+  function loadDevice() {
+    var ua = parseUA(navigator.userAgent);
+    return exec('MAMPDevice', 'getDeviceInfo', [])
+      .then(function (res) {
+        var d = flatten(res);
+        if (!d) throw new Error('设备信息格式无法识别');
+        return {
+          deviceId: d.deviceId,
+          deviceModel: d.deviceModel || ua.deviceModel || '',
+          systemVersion: d.systemVersion || ua.systemVersion || '',
+          buildId: d.buildId || '',
+          systemName: d.systemName || ua.systemName || '',
+          wisDeviceId: d.wisDeviceId || '',
+          appVersion: ua.appVersion || '',
+          userAgent: navigator.userAgent
+        };
+      })
+      .catch(function () {
+        // 老版本 App 里插件名可能是 Device
+        return exec('Device', 'getDeviceInfo', []).then(function (res) {
+          var d = flatten(res);
+          if (!d) throw new Error('设备信息格式无法识别');
+          return {
+            deviceId: d.deviceId,
+            deviceModel: d.deviceModel || ua.deviceModel || '',
+            systemVersion: d.systemVersion || ua.systemVersion || '',
+            buildId: d.buildId || '',
+            systemName: d.systemName || ua.systemName || '',
+            wisDeviceId: d.wisDeviceId || '',
+            appVersion: ua.appVersion || '',
+            userAgent: navigator.userAgent
+          };
+        });
+      })
+      .then(function (dev) {
+        state.device = dev;
+        setStep(1, 'done', dev.deviceModel + ' · ' + (dev.systemName === 'ios' ? 'iOS' : 'Android') +
+          ' ' + (dev.systemVersion || ''));
+        return dev;
+      });
+  }
+
+  // ---------- 换 cookieToken ----------
+  function fetchCookieToken() {
+    return nativeGet(SET_COOKIE_URL).then(function (res) {
+      var raw = bodyOf(res);
+      var parsed;
+      try { parsed = JSON.parse(raw); } catch (e) { parsed = null; }
+      if (!parsed || parsed.code !== 0 || !parsed.datas || !parsed.datas.cookieToken) {
+        throw new Error('未取到账号凭证：' + (parsed && (parsed.errMsg || parsed.code) || raw.slice(0, 80)));
+      }
+      state.appUserId = parsed.datas.userId || '';
+      return parsed.datas.cookieToken;
+    });
+  }
+
+  // ---------- authorize：让原生容器种下学校会话 ----------
+  function authorize(cookieToken, clientId) {
+    var url = API_ORIGIN + '/connect/oauth2/authorize?response_type=code' +
+      '&client_id=' + encodeURIComponent(clientId) +
+      '&redirect_uri=' + encodeURIComponent('https://' + state.host + '/iap/oauthCallback') +
+      '&state=scan-login' +
+      '&cookie_token=' + encodeURIComponent(cookieToken);
+    return nativeGet(url).then(function (res) {
+      var landed = headerOf(res, 'url') || '';
+      // 落到扫码页说明这个 client_id 不被该校接受，换下一个候选。
+      if (/\/connect\/pc\/qrcode\//i.test(landed)) {
+        throw new Error('client_id 不被学校接受');
+      }
+      if (!/^https?:/i.test(landed)) {
+        throw new Error('授权跳转异常');
+      }
+      return landed;
+    });
+  }
+
+  // ---------- 打学校接口逼出 MOD_AUTH_CAS ----------
+  function harvestTicket() {
+    var url = 'https://' + state.host +
+      '/wec-counselor-attendance-apps/student/attendance/getStuAttendacesInOneDay';
+    return nativeGet(url).then(function (res) {
+      var setCookie = headerOf(res, 'set-cookie') || headerOf(res, 'Set-Cookie');
+      var ticket = grabModAuthCAS(setCookie);
+      if (!ticket) throw new Error('学校未下发登录票据');
+      return ticket;
+    });
+  }
+
+  // ---------- 主流程 ----------
+  function run() {
+    if (state.busy) return;
+    state.busy = true;
+    $('confirmBtn').classList.add('hidden');
+    $('retryBtn').classList.add('hidden');
+    $('resultCard').classList.add('hidden');
+    $('banner').classList.add('hidden');
+    setStep(2, '', '尚未开始');
+    setStep(3, '', '尚未开始');
+
+    var cookieToken = '';
+
+    setStep(1, 'running', '正在读取…');
+    loadDevice()
+      .then(function () {
+        setStep(2, 'running', '正在换取…');
+        return fetchCookieToken();
+      })
+      .then(function (ct) {
+        cookieToken = ct;
+        setStep(2, 'done', '已取得（账号指纹 ' + (state.appUserId ? state.appUserId.slice(0, 8) + '…' : '未知') + '）');
+        setStep(3, 'running', '正在换票…');
+
+        // client_id 逐个降级：不同学校对接的第三方应用不同。
+        var seq = Promise.reject(new Error('没有可用的 client_id'));
+        state.clientIds.forEach(function (cid) {
+          seq = seq.catch(function () { return authorize(cookieToken, cid); });
+        });
+        return seq;
+      })
+      .then(function () {
+        return harvestTicket();
+      })
+      .then(function (ticket) {
+        state.ticket = ticket;
+        setStep(3, 'done', '已换到登录票据');
+        $('ticketMask').textContent = mask(ticket);
+        $('deviceMask').textContent = (state.device && state.device.deviceModel || '未知') +
+          ' · ' + (state.device && state.device.systemName === 'ios' ? 'iOS' : 'Android');
+        $('resultCard').classList.remove('hidden');
+        $('confirmBtn').classList.remove('hidden');
+        $('confirmBtn').disabled = false;
+        banner('ok', '已就绪，请核对上方学校与学号后点「确认绑定」');
+      })
+      .catch(function (e) {
+        var msg = (e && e.message) || String(e);
+        // 找出第一个失败的步骤，把错误落到它上面
+        var s3 = $('step3').className.indexOf('is-done') >= 0;
+        var s2 = $('step2').className.indexOf('is-running') >= 0;
+        if (s2) setStep(2, 'fail', msg);
+        else if (s3) setStep(3, 'fail', msg);
+        else setStep(1, 'fail', msg);
+        banner('fail', msg);
+        $('retryBtn').classList.remove('hidden');
+      })
+      .then(function () { state.busy = false; });
+  }
+
+  // ---------- 提交 ----------
+  function submit() {
+    if (!state.ticket) return;
+    $('confirmBtn').disabled = true;
+    $('confirmBtn').textContent = '正在提交…';
+    fetch('/api/login-scan/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticket: TICKET,
+        modAuthCas: state.ticket,
+        appUserId: state.appUserId,
+        host: state.host,
+        school: state.target ? state.target.schoolName : '',
+        device: state.device || {}
+      })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || j.ok !== true) {
+          throw new Error((j && j.error && j.error.message) || '提交失败');
+        }
+        banner('ok', '已提交 ✓ 可以关闭本页，回到电脑端确认');
+        $('confirmBtn').classList.add('hidden');
+        $('retryBtn').classList.add('hidden');
+      })
+      .catch(function (e) {
+        banner('fail', (e && e.message) || '提交失败');
+        $('confirmBtn').disabled = false;
+        $('confirmBtn').textContent = '确认绑定';
+      });
+  }
+
+  // ---------- 启动 ----------
+  function boot() {
+    if (!TICKET) {
+      banner('fail', '链接不完整：缺少票据。请在电脑端重新生成二维码。');
+      return;
+    }
+
+    fetch('/api/login-scan/info?t=' + encodeURIComponent(TICKET))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (!j || j.ok !== true) {
+          throw new Error((j && j.error && j.error.message) || '票据无效');
+        }
+        var d = j.data || {};
+        state.target = d;
+        state.clientIds = Array.isArray(d.clientIds) ? d.clientIds : [];
+        state.host = (d.host || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        $('targetSchool').textContent = d.schoolName || '—';
+        $('targetUser').textContent = d.username || '—';
+        if (d.alias) $('targetAlias').textContent = d.alias;
+        $('targetCard').classList.remove('hidden');
+
+        if (!state.host) {
+          banner('fail', '这条账号还没有学校域名，请先在电脑端补全学校信息');
+          return;
+        }
+        if (!state.clientIds.length) {
+          banner('fail', '服务端未配置换票参数');
+          return;
+        }
+        injectBridge();
+      })
+      .catch(function (e) {
+        banner('fail', (e && e.message) || '票据无效或已过期');
+      });
+  }
+
+  function injectBridge() {
+    var ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    var script = document.createElement('script');
+    script.src = ios
+      ? 'https://static.campushoy.com/innerjs/cordova_ios.js'
+      : 'https://static.campushoy.com/innerjs/cordova_android.js';
+    script.onload = function () { setTimeout(run, 600); };
+    script.onerror = function () {
+      banner('fail', '无法加载 App 原生接口，请确认是在今日校园 App 内打开本页');
+    };
+    document.head.appendChild(script);
+  }
+
+  $('confirmBtn').addEventListener('click', submit);
+  $('retryBtn').addEventListener('click', run);
+
+  boot();
+})();
+</script>
+</body>
+</html>

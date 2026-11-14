@@ -321,7 +321,7 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	// 没有票据、sessionToken 也访问不了业务接口：这次登录实际是失败的，
 	// 不能因为 finishSession 已经把 cookies 落库就报成功。
 	if tgc == "" && fresh.LoginStatus != "authorized" {
-		return nil, errors.New("该校登录未下发换票票据，且账号会话无法访问业务接口；请改用扫码授权或账密登录")
+		return nil, errors.New("该校登录未下发换票票据，且账号会话无法访问业务接口；请改用账密登录或网页登录")
 	}
 	return fresh, nil
 }

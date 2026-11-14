@@ -208,6 +208,15 @@ export function SchoolLoginDialog({ account, onClose }: Props) {
             ))}
           </div>
 
+          {/* NOTCLOUD 学校的短信登录只能建立今日校园账号会话，换不出学校凭证。
+              这里提前说明，避免用户反复试错。 */}
+          {method === "sms" && account.joinType === "NOTCLOUD" && (
+            <div className="bg-warning-soft text-warning-text rounded-lg px-3 py-2 text-[11px] leading-relaxed">
+              该校使用自建统一身份认证，短信只能建立今日校园账号会话，无法直接换出查寝凭证。
+              建议改用「网页登录」（在账号设置里），在那里完成学校认证即可。
+            </div>
+          )}
+
           {method === "password" ? (
             inCaptcha ? (
               <div className="space-y-3">

@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 	user_agent     TEXT NOT NULL DEFAULT '',
 	app_version    TEXT NOT NULL DEFAULT '',
 	build_id       TEXT NOT NULL DEFAULT 'VLFCNXM',
+	app_user_id    TEXT NOT NULL DEFAULT '',
 	address        TEXT NOT NULL DEFAULT '',
 	lon            REAL NOT NULL DEFAULT 0,
 	lat            REAL NOT NULL DEFAULT 0,
@@ -201,6 +202,8 @@ func (db *DB) migrate() error {
 		`ALTER TABLE accounts ADD COLUMN last_probe_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN last_probe_msg TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE accounts ADD COLUMN photo_pool_cursor INTEGER NOT NULL DEFAULT 0`,
+		// app_user_id 是今日校园 App 账号的 userId，扫码取票时落库，用于防止绑错人。
+		`ALTER TABLE accounts ADD COLUMN app_user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE logs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)

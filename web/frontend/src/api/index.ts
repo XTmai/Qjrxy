@@ -77,18 +77,6 @@ export const api = {
   deleteAccountPhoto: (id: number, photoId: number) =>
     http.del<{ message: string }>(`/accounts/${id}/photos/${photoId}`),
 
-  // ---- QR 扫码登录 ----
-  qrLoginStart: (body: { schoolName?: string }) =>
-    http.post<{ ticket: string; qrImage: string; qrId: string; expiresAt: string }>(
-      "/accounts/qr-login/start",
-      body,
-    ),
-  qrLoginPoll: (body: { ticket: string }) =>
-    http.post<{ status: string; message?: string; account?: Account }>(
-      "/accounts/qr-login/poll",
-      body,
-    ),
-
   // ---- 设备扫码 ----
   deviceTicket: (id: number) =>
     http.post<{ ticket: string; url: string; expiresAt: string; qrcode: string }>(
@@ -107,6 +95,21 @@ export const api = {
       wisDeviceId?: string;
       uuid?: string;
     }>(`/device/poll/${encodeURIComponent(ticket)}`),
+
+  // ---- 扫码获取登录态（与设备扫码是两个独立入口） ----
+  loginScanTicket: (id: number) =>
+    http.post<{
+      ticket: string;
+      url: string;
+      expiresAt: string;
+      qrcode: string;
+      clientIds: string[];
+      target: { schoolName: string; username: string; alias: string; host: string };
+    }>(`/accounts/${id}/login-scan`, {}),
+  loginScanPoll: (id: number, ticket: string) =>
+    http.get<{ pending: boolean; collected?: boolean; account?: Account }>(
+      `/accounts/${id}/login-scan/poll?t=${encodeURIComponent(ticket)}`,
+    ),
 
   // ---- 签到位置 ----
   signRange: (id: number) => http.get<{ range: SignRange }>(`/accounts/${id}/sign-range`),

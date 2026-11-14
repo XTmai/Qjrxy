@@ -55,6 +55,10 @@ export interface AccountPhoto {
 export interface School {
   id: string;
   name: string;
+  /** 接入类型：CLOUD（托管认证）/ NOTCLOUD（学校自建统一身份认证） */
+  joinType?: string;
+  /** 当前版本能否为该学校完成登录；NOTCLOUD 为 false */
+  supported: boolean;
 }
 
 /** 创建/编辑账号的输入（AccountInput） */
