@@ -91,26 +91,42 @@ func fetchTenantEntry(ctx context.Context, tenantID string) (*tenantEntry, error
 }
 
 // hostFromEntry 从 ampUrl/ampUrl2 里挑出门户域名。
-// 优先 campusphere/cpdaily 域名，其次第一个能解析的地址。
+//
+// 优先级（高 → 低）：
+//  1. campusphere/cpdaily 托管域——查寝接口一定在这类域上；
+//  2. 路径含 /wec-portal-mobile/ 的门户——辅导猫移动门户的标志路径。
+//     学校自建部署时它在学校自有域名上（如厦门医学院 cat.xmmc.edu.cn），
+//     而 ampUrl 常被填成学校的 ehall（办事大厅），上面没有辅导猫接口；
+//  3. 第一个可解析的地址（兜底）。
+//
+// 实测（2026-11-14 租户接口）：厦门医学院与安徽城市管理职业学院的入口
+// 都是「ampUrl=ehall + ampUrl2=辅导猫门户」结构，旧逻辑回退到 ehall，
+// 导致厦门医学院的业务接口全部 404。
 func hostFromEntry(entry *tenantEntry) string {
-	host := ""
+	best := ""
+	bestScore := -1
 	for _, amp := range []string{entry.AmpURL, entry.AmpURL2} {
-		if amp == "" {
+		if strings.TrimSpace(amp) == "" {
 			continue
 		}
 		u, err := url.Parse(amp)
 		if err != nil || u.Host == "" {
 			continue
 		}
-		isCampus := strings.Contains(amp, "campusphere") || strings.Contains(amp, "cpdaily")
-		if isCampus || host == "" {
-			host = u.Host
+		score := 0
+		if strings.Contains(amp, "campusphere") || strings.Contains(amp, "cpdaily") {
+			score = 2 // 托管域：最高优先级
+		} else if strings.Contains(u.Path, "wec-portal-mobile") {
+			score = 1 // 学校自建的辅导猫门户
 		}
-		if isCampus {
-			break
+		if score > bestScore {
+			best, bestScore = u.Host, score
+		}
+		if score == 2 {
+			break // 已是最高优先级，不必再看
 		}
 	}
-	return host
+	return best
 }
 
 // NormalizeHost 把用户可能填进来的各种形式（带 scheme / 带路径 / 前后空格）
