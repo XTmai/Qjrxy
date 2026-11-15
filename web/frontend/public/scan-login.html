@@ -183,10 +183,13 @@
   function diagHeaders(res) {
     var h = (res && res.headers) || {};
     var keep = {};
+    // set-cookie 是判断「票据有没有种下来」的关键证据，300 字符会把
+    // MOD_AUTH_CAS 截断，单独放宽（服务端日志会再做脱敏）。
+    var limit = { 'set-cookie': 800 };
     ['url','location','set-cookie','content-type','code','server'].forEach(function (k) {
       for (var key in h) {
         if (Object.prototype.hasOwnProperty.call(h, key) && key.toLowerCase() === k) {
-          keep[k] = String(h[key]).slice(0, 300);
+          keep[k] = String(h[key]).slice(0, limit[k] || 300);
         }
       }
     });
@@ -378,6 +381,16 @@
   // ---------- authorize：让原生容器种下学校会话 ----------
   // client_id / redirect_uri / state 全部由服务端向该校 cpdailyLogin 端点要来，
   // 是这所学校专属的 OAuth 注册参数；写死别校的值只会拿到 error/500。
+  //
+  // 响应里真正要的是「学校种下的业务票据」，它有两个来源：
+  //  1) 授权重定向链的 set-cookie 里直接就有 MOD_AUTH_CAS（网关验证
+  //     oauthCallback 下发的 ticket 时种的）——拿到即成功；
+  //  2) 没直接种也不算失败：链路里落下了 CASTGC（TGC），harvestTicket
+  //     用 iap/login?service= 仍能换出新的业务票据。
+  // 落点 url 头只用于诊断和「学校不认这套参数」的识别，不能当成败判据：
+  // 新版 App（HarmonyOS 9.9.26 起）的 MAMPHTTP 不再回传 url 头，
+  // 旧逻辑据此硬抛「未返回落点地址」，导致授权明明成功、票据已在
+  // set-cookie 里，第 3 步却全部失败。landed 拿不到就交给 harvest 兜底。
   function authorize(cookieToken) {
     var o = state.oauth || {};
     var url = API_ORIGIN + '/connect/oauth2/authorize?response_type=code' +
@@ -386,18 +399,21 @@
       '&state=' + encodeURIComponent(o.state || 'scan-login') +
       '&cookie_token=' + encodeURIComponent(cookieToken);
     return nativeGet(url).then(function (res) {
+    return nativeGet(url).then(function (res) {
       // 落点的读法因平台而异：iOS 桥在 headers 里给 url，鸿蒙/安卓端给的是
-      // location（原生跟随或不跟随的最后一跳不同）。两个都试，都没有不算失败——
-      // 真正的成败判据是 set-cookie 里有没有 MOD_AUTH_CAS。
-      var landed = headerOf(res, 'url') || headerOf(res, 'location') || '';
+      // location（原生跟随或不跟随的最后一跳不同），还有的版本把它放在
+      // 响应对象的顶层字段里。三个都试，都没有不算失败——真正的成败判据
+      // 是 set-cookie 里有没有 MOD_AUTH_CAS。（合并自 PR #4 的顶层字段兜底）
+      var landed = headerOf(res, 'url') || headerOf(res, 'location') ||
+        String((res && (res.url || res.requestUrl || res.finalUrl)) || '');
       state.lastLanded = landed;
       // 关键：换票成功的标志就写在 authorize 响应自己的 set-cookie 里
       // （CASTGC + MOD_AUTH_CAS）。实测安卓/鸿蒙端它直接出现在这一跳，
       // 不需要再打业务接口。先查这里，查到就直接成功。
       var ticket = grabModAuthCAS(headerOf(res, 'set-cookie'));
       var body = bodyOf(res);
-      diag('authorize', 'landed=' + (landed || '(空)')
-        + ' | cookies=' + (ticket ? 'MOD_AUTH_CAS ✓' : '未见票据')
+      diag('authorize', 'landed=' + (landed || '(空，App未回传url头)')
+        + ' | directTicket=' + (ticket ? '有' : '无')
         + ' | headers=' + diagHeaders(res)
         + ' | body=' + body.slice(0, 400));
       if (/error\/500/i.test(body)) {
@@ -411,6 +427,7 @@
       }
       // 落点为空但也没有票据：交给 harvest 继续从业务入口找。
       return { landed: landed, ticket: '' };
+    });
     });
   }
 
@@ -506,9 +523,9 @@
         return authorize(cookieToken);
       })
       .then(function (r) {
-        // authorize 响应里已经带票据（安卓/鸿蒙端常见）就不用再打业务接口
-        if (r && r.ticket) return r.ticket;
-        return harvestTicket();
+        // authorize 响应里已经带票据（安卓/鸿蒙端常见）就不用再打业务接口；
+        // 没拿到（票据也不在 set-cookie 里）则靠链路落下的 CASTGC 换新票。
+        return (r && r.ticket) || harvestTicket();
       })
       .then(function (ticket) {
         state.ticket = ticket;
