@@ -65,7 +65,7 @@ func (s *Server) handleScanLoginInfo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, badRequest("缺少票据"))
 		return
 	}
-	school, username, alias, host, err := s.svc.ScanLoginTicketTarget(r.Context(), ticket)
+	school, username, alias, host, storedAppUserID, err := s.svc.ScanLoginTicketTarget(r.Context(), ticket)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -80,13 +80,14 @@ func (s *Server) handleScanLoginInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, map[string]any{
-		"schoolName":  school,
-		"username":    username,
-		"alias":       alias,
-		"host":        host,
-		"clientId":    oauth.ClientID,
-		"redirectUri": oauth.RedirectURI,
-		"state":       oauth.State,
+		"schoolName":     school,
+		"username":       username,
+		"alias":          alias,
+		"host":           host,
+		"clientId":       oauth.ClientID,
+		"redirectUri":    oauth.RedirectURI,
+		"state":          oauth.State,
+		"storedAppUserId": storedAppUserID,
 	})
 }
 

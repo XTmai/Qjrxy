@@ -114,34 +114,34 @@ func (s *Service) CreateScanLoginTicket(ctx context.Context, userID, accountID i
 // host 缺失时顺带自愈：老账号可能是在 host 解析逻辑修好之前建的，
 // 库里 host 为空但学校信息完整——这里按 tenantId 重新解析并落库，
 // 否则手机页只能报「还没有学校域名」，用户还得手动去补。
-func (s *Service) ScanLoginTicketTarget(ctx context.Context, ticket string) (schoolName, username, alias, host string, err error) {
+func (s *Service) ScanLoginTicketTarget(ctx context.Context, ticket string) (schoolName, username, alias, host, storedAppUserID string, err error) {
 	scanLoginMu.Lock()
 	t, ok := scanLoginTickets[ticket]
 	scanLoginMu.Unlock()
 	if !ok {
-		return "", "", "", "", errors.New("扫码票据无效，请在电脑端重新生成二维码")
+		return "", "", "", "", "", errors.New("扫码票据无效，请在电脑端重新生成二维码")
 	}
 	if time.Now().After(t.ExpiresAt) {
 		scanLoginMu.Lock()
 		delete(scanLoginTickets, ticket)
 		scanLoginMu.Unlock()
-		return "", "", "", "", errors.New("二维码已过期，请在电脑端重新生成")
+		return "", "", "", "", "", errors.New("二维码已过期，请在电脑端重新生成")
 	}
 	account, err := s.db.AccountByID(ctx, t.UserID, t.AccountID)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", "", "", err
 	}
 
 	host = cpdaily.NormalizeHost(account.Host)
 	if host == "" {
 		tenant, terr := s.resolveTenantByIDCached(ctx, account)
 		if terr != nil {
-			return account.SchoolName, account.Username, account.Alias, "",
+			return account.SchoolName, account.Username, account.Alias, "", "",
 				fmt.Errorf("这条账号还没有学校域名，自动解析也失败了（%v）。请检查学校名称是否与今日校园一致", terr)
 		}
 		host = cpdaily.NormalizeHost(tenant.Host)
 		if host == "" {
-			return account.SchoolName, account.Username, account.Alias, "",
+			return account.SchoolName, account.Username, account.Alias, "", "",
 				errors.New("这条账号还没有学校域名，且该学校未提供门户地址；请手动填写学校域名后再试")
 		}
 		// 解析成功就写回，避免下次再解析一次。
@@ -150,10 +150,10 @@ func (s *Service) ScanLoginTicketTarget(ctx context.Context, ticket string) (sch
 			account.IDSURL = tenant.IDSURL
 		}
 		if err := s.db.UpdateAccount(ctx, account); err != nil {
-			return "", "", "", "", err
+			return "", "", "", "", "", err
 		}
 	}
-	return account.SchoolName, account.Username, account.Alias, host, nil
+	return account.SchoolName, account.Username, account.Alias, host, strings.TrimSpace(account.AppUserID), nil
 }
 
 // resolveTenantByIDCached 按 tenantId 解析学校入口，带进程内缓存。

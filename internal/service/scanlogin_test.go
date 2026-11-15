@@ -38,7 +38,7 @@ func TestScanLoginTicketLifecycle(t *testing.T) {
 	}
 
 	// 手机页要能读到目标账号信息，用于二次确认
-	school, username, _, _, err := svc.ScanLoginTicketTarget(ctx, ticket)
+	school, username, _, _, _, err := svc.ScanLoginTicketTarget(ctx, ticket)
 	if err != nil {
 		t.Fatalf("读取目标账号失败：%v", err)
 	}
@@ -108,7 +108,7 @@ func TestScanLoginInvalidTicket(t *testing.T) {
 	if _, _, err := svc.PollScanLogin("no-such-ticket"); err == nil {
 		t.Error("无效票据应报错")
 	}
-	if _, _, _, _, err := svc.ScanLoginTicketTarget(context.Background(), "no-such-ticket"); err == nil {
+	if _, _, _, _, _, err := svc.ScanLoginTicketTarget(context.Background(), "no-such-ticket"); err == nil {
 		t.Error("无效票据读取目标应报错")
 	}
 	if err := svc.SubmitScanLogin("no-such-ticket", ScanLoginResult{Ticket: "x"}); err == nil {
@@ -189,7 +189,7 @@ func TestScanLoginTargetReturnsHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, host, err := svc.ScanLoginTicketTarget(context.Background(), ticket)
+	_, _, _, host, _, err := svc.ScanLoginTicketTarget(context.Background(), ticket)
 	if err != nil {
 		t.Fatalf("读取目标失败：%v", err)
 	}

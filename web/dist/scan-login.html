@@ -386,22 +386,31 @@
       '&state=' + encodeURIComponent(o.state || 'scan-login') +
       '&cookie_token=' + encodeURIComponent(cookieToken);
     return nativeGet(url).then(function (res) {
-      var landed = headerOf(res, 'url') || '';
-      // 记下最后落点：换票失败时这是判断「学校不认这套参数」还是
-      // 「认了但没给票」的唯一线索，不带出来的话下次只能盲猜。
+      // 落点的读法因平台而异：iOS 桥在 headers 里给 url，鸿蒙/安卓端给的是
+      // location（原生跟随或不跟随的最后一跳不同）。两个都试，都没有不算失败——
+      // 真正的成败判据是 set-cookie 里有没有 MOD_AUTH_CAS。
+      var landed = headerOf(res, 'url') || headerOf(res, 'location') || '';
       state.lastLanded = landed;
+      // 关键：换票成功的标志就写在 authorize 响应自己的 set-cookie 里
+      // （CASTGC + MOD_AUTH_CAS）。实测安卓/鸿蒙端它直接出现在这一跳，
+      // 不需要再打业务接口。先查这里，查到就直接成功。
+      var ticket = grabModAuthCAS(headerOf(res, 'set-cookie'));
+      var body = bodyOf(res);
+      diag('authorize', 'landed=' + (landed || '(空)')
+        + ' | cookies=' + (ticket ? 'MOD_AUTH_CAS ✓' : '未见票据')
+        + ' | headers=' + diagHeaders(res)
+        + ' | body=' + body.slice(0, 400));
+      if (/error\/500/i.test(body)) {
+        throw new Error('授权被拒绝（error/500）。最常见原因：这台手机上登录的今日校园账号'
+          + '不是「' + (state.target && state.target.schoolName || '目标学校') + '」的学生。'
+          + '请确认手机登录的是本条记录本人的账号后再试');
+      }
+      if (ticket) return { landed: landed, ticket: ticket };
       if (/\/connect\/pc\/qrcode\//i.test(landed)) {
         throw new Error('该校未接受扫码授权（可能不支持扫码登录）');
       }
-      // 记录完整响应：换票是否真的发生、学校回的是登录页还是授权页，
-      // 全在这条 head/body 里。失败时这是唯一能看到的证据。
-      diag('authorize', 'landed=' + (landed || '(空)')
-        + ' | headers=' + diagHeaders(res)
-        + ' | body=' + bodyOf(res).slice(0, 400));
-      if (!/^https?:/i.test(landed)) {
-        throw new Error('授权跳转异常（未返回落点地址）');
-      }
-      return landed;
+      // 落点为空但也没有票据：交给 harvest 继续从业务入口找。
+      return { landed: landed, ticket: '' };
     });
   }
 
@@ -485,12 +494,20 @@
       })
       .then(function (ct) {
         cookieToken = ct;
+        // 身份前置校验：库里已绑定过指纹且与本次不同，说明这台手机登录的
+        // 不是同一个人——继续下去必然失败，直接用人话说明。
+        if (state.storedAppUserId && state.appUserId && state.storedAppUserId !== state.appUserId) {
+          throw new Error('这台手机登录的今日校园账号，和这条记录上次绑定的是不同的人。'
+            + '请用本人手机重新扫码');
+        }
         setStep(2, 'done', '已取得（账号指纹 ' + (state.appUserId ? state.appUserId.slice(0, 8) + '…' : '未知') + '）');
         currentStep = 3;
         setStep(3, 'running', '正在换票…');
         return authorize(cookieToken);
       })
-      .then(function () {
+      .then(function (r) {
+        // authorize 响应里已经带票据（安卓/鸿蒙端常见）就不用再打业务接口
+        if (r && r.ticket) return r.ticket;
         return harvestTicket();
       })
       .then(function (ticket) {
@@ -566,6 +583,7 @@
         state.target = d;
         state.host = (d.host || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
         state.oauth = { clientId: d.clientId || '', redirectUri: d.redirectUri || '', state: d.state || '' };
+        state.storedAppUserId = d.storedAppUserId || '';
         $('targetSchool').textContent = d.schoolName || '—';
         $('targetUser').textContent = d.username || '—';
         if (d.alias) $('targetAlias').textContent = d.alias;
