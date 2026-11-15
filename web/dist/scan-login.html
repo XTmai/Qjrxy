@@ -405,31 +405,56 @@
     });
   }
 
-  // ---------- 打学校接口逼出 MOD_AUTH_CAS ----------
+  // ---------- 换出 MOD_AUTH_CAS ----------
+  // 生产端每日续期用的是 IAP 网关本身的换票入口（/iap/login?service=门户登录），
+  // 它不依赖任何业务应用是否部署；业务接口则依赖该校装没装对应应用。
+  // 所以按「最通用 → 最具体」的顺序逐个尝试，第一个吐出票据的即成功。
   function harvestTicket() {
-    var url = 'https://' + state.host +
-      '/wec-counselor-attendance-apps/student/attendance/getStuAttendacesInOneDay';
-    return nativeGet(url).then(function (res) {
-      var setCookie = headerOf(res, 'set-cookie') || headerOf(res, 'Set-Cookie');
-      var ticket = grabModAuthCAS(setCookie);
-      if (ticket) return ticket;
+    var host = state.host;
+    var attempts = [
+      { label: 'iap换票入口',
+        url: 'https://' + host + '/iap/login?service=' +
+             encodeURIComponent('https://' + host + '/portal/login') },
+      { label: '查寝接口',
+        url: 'https://' + host + '/wec-counselor-attendance-apps/student/attendance/getStuAttendacesInOneDay' },
+      { label: '签到接口',
+        url: 'https://' + host + '/wec-counselor-sign-apps/stu/sign/getStuSignInfosInOneDay' },
+      { label: '收集接口',
+        url: 'https://' + host + '/wec-counselor-collector-apps/stu/collector/queryCollectorProcessingList' },
+      { label: '门户页',
+        url: 'https://' + host + '/portal/index.html' },
+    ];
 
-      // 没票：把「授权落点 + 学校接口返回了什么」一起报出来。
-      // 只笼统说「学校未下发票据」时，分不清是该校不支持扫码登录，
-      // 还是 authorize 已被接受但会话没落到学校域。
-      var landed = state.lastLanded || '(未知)';
-      var landedHost = '';
-      try { landedHost = new URL(landed).host; } catch (e) {}
-      var hint = landedHost && landedHost !== state.host
-        ? '授权落到了 ' + landedHost + '（不是学校域 ' + state.host + '）'
-        : '授权落在学校域但没有下发业务票据，该校可能不支持扫码登录';
-      // 把学校接口原样返回的东西一并回传：这里能看出它到底返回了
-      // 登录页 HTML、还是 JSON 错误、还是别的域的重定向。
-      diag('harvest', 'school接口 headers=' + diagHeaders(res)
-        + ' | body=' + bodyOf(res).slice(0, 400)
-        + ' | （上一步 authorize 落点：' + landed + '）');
-      throw new Error('学校未下发登录票据：' + hint);
-    });
+    var i = 0;
+    function tryOne() {
+      if (i >= attempts.length) {
+        var landed = state.lastLanded || '(未知)';
+        var landedHost = '';
+        try { landedHost = new URL(landed).host; } catch (e) {}
+        var hint = landedHost && landedHost !== state.host
+          ? '授权落到了 ' + landedHost + '（不是学校域 ' + state.host + '）'
+          : '所有换票入口都没有下发业务票据';
+        throw new Error('学校未下发登录票据：' + hint
+          + '（共尝试 ' + attempts.length + ' 个入口，详见诊断）');
+      }
+      var a = attempts[i++];
+      return nativeGet(a.url).then(function (res) {
+        var setCookie = headerOf(res, 'set-cookie') || headerOf(res, 'Set-Cookie');
+        var ticket = grabModAuthCAS(setCookie);
+        var body = bodyOf(res);
+        // Tomcat 错误页的标题在 400 字之后，专门把状态行抠出来
+        var tomcat = /HTTP Status (\d+)[^<]*/.exec(body);
+        diag('harvest', a.label + ' | ' + diagHeaders(res)
+          + (tomcat ? ' | Tomcat状态: HTTP ' + tomcat[1] : '')
+          + ' | body=' + body.slice(0, 260));
+        if (ticket) return ticket;
+        return tryOne();
+      }).catch(function (e) {
+        diag('harvest', a.label + ' | 异常: ' + ((e && e.message) || String(e)));
+        return tryOne();
+      });
+    }
+    return tryOne();
   }
 
   // ---------- 主流程 ----------
