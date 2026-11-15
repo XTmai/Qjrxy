@@ -71,6 +71,8 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	// 三个端点都免登录——票据本身即授权，与 /api/device/submit 同一个模型。
 	mux.HandleFunc("GET /api/login-scan/info", s.handleScanLoginInfo)
 	mux.HandleFunc("POST /api/login-scan/submit", s.handleScanLoginSubmit)
+	// 扫码页回传换票过程的诊断（原生桥请求不经过服务端，只能由页面自报）。
+	mux.HandleFunc("POST /api/login-scan/diag", s.handleScanLoginDiag)
 
 	// ---- 账号 ----
 	mux.HandleFunc("GET /api/accounts", s.withUser(s.handleListAccounts))

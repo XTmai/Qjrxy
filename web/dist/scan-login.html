@@ -150,6 +150,32 @@
     busy: false
   };
 
+  // ---------- 诊断上报 ----------
+  // 原生桥请求不经过服务端，失败时服务端什么都看不到；把每一步的落点
+  // 与响应头回传，才可能定位是「参数不被接受」还是「会话没落下来」。
+  var diagLines = [];
+  function diag(stage, msg) {
+    diagLines.push(msg);
+    try {
+      fetch('/api/login-scan/diag', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage: stage, text: msg })
+      }).catch(function () {});
+    } catch (e) {}
+  }
+  function diagHeaders(res) {
+    var h = (res && res.headers) || {};
+    var keep = {};
+    ['url','location','set-cookie','content-type','code','server'].forEach(function (k) {
+      for (var key in h) {
+        if (Object.prototype.hasOwnProperty.call(h, key) && key.toLowerCase() === k) {
+          keep[k] = String(h[key]).slice(0, 300);
+        }
+      }
+    });
+    return JSON.stringify(keep);
+  }
+
   // ---------- 展示工具 ----------
   function setStep(n, phase, note) {
     var el = $('step' + n);
@@ -206,7 +232,10 @@
           deviceModel: c.model || c.deviceModel || '',
           systemVersion: c.version || c.systemVersion || '',
           buildId: c.buildId || c.buildID || '',
-          systemName: c.platform || c.systemName || '',
+          // 插件返回的是 "iOS" / "Android" 这种首字母大写的值，
+          // 直接拿去和后端约定的 "ios" 做 === 比较会落到 Android 分支，
+          // 于是在 iPhone 上显示成「iPhone17,1 · Android」。这里统一小写。
+          systemName: String(c.platform || c.systemName || '').toLowerCase(),
           wisDeviceId: c.wisDeviceId || c.wisDeviceID || ''
         };
       }
@@ -348,8 +377,10 @@
         throw new Error('该校未接受扫码授权（可能不支持扫码登录）');
       }
       if (!/^https?:/i.test(landed)) {
+        diag('authorize', 'bad landed=' + landed + ' headers=' + diagHeaders(res));
         throw new Error('授权跳转异常（未返回落点地址）');
       }
+      diag('authorize', 'ok landed=' + landed);
       return landed;
     });
   }
@@ -372,6 +403,11 @@
       var hint = landedHost && landedHost !== state.host
         ? '授权落到了 ' + landedHost + '（不是学校域 ' + state.host + '）'
         : '授权落在学校域但没有下发业务票据，该校可能不支持扫码登录';
+      // 把学校接口原样返回的东西一并回传：这里能看出它到底返回了
+      // 登录页 HTML、还是 JSON 错误、还是别的域的重定向。
+      diag('harvest', 'authorize landed=' + landed
+        + ' | schoolRespHeaders=' + diagHeaders(res)
+        + ' | schoolRespBody=' + bodyOf(res).slice(0, 300));
       throw new Error('学校未下发登录票据：' + hint);
     });
   }
@@ -425,6 +461,9 @@
       })
       .catch(function (e) {
         var msg = (e && e.message) || String(e);
+        diag('flow', 'step=' + currentStep + ' err=' + msg
+          + ' device=' + JSON.stringify(state.device || {})
+          + ' oauth=' + JSON.stringify(state.oauth || {}));
         setStep(currentStep, 'fail', msg);
         banner('fail', msg);
         $('retryBtn').classList.remove('hidden');

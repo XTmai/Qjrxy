@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/base64"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -179,4 +181,69 @@ func (s *Server) handleScanLoginPoll(w http.ResponseWriter, r *http.Request) {
 		"collected": true,
 		"account":   toAccountView(account),
 	})
+}
+
+// handleScanLoginDiag 接收扫码页回传的诊断信息。
+//
+// 手机页的原生桥请求（MAMPHTTP）不经过我们的服务端，diag 抓不到；
+// 换票失败时服务端只看到「没有票据」，完全不知道 App 里发生了什么。
+// 这个端点让页面把每一步的落点地址、响应头、错误码回传，写进服务端日志。
+//
+// 只写诊断日志，不落库、不参与业务判定；票据类字段一律脱敏。
+func (s *Server) handleScanLoginDiag(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Stage string `json:"stage"`
+		Text  string `json:"text"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	// 防日志被灌爆
+	if len(req.Text) > 4000 {
+		req.Text = req.Text[:4000]
+	}
+	log.Printf("[scan-login diag] stage=%s %s", req.Stage, sanitizeScanDiag(req.Text))
+	writeData(w, http.StatusOK, map[string]bool{"received": true})
+}
+
+// sanitizeScanDiag 把可能出现的票据、cookie_token 值打码。
+//
+// MOD_AUTH_CAS / cookieToken 都是等价于登录态的东西，进日志就等于泄露：
+// 日志会被下载、贴到工单里、长期留存。只保留长度与前后几位用于比对。
+func sanitizeScanDiag(s string) string {
+	repl := func(s, key string) string {
+		idx := 0
+		for {
+			i := strings.Index(s[idx:], key)
+			if i < 0 {
+				return s
+			}
+			start := idx + i + len(key)
+			end := start
+			for end < len(s) && s[end] != '"' && s[end] != ';' && s[end] != '&' &&
+				s[end] != ' ' && s[end] != '}' {
+				end++
+			}
+			if end-start <= 8 {
+				idx = end
+				continue
+			}
+			v := s[start:end]
+			s = s[:start] + maskSecret(v) + s[end:]
+			idx = start + len(maskSecret(v))
+		}
+	}
+	for _, k := range []string{"MOD_AUTH_CAS=", "cookieToken\":\"", "cookieToken="} {
+		s = repl(s, k)
+	}
+	return s
+}
+
+// maskSecret 只露头尾，中间打码。
+func maskSecret(v string) string {
+	if len(v) <= 12 {
+		return "***"
+	}
+	return v[:6] + "…" + v[len(v)-4:] + fmt.Sprintf("(len=%d)", len(v))
 }
