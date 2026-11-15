@@ -338,12 +338,15 @@
       '&cookie_token=' + encodeURIComponent(cookieToken);
     return nativeGet(url).then(function (res) {
       var landed = headerOf(res, 'url') || '';
+      // 记下最后落点：换票失败时这是判断「学校不认这个 client_id」还是
+      // 「认了但没给票」的唯一线索，不带出来的话下次只能盲猜。
+      state.lastLanded = landed;
       // 落到扫码页说明这个 client_id 不被该校接受，换下一个候选。
       if (/\/connect\/pc\/qrcode\//i.test(landed)) {
-        throw new Error('client_id 不被学校接受');
+        throw new Error('client_id ' + clientId + ' 未被学校接受');
       }
       if (!/^https?:/i.test(landed)) {
-        throw new Error('授权跳转异常');
+        throw new Error('授权跳转异常（未返回落点地址）');
       }
       return landed;
     });
@@ -356,8 +359,18 @@
     return nativeGet(url).then(function (res) {
       var setCookie = headerOf(res, 'set-cookie') || headerOf(res, 'Set-Cookie');
       var ticket = grabModAuthCAS(setCookie);
-      if (!ticket) throw new Error('学校未下发登录票据');
-      return ticket;
+      if (ticket) return ticket;
+
+      // 没票：把「授权落点 + 学校接口返回了什么」一起报出来。
+      // 只笼统说「学校未下发票据」时，分不清是该校不支持扫码登录，
+      // 还是 authorize 已被接受但会话没落到学校域。
+      var landed = state.lastLanded || '(未知)';
+      var landedHost = '';
+      try { landedHost = new URL(landed).host; } catch (e) {}
+      var hint = landedHost && landedHost !== state.host
+        ? '授权落到了 ' + landedHost + '（不是学校域 ' + state.host + '）'
+        : '授权落在学校域但没有下发业务票据，该校可能不支持扫码登录';
+      throw new Error('学校未下发登录票据：' + hint);
     });
   }
 
@@ -374,15 +387,23 @@
 
     var cookieToken = '';
 
+    // 用变量显式记录「当前走到第几步」，不要靠读 className 反推：
+    // 第 3 步失败时 step3 还是 running（不是 done）、step2 已是 done（不是 running），
+    // 两个判断都为假就会把错误错误地标到第 1 步——用户看到「读取设备信息失败」
+    // 而实际上设备早读到了，真正失败的是换票。
+    var currentStep = 1;
+
     setStep(1, 'running', '正在读取…');
     loadDevice()
       .then(function () {
+        currentStep = 2;
         setStep(2, 'running', '正在换取…');
         return fetchCookieToken();
       })
       .then(function (ct) {
         cookieToken = ct;
         setStep(2, 'done', '已取得（账号指纹 ' + (state.appUserId ? state.appUserId.slice(0, 8) + '…' : '未知') + '）');
+        currentStep = 3;
         setStep(3, 'running', '正在换票…');
 
         // client_id 逐个降级：不同学校对接的第三方应用不同。
@@ -408,12 +429,7 @@
       })
       .catch(function (e) {
         var msg = (e && e.message) || String(e);
-        // 找出第一个失败的步骤，把错误落到它上面
-        var s3 = $('step3').className.indexOf('is-done') >= 0;
-        var s2 = $('step2').className.indexOf('is-running') >= 0;
-        if (s2) setStep(2, 'fail', msg);
-        else if (s3) setStep(3, 'fail', msg);
-        else setStep(1, 'fail', msg);
+        setStep(currentStep, 'fail', msg);
         banner('fail', msg);
         $('retryBtn').classList.remove('hidden');
       })
