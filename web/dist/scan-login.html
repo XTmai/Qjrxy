@@ -123,6 +123,13 @@
   <button id="confirmBtn" class="hidden" disabled>确认绑定</button>
   <button id="retryBtn" class="secondary hidden">重新尝试</button>
 
+  <!-- 诊断详情：手机页的报错只存在于这台设备上（原生桥请求不经过服务端），
+       所以失败时必须把原始返回摊开在屏幕上，靠截图就能定位问题。 -->
+  <div id="diagCard" class="card hidden">
+    <div class="label">诊断详情（截图这一块即可）</div>
+    <pre id="diagOut" class="fx" style="white-space:pre-wrap;word-break:break-all;font-size:11px;line-height:1.5;margin:0;color:#334155"></pre>
+  </div>
+
   <p class="tip">
     <b>请先确认上面的学校与学号是你本人。</b><br>
     凭证来自这台手机上当前登录的今日校园账号。若手机登录的不是本人，绑定后会用别人的身份签到。
@@ -155,7 +162,17 @@
   // 与响应头回传，才可能定位是「参数不被接受」还是「会话没落下来」。
   var diagLines = [];
   function diag(stage, msg) {
-    diagLines.push(msg);
+    var line = '[' + stage + '] ' + msg;
+    diagLines.push(line);
+    // 先显示在屏幕上：这是唯一不依赖服务器版本的通路。
+    try {
+      var card = document.getElementById('diagCard');
+      var out = document.getElementById('diagOut');
+      if (card && out) {
+        card.classList.remove('hidden');
+        out.textContent = diagLines.join("\n\n");
+      }
+    } catch (e) {}
     try {
       fetch('/api/login-scan/diag', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -376,11 +393,14 @@
       if (/\/connect\/pc\/qrcode\//i.test(landed)) {
         throw new Error('该校未接受扫码授权（可能不支持扫码登录）');
       }
+      // 记录完整响应：换票是否真的发生、学校回的是登录页还是授权页，
+      // 全在这条 head/body 里。失败时这是唯一能看到的证据。
+      diag('authorize', 'landed=' + (landed || '(空)')
+        + ' | headers=' + diagHeaders(res)
+        + ' | body=' + bodyOf(res).slice(0, 400));
       if (!/^https?:/i.test(landed)) {
-        diag('authorize', 'bad landed=' + landed + ' headers=' + diagHeaders(res));
         throw new Error('授权跳转异常（未返回落点地址）');
       }
-      diag('authorize', 'ok landed=' + landed);
       return landed;
     });
   }
@@ -405,9 +425,9 @@
         : '授权落在学校域但没有下发业务票据，该校可能不支持扫码登录';
       // 把学校接口原样返回的东西一并回传：这里能看出它到底返回了
       // 登录页 HTML、还是 JSON 错误、还是别的域的重定向。
-      diag('harvest', 'authorize landed=' + landed
-        + ' | schoolRespHeaders=' + diagHeaders(res)
-        + ' | schoolRespBody=' + bodyOf(res).slice(0, 300));
+      diag('harvest', 'school接口 headers=' + diagHeaders(res)
+        + ' | body=' + bodyOf(res).slice(0, 400)
+        + ' | （上一步 authorize 落点：' + landed + '）');
       throw new Error('学校未下发登录票据：' + hint);
     });
   }
