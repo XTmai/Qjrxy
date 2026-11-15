@@ -10,14 +10,6 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-// scanLoginClientIDs 是 authorize 允许的 client_id 候选。
-//
-// 16896453639520707 是 2026-10 实抓 HAR 里学校门户换票用的那个（长江师范实证）；
-// 15996138616888888 是 PC 登录链路用的。不同学校对接的第三方应用不同，
-// 学校认定哪一个是合法的只有试过才知道——所以按顺序降级，任一跳到学校域即算成功。
-// 全部失败时手机页提示「该校暂不支持扫码登录」，而不是静默卡住。
-var scanLoginClientIDs = []string{"16896453639520707", "15996138616888888"}
-
 // handleScanLoginTicket 为账号生成「扫码获取登录态」的票据与二维码。
 func (s *Server) handleScanLoginTicket(w http.ResponseWriter, r *http.Request) {
 	user, err := requireUser(r.Context())
@@ -53,7 +45,6 @@ func (s *Server) handleScanLoginTicket(w http.ResponseWriter, r *http.Request) {
 		"url":       scanURL,
 		"expiresAt": expires,
 		"qrcode":    "data:image/png;base64," + base64.StdEncoding.EncodeToString(png),
-		"clientIds": scanLoginClientIDs,
 		"target": map[string]string{
 			"schoolName": account.SchoolName,
 			"username":   account.Username,
@@ -77,12 +68,23 @@ func (s *Server) handleScanLoginInfo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// client_id 每所学校一份，必须向该校 cpdailyLogin 端点要，不能写死。
+	// 拿不到就明确告知「该校不支持扫码登录」，让手机页立刻停下，
+	// 而不是拿别校的 client_id 去撞 500。
+	oauth, err := s.svc.ResolveScanLoginOAuth(r.Context(), host)
+	if err != nil {
+		writeError(w, &APIError{Status: http.StatusBadGateway, Code: "oauth_unavailable",
+			Message: "该校暂不支持扫码登录：" + err.Error()})
+		return
+	}
 	writeData(w, http.StatusOK, map[string]any{
-		"schoolName": school,
-		"username":   username,
-		"alias":      alias,
-		"host":       host,
-		"clientIds":  scanLoginClientIDs,
+		"schoolName":  school,
+		"username":    username,
+		"alias":       alias,
+		"host":        host,
+		"clientId":    oauth.ClientID,
+		"redirectUri": oauth.RedirectURI,
+		"state":       oauth.State,
 	})
 }
 

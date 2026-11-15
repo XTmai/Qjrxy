@@ -142,7 +142,7 @@
 
   var state = {
     target: null,
-    clientIds: [],
+    oauth: null,
     host: '',
     device: null,
     ticket: '',
@@ -330,20 +330,22 @@
   }
 
   // ---------- authorize：让原生容器种下学校会话 ----------
-  function authorize(cookieToken, clientId) {
+  // client_id / redirect_uri / state 全部由服务端向该校 cpdailyLogin 端点要来，
+  // 是这所学校专属的 OAuth 注册参数；写死别校的值只会拿到 error/500。
+  function authorize(cookieToken) {
+    var o = state.oauth || {};
     var url = API_ORIGIN + '/connect/oauth2/authorize?response_type=code' +
-      '&client_id=' + encodeURIComponent(clientId) +
-      '&redirect_uri=' + encodeURIComponent('https://' + state.host + '/iap/oauthCallback') +
-      '&state=scan-login' +
+      '&client_id=' + encodeURIComponent(o.clientId) +
+      '&redirect_uri=' + encodeURIComponent(o.redirectUri) +
+      '&state=' + encodeURIComponent(o.state || 'scan-login') +
       '&cookie_token=' + encodeURIComponent(cookieToken);
     return nativeGet(url).then(function (res) {
       var landed = headerOf(res, 'url') || '';
-      // 记下最后落点：换票失败时这是判断「学校不认这个 client_id」还是
+      // 记下最后落点：换票失败时这是判断「学校不认这套参数」还是
       // 「认了但没给票」的唯一线索，不带出来的话下次只能盲猜。
       state.lastLanded = landed;
-      // 落到扫码页说明这个 client_id 不被该校接受，换下一个候选。
       if (/\/connect\/pc\/qrcode\//i.test(landed)) {
-        throw new Error('client_id ' + clientId + ' 未被学校接受');
+        throw new Error('该校未接受扫码授权（可能不支持扫码登录）');
       }
       if (!/^https?:/i.test(landed)) {
         throw new Error('授权跳转异常（未返回落点地址）');
@@ -405,13 +407,7 @@
         setStep(2, 'done', '已取得（账号指纹 ' + (state.appUserId ? state.appUserId.slice(0, 8) + '…' : '未知') + '）');
         currentStep = 3;
         setStep(3, 'running', '正在换票…');
-
-        // client_id 逐个降级：不同学校对接的第三方应用不同。
-        var seq = Promise.reject(new Error('没有可用的 client_id'));
-        state.clientIds.forEach(function (cid) {
-          seq = seq.catch(function () { return authorize(cookieToken, cid); });
-        });
-        return seq;
+        return authorize(cookieToken);
       })
       .then(function () {
         return harvestTicket();
@@ -484,8 +480,8 @@
         }
         var d = j.data || {};
         state.target = d;
-        state.clientIds = Array.isArray(d.clientIds) ? d.clientIds : [];
         state.host = (d.host || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+        state.oauth = { clientId: d.clientId || '', redirectUri: d.redirectUri || '', state: d.state || '' };
         $('targetSchool').textContent = d.schoolName || '—';
         $('targetUser').textContent = d.username || '—';
         if (d.alias) $('targetAlias').textContent = d.alias;
@@ -495,8 +491,8 @@
           banner('fail', '这条账号还没有学校域名，且自动解析失败。请在电脑端把学校名称改成今日校园里的全称后重试');
           return;
         }
-        if (!state.clientIds.length) {
-          banner('fail', '服务端未配置换票参数');
+        if (!state.oauth || !state.oauth.clientId || !state.oauth.redirectUri) {
+          banner('fail', '该校暂不支持扫码登录（未取到授权参数）');
           return;
         }
         injectBridge();

@@ -14,6 +14,44 @@ import (
 	"qjrxy/internal/store"
 )
 
+// ResolveScanLoginOAuth 向学校自己的 /iap/cpdailyLogin 要 OAuth 参数。
+//
+// 这是扫码换票能成立的关键：authorize 的 client_id 是「每所学校一份」的
+// OAuth 应用注册号，写死任何一个值都只对那所学校有效（实测 16896453639520707
+// 只对三峡大学科技学院放行，其余 8 所全部 error/500）。
+//
+// 好消息是它不需要抓包也不在 App 里：学校门户的 cpdailyLogin 端点会自己
+// 302 到带正确 client_id 的 authorize 地址，把它解析出来即可。实测：
+//   三峡大学科技学院 16896453639520707
+//   韩山师范学院     16896435830199132
+//   上海工程技术大学 16951737968849022
+//
+// 结果按 host 缓存：同一学校反复扫码不必每次都打门户。
+func (s *Service) ResolveScanLoginOAuth(ctx context.Context, host string) (*cpdaily.ScanLoginOAuth, error) {
+	host = cpdaily.NormalizeHost(host)
+	if host == "" {
+		return nil, errors.New("缺少学校域名")
+	}
+	s.oauthMu.Lock()
+	if v, ok := s.oauthCache[host]; ok && v != nil {
+		s.oauthMu.Unlock()
+		return v, nil
+	}
+	s.oauthMu.Unlock()
+
+	oauth, err := cpdaily.FetchOAuthClientID(ctx, s.opts, host, "")
+	if err != nil {
+		return nil, err
+	}
+	s.oauthMu.Lock()
+	if s.oauthCache == nil {
+		s.oauthCache = map[string]*cpdaily.ScanLoginOAuth{}
+	}
+	s.oauthCache[host] = oauth
+	s.oauthMu.Unlock()
+	return oauth, nil
+}
+
 // ScanLoginResult 是手机扫码页换取到的登录态载荷。
 //
 // 票据由学校在 App 原生 cookie 容器里下发，服务端只负责接收与落库：

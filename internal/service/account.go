@@ -42,6 +42,11 @@ type Service struct {
 	tenantMu    sync.Mutex
 	tenantCache map[string]*cpdaily.Tenant
 
+	// 扫码登录的 OAuth 参数按 host 缓存：client_id 是每所学校一份，
+	// 要从该校 cpdailyLogin 端点问出来，没必要每次扫码都打一遍门户。
+	oauthMu    sync.Mutex
+	oauthCache map[string]*cpdaily.ScanLoginOAuth
+
 	// photoMu 串行化「容量检查 + 落盘」，避免并发上传同时通过上限检查。
 	photoMu sync.Mutex
 }
