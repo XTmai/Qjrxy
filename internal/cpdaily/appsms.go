@@ -423,26 +423,35 @@ func isOfficialOAuthGateway(host string) bool {
 //
 //   - 同站（本校所在可注册域）：放行，照旧带 CASTGC/AUTHTGC 与加密 TGC 头；
 //   - 官方 OAuth 网关：仅放行 /connect/oauth2/authorize，且 redirect_uri
-//     必须精确回指本校 /iap/oauthCallback；放行但不带任何票据——浏览器
-//     跨域跳转本来也不会把学校域 cookie 带过去；
+//     必须精确回指本校 /iap/oauthCallback；放行，但只带账号体系
+//     sessionToken（这是发给网关的会话凭证，不是学校的 CAS 票），
+//     绝不带 CASTGC/AUTHTGC/TGC 头——那是学校域的东西，跨域送出去
+//     才有泄露风险；
 //   - 其余（含伪装成 campushoy.com 前缀的第三方域名）：一律中止。
 //
 // 判定只依赖「网关域名 + redirect_uri 回指本校」，不枚举学校名单，
 // 因此对任何走同一套官方 OAuth 协议的 NOTCLOUD 学校都自动适用。
-func exchangeHopPolicy(target, originHost string) (allow bool, sendCredentials bool) {
+//
+// 为什么网关跳必须带 sessionToken（实测结论）：
+// 网关的 authorize 靠 Cookie 里的 sessionToken 认人。不带时它会认为
+// 用户未登录，302 到 /h5/authTransit/index.html——那是个纯 JS 页面，
+// 必须执行浏览器脚本、由 App 的 JSSDK 回调 setCookieByToken 才能继续，
+// 服务端 HTTP 客户端无法完成。带上 sessionToken 后 authorize 直接
+// 302 回本校 /iap/oauthCallback?code=...，换票链路才能走完。
+func exchangeHopPolicy(target, originHost string) exchangeHop {
 	u, err := url.Parse(target)
 	if err != nil || u.Hostname() == "" {
-		return false, false
+		return hopDeny
 	}
 	if sameSite(u.Hostname(), registrableDomain(originHost)) {
-		return true, true
+		return hopSameSite
 	}
 	if !isOfficialOAuthGateway(u.Hostname()) || u.Path != "/connect/oauth2/authorize" {
-		return false, false
+		return hopDeny
 	}
 	ru, err := url.Parse(u.Query().Get("redirect_uri"))
 	if err != nil {
-		return false, false
+		return hopDeny
 	}
 	// 相对 redirect_uri 按本校域名补全（部分学校这么下发）。
 	if !ru.IsAbs() {
@@ -451,9 +460,35 @@ func exchangeHopPolicy(target, originHost string) (allow bool, sendCredentials b
 	originHostname := (&url.URL{Host: originHost}).Hostname()
 	if ru.Hostname() == "" || !strings.EqualFold(ru.Hostname(), originHostname) ||
 		!strings.HasSuffix(ru.Path, "/iap/oauthCallback") {
-		return false, false
+		return hopDeny
 	}
-	return true, false
+	return hopOAuthGateway
+}
+
+// exchangeHop 是换票链路单跳的凭据策略。
+type exchangeHop int
+
+const (
+	// hopDeny 表示不可信目标，立即中止。
+	hopDeny exchangeHop = iota
+	// hopSameSite 表示本校站点：带 CAS 票据（CASTGC/AUTHTGC + TGC 头）。
+	hopSameSite
+	// hopOAuthGateway 表示官方 OAuth 网关：只带账号体系 sessionToken，
+	// 不带任何学校 CAS 票据。
+	hopOAuthGateway
+)
+
+// isAuthTransit 判断目标是否今日校园的 authTransit 中转页。
+//
+// 它是纯前端页面：只有浏览器执行 JS、经 App JSSDK 调 setCookieByToken
+// 拿到 cookie_token 后才会继续跳转。服务端走到这里说明 sessionToken
+// 失效或缺失，需要用户重新登录，而不是「跳出了学校站点」。
+func isAuthTransit(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	return isOfficialOAuthGateway(u.Hostname()) && strings.HasPrefix(u.Path, "/h5/authTransit/")
 }
 
 // exchangeClientFactory 抽出换票用的 HTTP 客户端，便于单测注入本地服务。
@@ -517,12 +552,16 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 
 	offSite := ""
 	for hop := 0; hop < 6; hop++ {
-		// 逐跳前先判断目标是否还在可信链路内：换票链路带着明文
+		// 逐跳前先判断目标是否在可信链路内：换票链路带着明文
 		// CASTGC/AUTHTGC 和加密 TGC 头，跳到第三方主机等于把 CAS 票送出去。
-		// 官方 OAuth 网关是例外，但那一跳不带任何票据；其余一律停下，
-		// 若此时已换到新票就正常返回，否则在循环外报错说明原因。
-		allow, sendCredentials := exchangeHopPolicy(target, host)
-		if !allow {
+		// 官方 OAuth 网关是例外：放行，但只带账号体系 sessionToken，
+		// 学校 CAS 票据一律不外带。其余一律停下，若此时已换到新票
+		// 就正常返回，否则在循环外报错说明原因。
+		hop := exchangeHopPolicy(target, host)
+		if hop == hopDeny {
+			if isAuthTransit(target) {
+				return errors.New("官方网关要求重新登录（账号会话已失效），请手动登录一次后再试")
+			}
 			offSite = target
 			break
 		}
@@ -531,9 +570,17 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 			return err
 		}
 		req.Header.Set("User-Agent", casUserAgent)
-		if sendCredentials {
+		switch hop {
+		case hopSameSite:
 			req.Header.Set("TGC", tgcHeader)
 			req.Header.Set("Cookie", cookieHeader())
+		case hopOAuthGateway:
+			// 网关靠 sessionToken 认人；不带就会被丢到 authTransit
+			// 这个纯 JS 页面，服务端无法继续。这是实测确认的关键一跳。
+			if st := strings.TrimSpace(client.Cookies()["sessionToken"]); st != "" {
+				req.Header.Set("Cookie", fmt.Sprintf(
+					"clientType=cpdaily_student; sessionToken=%s; standAlone=0; tenantId=%s", st, tenantID))
+			}
 		}
 		// 复用短信登录的设备头；票据头只在同站跳设置，跨域跳一律不带。
 		for k, v := range appSMSHeaders(device, tenantID) {
@@ -551,7 +598,7 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		client.absorb(resp)
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		// 中央网关下发的 cookie 不并入本校票据罐，避免带回学校域。
-		if sendCredentials {
+		if hop == hopSameSite {
 			for _, ck := range resp.Cookies() {
 				if ck.Name != "" && ck.MaxAge >= 0 {
 					jar[ck.Name] = ck.Value
@@ -565,6 +612,11 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 			return nil
 		}
 		if loc == "" {
+			// 网关返回 200 却没有 Location：它认出了 sessionToken 但判定会话
+			// 已失效，不会下发 code。这不是「跳出了学校站点」，报清楚。
+			if hop == hopOAuthGateway {
+				return errors.New("官方网关未下发授权码（账号会话已失效），请手动登录一次后再试")
+			}
 			break
 		}
 		if u, perr := url.Parse(loc); perr == nil && !u.IsAbs() {
