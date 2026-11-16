@@ -34,6 +34,7 @@ func TestKeepSchoolHostForSMS(t *testing.T) {
 		want       bool
 	}{
 		{"NOTCLOUD", "ahnu.campusphere.net", true},
+		{"NOTCLOUD", "fyvtc.campusphere.net", true},
 		{"NOTCLOUD", "", false},
 		{"CLOUD", "kjxyctgu.campusphere.net", false},
 		{"", "ahnu.campusphere.net", false},

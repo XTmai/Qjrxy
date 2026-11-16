@@ -118,6 +118,104 @@ func TestRefreshTGCBySession(t *testing.T) {
 	}
 }
 
+// TestEnsureAppLoginTGCForNotCloudSchools 覆盖首次短信登录只给 sessionToken 的学校。
+// 安徽师范大学与阜阳职业技术学院均属于 NOTCLOUD，这里使用其真实租户 ID，
+// 验证两校都会立即走 validation 补签，并使用补签后的新票据和会话。
+func TestEnsureAppLoginTGCForNotCloudSchools(t *testing.T) {
+	cases := []struct {
+		name     string
+		tenantID string
+	}{
+		{"安徽师范大学", "ahnu"},
+		{"阜阳职业技术学院", "41ad1a67-80f9-4628-873a-03cef454d41f"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if r.URL.Path != "/v6/auth/authentication/new/validation/v-9012" {
+					t.Errorf("补签路径异常：%s", r.URL.Path)
+				}
+				if got := r.Header.Get("tenantId"); got != tc.tenantID {
+					t.Errorf("tenantId 头异常：%s", got)
+				}
+				if !strings.Contains(r.Header.Get("Cookie"), "sessionToken=session-first") {
+					t.Errorf("补签未带首次登录会话：%s", r.Header.Get("Cookie"))
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"errCode":0,"data":{"tgc":"iap-1-TGT-new","sessionToken":"session-refreshed","status":"cpdailyPage","tgcStatus":"tgcValidate"}}`))
+			}))
+			defer srv.Close()
+			oldHost := appSMSHost
+			appSMSHost = srv.URL
+			defer func() { appSMSHost = oldHost }()
+
+			result := &AppLoginResult{SessionToken: "session-first", TenantID: tc.tenantID}
+			if err := EnsureAppLoginTGC(context.Background(), DeviceProfile{DeviceID: "device-x"}, tc.tenantID, result); err != nil {
+				t.Fatal(err)
+			}
+			if requests != 1 {
+				t.Fatalf("缺失 TGC 时应补签一次，实际 %d 次", requests)
+			}
+			if result.TGC != "iap-1-TGT-new" || result.SessionToken != "session-refreshed" {
+				t.Fatalf("补签结果未合并：%+v", result)
+			}
+			if result.TenantID != tc.tenantID {
+				t.Fatalf("补签不应覆盖学校租户：%s", result.TenantID)
+			}
+		})
+	}
+}
+
+func TestEnsureAppLoginTGCSkipsUnnecessaryRefresh(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errCode":0,"data":{"tgc":"should-not-be-used"}}`))
+	}))
+	defer srv.Close()
+	oldHost := appSMSHost
+	appSMSHost = srv.URL
+	defer func() { appSMSHost = oldHost }()
+
+	withTGC := &AppLoginResult{TGC: "tgc-existing", SessionToken: "session-old"}
+	if err := EnsureAppLoginTGC(context.Background(), DeviceProfile{}, "ahnu", withTGC); err != nil {
+		t.Fatal(err)
+	}
+	withoutSession := &AppLoginResult{}
+	if err := EnsureAppLoginTGC(context.Background(), DeviceProfile{}, "ahnu", withoutSession); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 0 {
+		t.Fatalf("已有 TGC 或没有 sessionToken 时不应请求，实际 %d 次", requests)
+	}
+	if withTGC.TGC != "tgc-existing" || withTGC.SessionToken != "session-old" {
+		t.Fatalf("已有凭证不应被改写：%+v", withTGC)
+	}
+}
+
+func TestEnsureAppLoginTGCStillMissing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errCode":0,"data":{"sessionToken":"session-refreshed","status":"cpdailyPage"}}`))
+	}))
+	defer srv.Close()
+	oldHost := appSMSHost
+	appSMSHost = srv.URL
+	defer func() { appSMSHost = oldHost }()
+
+	result := &AppLoginResult{SessionToken: "session-first"}
+	err := EnsureAppLoginTGC(context.Background(), DeviceProfile{}, "ahnu", result)
+	if err == nil || !strings.Contains(err.Error(), "仍未返回 CAS 票") {
+		t.Fatalf("补签后仍无 TGC 应明确报错，得到 %v", err)
+	}
+	if result.SessionToken != "session-refreshed" {
+		t.Fatalf("即使未补到 TGC，也应保留服务端轮换的新会话：%+v", result)
+	}
+}
+
 // TestFreshMODAuthCAS 校验旧票不能算换票成功，只有新值才算。
 func TestFreshMODAuthCAS(t *testing.T) {
 	if freshMODAuthCAS("old", map[string]string{"MOD_AUTH_CAS": "old"}) {
