@@ -10,7 +10,6 @@ import {
   DialogBody,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Globe, ShieldAlert, Wifi } from "lucide-react";
@@ -24,9 +23,11 @@ function onLoopback(): boolean {
 interface Props {
   accountId: number;
   onClose: (collected: boolean) => void;
+  /** 嵌在账号抽屉的子页里：只渲染内容，不套 Dialog 壳 */
+  embedded?: boolean;
 }
 
-export function DeviceScanDialog({ accountId, onClose }: Props) {
+export function DeviceScanDialog({ accountId, onClose, embedded = false }: Props) {
   const { data: sysInfo } = useInfo();
   const loopback = onLoopback();
   const lanUrls = sysInfo?.lanUrls ?? [];
@@ -83,77 +84,89 @@ export function DeviceScanDialog({ accountId, onClose }: Props) {
     };
   }, [accountId]);
 
+  const body = (
+    <div className="space-y-4 text-center">
+      {/* 局域网引导：手机必须能访问到这台电脑，二维码才能被打开 */}
+      {loopback && lanUrls.length > 0 && (
+        <div className="rounded-xl border border-warning-border bg-warning-soft p-3 text-left">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-warning-text">
+            <Wifi className="size-3.5" />
+            手机与电脑需在同一 Wi-Fi（或手机开热点给电脑）
+          </p>
+          <p className="mt-1 text-[11px] text-warning-text opacity-90">
+            当前页面是本机地址，手机扫不开。请点击下方地址改用局域网打开，再重新扫码：
+          </p>
+          <div className="mt-2 space-y-1.5">
+            {lanUrls.map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => {
+                  location.host = new URL(u).host; // 同路径切换到局域网地址
+                }}
+                className="flex w-full items-center justify-between rounded-lg bg-background/60 px-2.5 py-1.5 font-mono text-[11px] text-warning-text transition-colors hover:bg-background"
+              >
+                <span>{u}</span>
+                <Globe className="size-3 shrink-0" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {loopback && lanUrls.length === 0 && (
+        <div className="rounded-xl border border-danger-border bg-danger-soft p-3 text-left">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-danger-text">
+            <ShieldAlert className="size-3.5" />
+            服务只监听了本机（127.0.0.1），手机无法访问
+          </p>
+          <p className="mt-1 text-[11px] text-danger-text opacity-90">
+            请改用默认方式启动（监听全部网卡），或设置 QINGJIN_ADDR=:8090 后重启，再扫码。
+          </p>
+        </div>
+      )}
+      {!loopback && (
+        <p className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+          <Wifi className="size-3" />
+          手机与电脑保持同一网络即可；扫描后手机会打开本页地址提交设备信息
+        </p>
+      )}
+      {qr && (
+        <img
+          src={qr}
+          alt="设备绑定二维码"
+          className="mx-auto size-52 rounded-xl border border-border bg-white p-2"
+        />
+      )}
+      {status === "loading" && <p className="text-sm text-muted-foreground">正在生成二维码…</p>}
+      {status === "waiting" && (
+        <p className="animate-pulse text-sm text-muted-foreground">
+          打开今日校园 App → 右上角「＋」→ 扫一扫
+        </p>
+      )}
+      {status === "collected" && (
+        <p className="text-sm font-semibold text-success">已绑定：{info}</p>
+      )}
+      {status === "error" && <p className="text-sm font-medium text-danger">{error}</p>}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        必须用平时打卡的手机扫码；换手机或重装 App 后设备 ID 会变化。
+        二维码 15 分钟内有效，仅可使用一次。
+      </p>
+      <div className="flex items-center justify-center gap-2 pt-1">
+        <Button variant="ghost" onClick={() => onClose(status === "collected")}>
+          关闭
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (embedded) return body;
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose(status === "collected")}>
       <DialogContent className="max-w-sm">
         <DialogTitle>扫码绑定设备</DialogTitle>
         <DialogDescription>用你平时打卡的那台手机扫码，设备信息自动写入</DialogDescription>
-        <DialogBody className="space-y-4 text-center">
-          {/* 局域网引导：手机必须能访问到这台电脑，二维码才能被打开 */}
-          {loopback && lanUrls.length > 0 && (
-            <div className="border-warning-border bg-warning-soft rounded-lg border p-3 text-left">
-              <p className="text-warning-text flex items-center gap-1.5 text-xs font-medium">
-                <Wifi className="size-3.5" />
-                手机与电脑需在同一 Wi-Fi（或手机开热点给电脑）
-              </p>
-              <p className="text-warning-text mt-1 text-[11px] opacity-80">
-                当前页面是本机地址，手机扫不开。请点击下方地址改用局域网打开，再重新扫码：
-              </p>
-              <div className="mt-2 space-y-1.5">
-                {lanUrls.map((u) => (
-                  <button
-                    key={u}
-                    type="button"
-                    onClick={() => {
-                      location.host = new URL(u).host; // 同路径切换到局域网地址
-                    }}
-                    className="text-warning-text bg-background/60 flex w-full items-center justify-between rounded-md px-2.5 py-1.5 font-mono text-[11px] transition-colors hover:bg-background"
-                  >
-                    <span>{u}</span>
-                    <Globe className="size-3 shrink-0" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {loopback && lanUrls.length === 0 && (
-            <div className="border-danger-border bg-danger-soft rounded-lg border p-3 text-left">
-              <p className="text-danger-text flex items-center gap-1.5 text-xs font-medium">
-                <ShieldAlert className="size-3.5" />
-                服务只监听了本机（127.0.0.1），手机无法访问
-              </p>
-              <p className="text-danger-text mt-1 text-[11px] opacity-80">
-                请改用默认方式启动（监听全部网卡），或设置 QINGJIN_ADDR=:8090 后重启，再扫码。
-              </p>
-            </div>
-          )}
-          {!loopback && (
-            <p className="text-muted-foreground flex items-center justify-center gap-1.5 text-[11px]">
-              <Wifi className="size-3" />
-              手机与电脑保持同一网络即可；扫描后手机会打开本页地址提交设备信息
-            </p>
-          )}
-          {qr && <img src={qr} alt="设备绑定二维码" className="mx-auto size-52 rounded-xl border p-2" />}
-          {status === "loading" && <p className="text-muted-foreground text-sm">正在生成二维码…</p>}
-          {status === "waiting" && (
-            <p className="text-muted-foreground animate-pulse text-sm">
-              打开今日校园 App → 右上角「＋」→ 扫一扫
-            </p>
-          )}
-          {status === "collected" && (
-            <p className="text-sm font-medium text-green-600 dark:text-green-400">已绑定：{info}</p>
-          )}
-          {status === "error" && <p className="text-destructive text-sm">{error}</p>}
-          <p className="text-muted-foreground text-xs leading-relaxed">
-            必须用平时打卡的手机扫码；换手机或重装 App 后设备 ID 会变化。
-            二维码 15 分钟内有效，仅可使用一次。
-          </p>
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onClose(status === "collected")}>
-            关闭
-          </Button>
-        </DialogFooter>
+        <DialogBody>{body}</DialogBody>
       </DialogContent>
     </Dialog>
   );

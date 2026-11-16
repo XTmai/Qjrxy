@@ -10,7 +10,6 @@ import {
   DialogBody,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -21,9 +20,11 @@ import type { Account } from "@/lib/types";
 interface Props {
   account: Account;
   onClose: (changed: boolean) => void;
+  /** 嵌在账号抽屉的子页里：只渲染表单，不套 Dialog 壳 */
+  embedded?: boolean;
 }
 
-export function DeviceManualDialog({ account, onClose }: Props) {
+export function DeviceManualDialog({ account, onClose, embedded = false }: Props) {
   const { toast } = useToast();
   const [deviceId, setDeviceId] = useState(account.deviceId || "");
   const [deviceModel, setDeviceModel] = useState(account.deviceModel || "");
@@ -62,6 +63,96 @@ export function DeviceManualDialog({ account, onClose }: Props) {
     }
   };
 
+  const body = (
+    <div className="space-y-3.5">
+      <Field>
+        <FieldLabel>设备 ID（必填）</FieldLabel>
+        <Input
+          value={deviceId}
+          onChange={(e) => setDeviceId(e.target.value)}
+          placeholder="如 86792b16-9a0e-4dd6-ba7f-22a9c4a558ea"
+          className="font-mono text-xs"
+        />
+        <FieldDescription>签到提交时 CpdailyInfo 里携带的设备标识。</FieldDescription>
+      </Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Field>
+          <FieldLabel>机型</FieldLabel>
+          <Input
+            value={deviceModel}
+            onChange={(e) => setDeviceModel(e.target.value)}
+            placeholder="如 23127PN0CC / iPhone17,1"
+          />
+        </Field>
+        <Field>
+          <FieldLabel>系统版本</FieldLabel>
+          <Input
+            value={systemVersion}
+            onChange={(e) => setSystemVersion(e.target.value)}
+            placeholder="如 14 / 18.2"
+          />
+        </Field>
+        <Field>
+          <FieldLabel>平台</FieldLabel>
+          <select
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value)}
+            className="h-8 w-full rounded-lg border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            <option value="android">Android</option>
+            <option value="ios">iOS</option>
+          </select>
+        </Field>
+        <Field>
+          <FieldLabel>构建号</FieldLabel>
+          <Input
+            value={buildId}
+            onChange={(e) => setBuildId(e.target.value)}
+            placeholder="如 AP2A.240705.005"
+          />
+        </Field>
+        <Field>
+          <FieldLabel>App 版本</FieldLabel>
+          <Input
+            value={appVersion}
+            onChange={(e) => setAppVersion(e.target.value)}
+            placeholder="如 9.9.24"
+          />
+        </Field>
+        <Field>
+          <FieldLabel>wisDeviceId（iOS 可选）</FieldLabel>
+          <Input
+            value={wisDeviceId}
+            onChange={(e) => setWisDeviceId(e.target.value)}
+            placeholder="iOS 原生客户端的设备头"
+            className="font-mono text-xs"
+          />
+        </Field>
+      </div>
+      <Field>
+        <FieldLabel>User-Agent（可选）</FieldLabel>
+        <textarea
+          value={userAgent}
+          onChange={(e) => setUserAgent(e.target.value)}
+          placeholder="留空则按机型/系统版本自动拼装"
+          className="h-20 w-full resize-none rounded-lg border border-input bg-background px-3 py-2 font-mono text-[11px] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        />
+        <FieldDescription>原样透传到请求头，需与该设备真实 App 的 UA 一致。</FieldDescription>
+      </Field>
+      {error && <p className="text-xs font-medium text-danger">{error}</p>}
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <Button variant="ghost" disabled={busy} onClick={() => onClose(false)}>
+          取消
+        </Button>
+        <Button disabled={busy} onClick={() => void save()}>
+          {busy ? <Loader2 className="size-4 animate-spin" /> : "保存"}
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (embedded) return body;
+
   return (
     <Dialog open onOpenChange={(o) => !o && !busy && onClose(false)}>
       <DialogContent className="max-w-lg">
@@ -73,91 +164,7 @@ export function DeviceManualDialog({ account, onClose }: Props) {
           扫码拿不到时的兜底。设备 ID 是提交签到时使用的 CpUUID（不是手机系统 UUID），
           可从原手机的扫码页复制；留空的字段会沿用当前值。
         </DialogDescription>
-        <DialogBody className="space-y-3.5">
-          <Field>
-            <FieldLabel>设备 ID（必填）</FieldLabel>
-            <Input
-              value={deviceId}
-              onChange={(e) => setDeviceId(e.target.value)}
-              placeholder="如 86792b16-9a0e-4dd6-ba7f-22a9c4a558ea"
-              className="font-mono text-xs"
-            />
-            <FieldDescription>签到提交时 CpdailyInfo 里携带的设备标识。</FieldDescription>
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field>
-              <FieldLabel>机型</FieldLabel>
-              <Input
-                value={deviceModel}
-                onChange={(e) => setDeviceModel(e.target.value)}
-                placeholder="如 23127PN0CC / iPhone17,1"
-              />
-            </Field>
-            <Field>
-              <FieldLabel>系统版本</FieldLabel>
-              <Input
-                value={systemVersion}
-                onChange={(e) => setSystemVersion(e.target.value)}
-                placeholder="如 14 / 18.2"
-              />
-            </Field>
-            <Field>
-              <FieldLabel>平台</FieldLabel>
-              <select
-                value={platform}
-                onChange={(e) => setPlatform(e.target.value)}
-                className="border-input bg-background h-9 w-full rounded-lg border px-3 text-sm outline-none"
-              >
-                <option value="android">Android</option>
-                <option value="ios">iOS</option>
-              </select>
-            </Field>
-            <Field>
-              <FieldLabel>构建号</FieldLabel>
-              <Input
-                value={buildId}
-                onChange={(e) => setBuildId(e.target.value)}
-                placeholder="如 AP2A.240705.005"
-              />
-            </Field>
-            <Field>
-              <FieldLabel>App 版本</FieldLabel>
-              <Input
-                value={appVersion}
-                onChange={(e) => setAppVersion(e.target.value)}
-                placeholder="如 9.9.24"
-              />
-            </Field>
-            <Field>
-              <FieldLabel>wisDeviceId（iOS 可选）</FieldLabel>
-              <Input
-                value={wisDeviceId}
-                onChange={(e) => setWisDeviceId(e.target.value)}
-                placeholder="iOS 原生客户端的设备头"
-                className="font-mono text-xs"
-              />
-            </Field>
-          </div>
-          <Field>
-            <FieldLabel>User-Agent（可选）</FieldLabel>
-            <textarea
-              value={userAgent}
-              onChange={(e) => setUserAgent(e.target.value)}
-              placeholder="留空则按机型/系统版本自动拼装"
-              className="border-input bg-background focus-visible:border-ring focus-visible:ring-ring/50 h-20 w-full resize-none rounded-lg border px-3 py-2 font-mono text-[11px] outline-none focus-visible:ring-3"
-            />
-            <FieldDescription>原样透传到请求头，需与该设备真实 App 的 UA 一致。</FieldDescription>
-          </Field>
-          {error && <p className="text-destructive text-xs">{error}</p>}
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="ghost" disabled={busy} onClick={() => onClose(false)}>
-            取消
-          </Button>
-          <Button disabled={busy} onClick={() => void save()}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : "保存"}
-          </Button>
-        </DialogFooter>
+        <DialogBody>{body}</DialogBody>
       </DialogContent>
     </Dialog>
   );

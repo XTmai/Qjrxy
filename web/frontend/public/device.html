@@ -4,211 +4,646 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#eef0f7">
-<title>获取设备 ID · XIAOMAI</title>
+<meta name="theme-color" content="#F4F6F9">
+<title>获取设备 ID · Qjrxy</title>
 <style>
+  /* =========================================================
+     Qjrxy 移动端设计系统（与桌面端同源）
+     冷灰蓝画布 + 纯白卡片 + 单一品牌蓝 #0066FF；
+     绿色只表示「已完成/已就绪」，不做装饰。
+     间距韵律 4 / 8 / 12 / 16 / 20，圆角 卡片20 · 控件14 · 小块11。
+     ========================================================= */
   :root {
-    --bg: #eef0f7;
+    --brand: #0066ff;
+    --brand-hover: #0052cc;
+    --brand-soft: #f0f7ff;
+    --brand-border: #bae0ff;
+
+    --canvas: #f4f6f9;
     --surface: #ffffff;
-    --surface-2: #f4f6fc;
-    --border: #e5e9f2;
-    --text: #0f172a;
-    --text-soft: #475569;
-    --muted: #7b8798;
-    --primary: #006ee6;
-    --success: #10b981;
-    --warn-bg: #fef3c7;
-    --warn-fg: #b45309;
-    --info-bg: #e6f1fd;
-    --info-fg: #1d4ed8;
-    --danger: #d43b3b;
+    --surface-2: #f8fafc;
+    --subtle: #eef2f6;
+    --hairline: rgba(15, 23, 42, 0.06);
+    --divider: #eef1f5;
+
+    --ink: #0f172a;
+    --ink-soft: #475569;
+    --muted: #64748b;
+    --faint: #94a3b8;
+
+    --ok: #10b981;
+    --ok-soft: #ecfdf5;
+    --ok-border: #a7f3d0;
+    --ok-ink: #065f46;
+
+    --warn-soft: #fffbeb;
+    --warn-border: #fde68a;
+    --warn-ink: #92400e;
+
+    --fail: #e11d48;
+    --fail-soft: #fff1f2;
+    --fail-border: #fecdd3;
+    --fail-ink: #9f1239;
+
+    --shadow-card: 0 4px 20px -2px rgba(15, 23, 42, 0.04);
+    --shadow-brand: 0 6px 16px -4px rgba(0, 102, 255, 0.35);
   }
+
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #181818;
-      --surface: #202024;
-      --surface-2: #1b1b1f;
-      --border: #2f2f36;
-      --text: #f2f4f8;
-      --text-soft: #c7ccd6;
-      --muted: #8f97a5;
-      --info-bg: #16274a;
-      --info-fg: #9ec8ff;
-      --warn-bg: #3a2a10;
-      --warn-fg: #fbbf24;
+      --brand: #3b82f6;
+      --brand-hover: #60a5fa;
+      --brand-soft: #12233d;
+      --brand-border: #1e3a5f;
+
+      --canvas: #0e1015;
+      --surface: #161922;
+      --surface-2: #1b1f29;
+      --subtle: #1e222d;
+      --hairline: rgba(255, 255, 255, 0.08);
+      --divider: #232733;
+
+      --ink: #ededf0;
+      --ink-soft: #c3c9d4;
+      --muted: #8e939c;
+      --faint: #6b7280;
+
+      --ok-soft: #052e24;
+      --ok-border: #065f46;
+      --ok-ink: #6ee7b7;
+
+      --warn-soft: #2d1d05;
+      --warn-border: #92400e;
+      --warn-ink: #fcd34d;
+
+      --fail-soft: #2d0a13;
+      --fail-border: #9f1239;
+      --fail-ink: #fda4af;
+
+      --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
     }
   }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  * {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
   body {
     margin: 0;
-    min-height: 100vh;
-    background:
-      radial-gradient(900px 420px at 50% -10%, rgba(0,110,230,.14), transparent 60%),
-      var(--bg);
-    color: var(--text);
-    font-family: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", -apple-system,
-      BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100dvh;
+    padding: max(20px, env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+      "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
-    padding: 22px 16px calc(22px + env(safe-area-inset-bottom));
   }
-  .screen { width: min(460px, 100%); }
-  /* 加载态卡片至少占满可用宽度，避免只有一个小方块 */
-  .card.loading { padding: 56px 24px; }
+
+  .screen {
+    width: 100%;
+    max-width: 430px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* ---------- 卡片 ---------- */
+
   .card {
     background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 28px;
-    padding: 32px 24px 28px;
-    box-shadow: 0 26px 50px -20px rgba(15,23,42,.28);
-    text-align: center;
+    border: 1px solid var(--hairline);
+    border-radius: 20px;
+    padding: 20px;
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
-  /* 内容区统一左右内边距，避免文字贴边 */
-  .card > * + * { margin-top: 0; }
-  .card .body { padding: 0 2px; }
-  .icon {
-    width: 76px; height: 76px;
-    margin: 0 auto 18px;
-    border-radius: 50%;
-    display: grid; place-items: center;
-    background: var(--primary);
-    color: #fff;
-    box-shadow: 0 16px 28px -14px rgba(0,110,230,.8);
-  }
-  .icon.ok { background: var(--success); box-shadow: 0 16px 28px -14px rgba(16,185,129,.7); }
-  .icon.warn { background: #f97316; box-shadow: 0 16px 28px -14px rgba(249,115,22,.6); }
-  .icon svg { width: 40px; height: 40px; stroke: #fff; stroke-width: 2.4; fill: none;
-              stroke-linecap: round; stroke-linejoin: round; }
-  h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: -0.01em; }
-  .sub { margin: 0 0 20px; font-size: 13.5px; color: var(--muted); line-height: 1.65; }
-  .loader {
-    width: 54px; height: 54px; margin: 6px auto 20px;
-    border: 4px solid var(--border);
-    border-top-color: var(--primary);
-    border-radius: 50%;
-    animation: spin .75s cubic-bezier(.4,0,.2,1) infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
 
-  .id-box {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 14px 16px 16px;
-    text-align: left;
-    margin-bottom: 18px;
+  .card.loading {
+    align-items: center;
+    padding: 48px 24px;
+    text-align: center;
+    gap: 20px;
   }
-  .id-label {
-    display: inline-block;
-    font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
-    color: var(--text-soft);
-    background: var(--border);
-    padding: 3px 10px; border-radius: 999px;
-    margin-bottom: 10px;
+
+  /* ---------- Hero ---------- */
+
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 12px 4px 4px;
   }
-  .id-value {
-    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+  .hero-badge {
+    position: relative;
+    margin-bottom: 16px;
+  }
+
+  .hero-badge::before {
+    content: "";
+    position: absolute;
+    inset: -8px;
+    border-radius: 999px;
+    background: rgba(16, 185, 129, 0.15);
+    filter: blur(4px);
+  }
+
+  .hero-badge > span {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    border-radius: 999px;
+    display: grid;
+    place-items: center;
+    background: var(--ok);
+    color: #fff;
+    box-shadow: 0 8px 20px -4px rgba(16, 185, 129, 0.45);
+  }
+
+  .hero-badge.warn > span {
+    background: #f59e0b;
+    box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.4);
+  }
+
+  .hero-badge.warn::before {
+    background: rgba(245, 158, 11, 0.15);
+  }
+
+  .hero-badge svg {
+    width: 28px;
+    height: 28px;
+    stroke: currentColor;
+    stroke-width: 2.75;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .hero h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.35;
+  }
+
+  .hero p {
+    margin: 6px 0 0;
     font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--muted);
+    text-wrap: balance;
+  }
+
+  /* ---------- 分区标签 ---------- */
+
+  .label-pill {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: var(--subtle);
+    color: var(--ink-soft);
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .label-plain {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 4px 10px;
+    border-radius: 8px;
+    background: var(--subtle);
+    color: var(--ink-soft);
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .row-between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .hint-faint {
+    font-size: 11px;
+    color: var(--faint);
+    font-weight: 500;
+  }
+
+  /* ---------- 等宽代码框（可点击复制） ---------- */
+
+  .code-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    border: 1px dashed #cbd5e1;
+    cursor: pointer;
+    transition: border-color 0.16s ease, background-color 0.16s ease;
+    text-align: left;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .code-box {
+      border-color: #3f4655;
+    }
+  }
+
+  .code-box:hover {
+    border-color: rgba(0, 102, 255, 0.5);
+    background: var(--brand-soft);
+  }
+
+  .code-box code {
+    flex: 1;
+    min-width: 0;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 14.5px;
+    font-weight: 600;
     line-height: 1.5;
-    /* UUID 用连字符分段：优先在连字符处折行，避免把字符拆散 */
+    letter-spacing: 0.01em;
+    color: var(--ink);
+    /* UUID 在连字符处分段更易读；实在放不下才允许任意断行 */
     word-break: normal;
     overflow-wrap: anywhere;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 11px 13px;
-    color: var(--text);
-    letter-spacing: .2px;
+    hyphens: manual;
+    user-select: all;
+    -webkit-user-select: all;
+    font-variant-numeric: tabular-nums;
   }
-  .btn {
-    width: 100%;
-    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
-    padding: 14px 18px;
-    border: none;
-    border-radius: 999px;
-    font-size: 15px; font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    transition: filter .16s ease, transform .12s ease;
-  }
-  .btn:active { transform: scale(.985); }
-  .btn.primary { background: var(--primary); color: #fff; }
-  .btn.primary:hover { filter: brightness(1.06); }
-  .btn.ghost {
-    background: var(--surface-2); color: var(--text);
-    border: 1px solid var(--border);
-    margin-top: 10px;
-  }
-  .btn + .btn { margin-top: 10px; }
-  .btn:disabled { opacity: .6; cursor: default; }
-  .btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2;
-             stroke-linecap: round; stroke-linejoin: round; }
 
-  .tip {
-    margin-top: 14px;
-    padding: 12px 14px;
-    border-radius: 16px;
-    font-size: 13px;
-    line-height: 1.7;
-    text-align: left;
+  .copy-btn {
+    flex: 0 0 auto;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    color: var(--muted);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    transition: color 0.16s ease, border-color 0.16s ease;
+    padding: 0;
   }
-  .tip.blue { background: var(--info-bg); color: var(--info-fg); }
-  .tip.warn { background: var(--warn-bg); color: var(--warn-fg); }
-  .steps { text-align: left; font-size: 14px; line-height: 2.0; color: var(--text-soft); padding: 4px 2px; }
-  .steps b { color: var(--text); }
-  .id-value.secondary {
-    font-size: 12px;
-    color: var(--text-muted);
-    background: var(--surface-2);
-    border-style: dashed;
+
+  .code-box:hover .copy-btn {
+    color: var(--brand);
+    border-color: rgba(0, 102, 255, 0.3);
   }
-  .field-note { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+
+  .copy-btn svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .copy-btn.done {
+    color: var(--ok);
+    border-color: var(--ok-border);
+  }
+
+  /* ---------- 键值列表 ---------- */
+
   .kv {
-    display: flex; flex-direction: column;
-    margin-top: 10px;
-    border: 1px solid var(--border);
     border-radius: 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--divider);
     overflow: hidden;
   }
+
   .kv-row {
-    display: grid;
-    grid-template-columns: 84px minmax(0, 1fr);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     gap: 12px;
-    align-items: baseline;
-    padding: 9px 12px;
-    font-size: 12.5px;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
-  }
-  .kv-row:last-child { border-bottom: none; }
-  .kv-row span { color: var(--muted); text-align: left; }
-  .kv-row b {
-    color: var(--text); font-weight: 600; text-align: right;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .copy-hint { font-size: 12.5px; color: var(--success); min-height: 17px; margin-top: 10px; font-weight: 600; }
-  details { margin-top: 18px; text-align: left; font-size: 12px; color: var(--muted); }
-  details summary { cursor: pointer; }
-  details pre {
-    white-space: pre-wrap; word-break: break-all;
-    background: var(--surface-2); border: 1px solid var(--border);
-    border-radius: 12px; padding: 10px; margin-top: 8px; font-size: 11px;
-  }
-  @media (max-width: 380px) {
-    .card { padding: 26px 18px 22px; border-radius: 24px; }
-    .kv-row { grid-template-columns: 72px minmax(0, 1fr); }
-    h1 { font-size: 20px; }
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--divider);
   }
 
-  .foot { margin-top: 18px; font-size: 11.5px; color: var(--muted); text-align: center; line-height: 1.7; }
+  .kv-row:last-child {
+    border-bottom: none;
+  }
+
+  .kv-row span {
+    font-size: 13.5px;
+    color: var(--muted);
+    font-weight: 500;
+    flex: 0 0 auto;
+  }
+
+  .kv-row b {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .section-block {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 4px;
+    border-top: 1px solid var(--divider);
+  }
+
+  /* ---------- 按钮 ---------- */
+
+  .actions {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 50px;
+    padding: 0 20px;
+    border: none;
+    border-radius: 14px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.18s ease, transform 0.14s ease, box-shadow 0.18s ease;
+  }
+
+  .btn:active {
+    transform: scale(0.985);
+  }
+
+  .btn svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2.4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .btn-primary {
+    background: var(--brand);
+    color: #fff;
+    box-shadow: var(--shadow-brand);
+  }
+
+  .btn-primary:hover {
+    background: var(--brand-hover);
+  }
+
+  .btn-primary.done {
+    background: var(--ok);
+    box-shadow: 0 6px 16px -4px rgba(16, 185, 129, 0.35);
+  }
+
+  .btn-secondary {
+    height: 48px;
+    background: var(--subtle);
+    color: var(--ink);
+    border: 1px solid var(--hairline);
+    box-shadow: none;
+  }
+
+  .btn-secondary:hover {
+    background: var(--divider);
+  }
+
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  /* ---------- 提示卡 ---------- */
+
+  .note {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    box-shadow: 0 2px 10px rgba(15, 23, 42, 0.02);
+  }
+
+  .note-icon {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    margin-top: 1px;
+    border-radius: 11px;
+    background: rgba(0, 102, 255, 0.1);
+    color: var(--brand);
+    display: grid;
+    place-items: center;
+  }
+
+  .note-icon svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .note-body {
+    flex: 1;
+    min-width: 0;
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--muted);
+  }
+
+  .note-body b {
+    color: var(--ink-soft);
+    font-weight: 600;
+  }
+
+  .note.warn {
+    background: var(--warn-soft);
+    border-color: var(--warn-border);
+  }
+
+  .note.warn .note-icon {
+    background: rgba(217, 119, 6, 0.12);
+    color: #d97706;
+  }
+
+  .note.warn .note-body {
+    color: var(--warn-ink);
+  }
+
+  /* ---------- 步骤 ---------- */
+
+  .steps {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--muted);
+    text-align: left;
+  }
+
+  .steps b {
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  /* ---------- 加载与状态 ---------- */
+
+  .spinner {
+    width: 44px;
+    height: 44px;
+    border: 3px solid var(--divider);
+    border-top-color: var(--brand);
+    border-radius: 999px;
+    animation: spin 0.75s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .status-text {
+    font-size: 13.5px;
+    color: var(--muted);
+    min-height: 20px;
+    margin: 0;
+    text-align: center;
+  }
+
+  .status-text.ok {
+    color: var(--ok-ink);
+    font-weight: 600;
+  }
+
+  .status-text.fail {
+    color: var(--fail-ink);
+    font-weight: 600;
+  }
+
+  .foot {
+    text-align: center;
+    font-size: 11.5px;
+    color: var(--faint);
+    line-height: 1.7;
+  }
+
+  /* ---------- 诊断折叠 ---------- */
+
+  details {
+    border-radius: 16px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    overflow: hidden;
+  }
+
+  details summary {
+    padding: 13px 16px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  details summary::-webkit-details-marker {
+    display: none;
+  }
+
+  details summary::after {
+    content: "›";
+    float: right;
+    transition: transform 0.2s ease;
+  }
+
+  details[open] summary::after {
+    transform: rotate(90deg);
+  }
+
+  details pre {
+    margin: 0;
+    padding: 12px 16px 14px;
+    border-top: 1px solid var(--divider);
+    background: var(--surface-2);
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 极窄屏收紧一档，避免 320px 上文字贴边 */
+  @media (max-width: 360px) {
+    body {
+      padding-left: 12px;
+      padding-right: 12px;
+    }
+    .card {
+      padding: 16px;
+      border-radius: 18px;
+    }
+    .hero h1 {
+      font-size: 20px;
+    }
+    .btn {
+      height: 46px;
+      font-size: 14px;
+    }
+    .code-box code {
+      font-size: 13px;
+    }
+  }
 </style>
 </head>
 <body>
-<div class="screen"><div class="card loading" id="card">
-  <div class="loader"></div>
-  <p class="sub" style="margin-bottom:0">正在获取设备信息…</p>
-</div></div>
+<div class="screen">
+  <div class="card loading" id="card">
+    <div class="spinner"></div>
+    <p class="status-text">正在获取设备信息…</p>
+  </div>
+</div>
 
 <script>
 /* =========================================================
@@ -242,12 +677,16 @@
     });
   }
 
-  function iconPath(name) {
-    return {
-      check: '<polyline points="20 6 9 17 4 12"></polyline>',
-      alert: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
-      phone: '<rect x="7" y="2" width="10" height="20" rx="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line>'
-    }[name] || '';
+  /* ---------- 图标 ---------- */
+  var ICONS = {
+    check: '<polyline points="20 6 9 17 4 12"></polyline>',
+    alert: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
+    copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>',
+    info: '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>'
+  };
+
+  function svg(name, cls) {
+    return '<svg class="' + (cls || '') + '" viewBox="0 0 24 24">' + (ICONS[name] || '') + '</svg>';
   }
 
   // extraRows 渲染机型/版本等附加信息，只展示取到的项
@@ -259,13 +698,13 @@
     if (info.appVersion) rows.push(['App 版本', info.appVersion]);
     if (info.wisDeviceId) rows.push(['wisDeviceId', '已获取']);
     if (!rows.length) return '';
-    var html = '<span class="id-label" style="margin-top:14px">设备信息</span>' +
-               '<div class="kv">';
+    var html = '<div class="section-block">' +
+               '<span class="label-plain">设备信息</span><div class="kv">';
     for (var i = 0; i < rows.length; i++) {
       html += '<div class="kv-row"><span>' + escapeHtml(rows[i][0]) + '</span><b>' +
               escapeHtml(rows[i][1]) + '</b></div>';
     }
-    return html + '</div>';
+    return html + '</div></div>';
   }
 
   /* ---------- 成功：展示设备信息并回填平台 ---------- */
@@ -275,42 +714,64 @@
 
     var deviceId = info.deviceId || '';
     var uuid = info.uuid || '';
-    var payload = info.raw || {};
     var hasBoth = uuid && deviceId && uuid !== deviceId;
 
     var card = document.getElementById('card');
     card.className = 'card';
     card.innerHTML =
-      '<div class="icon ok"><svg viewBox="0 0 24 24">' + iconPath('check') + '</svg></div>' +
-      '<h1>设备信息已获取</h1>' +
-      '<p class="sub">' + (hasBoth
-        ? '检测到两个标识，请确认绑定今日校园使用的设备 ID'
-        : '复制下方标识，或直接回填到 XIAOMAI 账号') + '</p>' +
-      '<div class="id-box">' +
-        '<span class="id-label">Device ID · 签到使用</span>' +
-        '<div class="id-value" id="idValue">' + escapeHtml(deviceId) + '</div>' +
-        (hasBoth
-          ? '<div class="field-note">今日校园 App 生成，提交签到时使用这个值</div>'
-            + '<span class="id-label" style="margin-top:14px">UUID · 系统标识</span>'
-            + '<div class="id-value secondary">' + escapeHtml(uuid) + '</div>'
-            + '<div class="field-note">系统层设备标识，签到不使用；仅供参考</div>'
-          : '') +
-        extraRows(info) +
+      '<div class="hero">' +
+        '<div class="hero-badge"><span>' + svg('check') + '</span></div>' +
+        '<h1>设备信息已获取</h1>' +
+        '<p>' + (hasBoth
+          ? '检测到两个标识，请确认绑定今日校园使用的设备 ID'
+          : '复制下方标识，或直接回填到 Qjrxy 账号') + '</p>' +
       '</div>' +
-      (TICKET
-        ? '<button class="btn primary" id="submitBtn">' +
-            '<svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>' +
-            '绑定到 XIAOMAI 账号</button>'
+
+      // 设备 ID 卡
+      '<div class="row-between">' +
+        '<span class="label-pill">Device ID · 签到使用</span>' +
+        '<span class="hint-faint">唯一硬件指纹</span>' +
+      '</div>' +
+      '<div class="code-box" id="copyBox" role="button" tabindex="0" title="点击复制设备 ID">' +
+        '<code id="idValue">' + escapeHtml(deviceId) + '</code>' +
+        '<button class="copy-btn" id="inlineCopy" type="button" aria-label="复制设备 ID">' +
+          svg('copy') +
+        '</button>' +
+      '</div>' +
+      (hasBoth
+        ? '<div class="section-block">' +
+            '<span class="label-plain">UUID · 系统标识</span>' +
+            '<div class="kv"><div class="kv-row"><span>系统标识</span><b>' + escapeHtml(uuid) + '</b></div></div>' +
+            '<span class="hint-faint">签到不使用；仅供排查参考</span>' +
+          '</div>'
         : '') +
-      '<button class="btn ghost" id="copyBtn">复制设备 ID</button>' +
-      '<div class="copy-hint" id="copyHint"></div>' +
-      '<div class="tip blue">📌 设备 ID 与设备一一对应。换手机或重装今日校园后 ID 会变化，需要重新获取；' +
-        '频繁更换会被学校风控识别为「更换手机」。</div>' +
-      '<div class="tip" style="background:var(--info-bg);color:var(--info-fg)">' +
-        '授权只是绑定设备指纹，<b>不会替你登录学校账号</b>。返回电脑端后仍需输入学号与密码完成登录。</div>' +
-      '<div class="foot">' + (TICKET ? '票据 15 分钟内有效，仅可使用一次' : '没有绑定票据，仅本地展示') + '</div>';
+      extraRows(info) +
+
+      '<div class="actions">' +
+        (TICKET
+          ? '<button class="btn btn-primary" id="submitBtn">' + svg('check') +
+              '<span>绑定到 Qjrxy 账号</span></button>'
+          : '') +
+        '<button class="btn btn-secondary" id="copyBtn">' + svg('copy') +
+          '<span id="copyBtnText">复制设备 ID</span></button>' +
+      '</div>' +
+      '<p class="status-text" id="copyHint"></p>' +
+
+      '<div class="note">' +
+        '<div class="note-icon">' + svg('info') + '</div>' +
+        '<div class="note-body"><b>绑定须知：</b>设备 ID 与设备一一对应。换手机或重装今日校园后 ID 会变化，' +
+          '需要重新获取；频繁更换会被学校风控识别为「更换手机」。</div>' +
+      '</div>' +
+      '<div class="note">' +
+        '<div class="note-icon">' + svg('info') + '</div>' +
+        '<div class="note-body">授权只是绑定设备指纹，<b>不会替你登录学校账号</b>。' +
+          '返回电脑端后仍需输入学号与密码完成登录。</div>' +
+      '</div>' +
+      '<p class="foot">' + (TICKET ? '票据 15 分钟内有效，仅可使用一次' : '没有绑定票据，仅本地展示') + '</p>';
 
     var hint = document.getElementById('copyHint');
+    var inlineCopy = document.getElementById('inlineCopy');
+    var copyBtnText = document.getElementById('copyBtnText');
 
     function legacyCopy(t) {
       var ta = document.createElement('textarea');
@@ -323,23 +784,40 @@
       document.body.removeChild(ta);
     }
 
-    document.getElementById('copyBtn').addEventListener('click', function () {
+    var resetTimer = null;
+    function done() {
+      hint.className = 'status-text ok';
+      hint.textContent = '已复制到剪贴板';
+      inlineCopy.classList.add('done');
+      inlineCopy.innerHTML = svg('check');
+      copyBtnText.textContent = '已复制';
+      if (resetTimer) clearTimeout(resetTimer);
+      resetTimer = setTimeout(function () {
+        hint.textContent = '';
+        inlineCopy.classList.remove('done');
+        inlineCopy.innerHTML = svg('copy');
+        copyBtnText.textContent = '复制设备 ID';
+      }, 2000);
+    }
+
+    function doCopy() {
       var text = document.getElementById('idValue').innerText.trim();
-      function done() {
-        hint.style.color = '#10b981';
-        hint.textContent = '已复制 ✓';
-        setTimeout(function () { hint.textContent = ''; }, 1800);
-      }
       if (navigator.clipboard && window.isSecureContext) {
         navigator.clipboard.writeText(text).then(done, function () { legacyCopy(text); done(); });
-      } else { legacyCopy(text); done(); }
-    });
+      } else {
+        legacyCopy(text);
+        done();
+      }
+    }
+
+    document.getElementById('copyBox').addEventListener('click', doCopy);
+    document.getElementById('copyBtn').addEventListener('click', doCopy);
 
     var submitBtn = document.getElementById('submitBtn');
     if (submitBtn) {
       submitBtn.addEventListener('click', function () {
         submitBtn.disabled = true;
-        submitBtn.textContent = '绑定中…';
+        submitBtn.innerHTML = '<span>绑定中…</span>';
         fetch(SUBMIT_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -360,22 +838,25 @@
           return resp.json().then(function (json) { return { ok: resp.ok, json: json }; });
         }).then(function (res) {
           if (res.ok && res.json && res.json.ok) {
-            submitBtn.textContent = '已发送 ✓ 可以关闭本页';
+            submitBtn.classList.add('done');
+            submitBtn.innerHTML = svg('check') + '<span>已发送 · 可以关闭本页</span>';
             hint.textContent = '';
-            card.insertAdjacentHTML('beforeend',
-              '<div class="tip blue" style="margin-top:12px">设备信息已发送到电脑端，' +
-              '那边会自动填好，不需要手动输入。</div>');
+            var box = document.createElement('div');
+            box.className = 'note';
+            box.innerHTML = '<div class="note-icon">' + svg('info') + '</div>' +
+              '<div class="note-body">设备信息已发送到电脑端，那边会自动填好，不需要手动输入。</div>';
+            card.appendChild(box);
           } else {
             var msg = (res.json && res.json.error && res.json.error.message) || '绑定失败';
             submitBtn.disabled = false;
-            submitBtn.textContent = '重新尝试绑定';
-            hint.style.color = '#d43b3b';
+            submitBtn.innerHTML = svg('check') + '<span>重新尝试绑定</span>';
+            hint.className = 'status-text fail';
             hint.textContent = msg;
           }
         }).catch(function () {
           submitBtn.disabled = false;
-          submitBtn.textContent = '重新尝试绑定';
-          hint.style.color = '#d43b3b';
+          submitBtn.innerHTML = svg('check') + '<span>重新尝试绑定</span>';
+          hint.className = 'status-text fail';
           hint.textContent = '网络请求失败，请检查网络后重试';
         });
       });
@@ -387,23 +868,30 @@
     var card = document.getElementById('card');
     card.className = 'card';
     var wechatTip = isWeChat()
-      ? '<div class="tip warn">⚠️ 你正在微信内打开。微信会屏蔽 App 跳转，也无法读取设备 ID。请退出微信，改用「今日校园」App 的扫一扫。</div>'
+      ? '<div class="note warn"><div class="note-icon">' + svg('alert') + '</div>' +
+        '<div class="note-body">你正在微信内打开。微信会屏蔽 App 跳转，也无法读取设备 ID。' +
+        '请退出微信，改用「今日校园」App 的扫一扫。</div></div>'
       : '';
     card.innerHTML =
-      '<div class="icon warn"><svg viewBox="0 0 24 24">' + iconPath('alert') + '</svg></div>' +
-      '<h1>请在今日校园中打开</h1>' +
-      '<p class="sub">设备 ID 只能在「今日校园」App 内读取——普通浏览器、微信、系统相机都没有权限</p>' +
+      '<div class="hero">' +
+        '<div class="hero-badge warn"><span>' + svg('alert') + '</span></div>' +
+        '<h1>请在今日校园中打开</h1>' +
+        '<p>设备 ID 只能在「今日校园」App 内读取——普通浏览器、微信、系统相机都没有权限</p>' +
+      '</div>' +
       wechatTip +
-      '<div class="id-box" style="text-align:left">' +
-        '<span class="id-label">正确操作</span>' +
+      '<div class="section-block">' +
+        '<span class="label-plain">正确操作</span>' +
         '<div class="steps">' +
-          '1️⃣ 打开「今日校园」App<br>' +
-          '2️⃣ 点击右上角「＋」→ <b>扫一扫</b><br>' +
-          '3️⃣ 扫描电脑端显示的二维码' +
+          '<div>1　打开「今日校园」App</div>' +
+          '<div>2　点击右上角「＋」→ <b>扫一扫</b></div>' +
+          '<div>3　扫描电脑端显示的二维码</div>' +
         '</div>' +
       '</div>' +
-      '<button class="btn primary" id="openApp">尝试打开今日校园</button>' +
-      '<button class="btn ghost" id="retry">重新尝试获取</button>' +
+      '<div class="actions">' +
+        '<button class="btn btn-primary" id="openApp">' + svg('check') +
+          '<span>尝试打开今日校园</span></button>' +
+        '<button class="btn btn-secondary" id="retry">重新尝试获取</button>' +
+      '</div>' +
       '<details><summary>环境调试信息</summary><pre id="dbg"></pre></details>';
 
     document.getElementById('dbg').textContent =

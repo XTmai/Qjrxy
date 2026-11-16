@@ -31,11 +31,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { PageHeader } from "@/components/page-header";
 import { RunStatusBadge } from "@/components/status-badge";
 import { useAuditLogs } from "@/hooks/use-stats";
 import { useStats7d } from "@/hooks/use-stats";
-import { maskUser } from "@/lib/utils";
+import { cn, maskUser } from "@/lib/utils";
 import type { AuditRow, LogDetail } from "@/lib/types";
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -64,10 +63,16 @@ export function AuditPage() {
   const [scope, setScope] = useState("week");
   const [auto, setAuto] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // 「平均围栏偏移」卡点一下只看高偏移记录：偏移异常的记录才是要复盘的对象
+  const [highOffsetOnly, setHighOffsetOnly] = useState(false);
 
   const { data, isLoading, refetch, isFetching } = useAuditLogs({ status, scope, limit: 100 });
   const { data: stats7d } = useStats7d();
-  const rows = useMemo(() => data?.logs ?? [], [data]);
+  const allRows = useMemo(() => data?.logs ?? [], [data]);
+  const rows = useMemo(
+    () => (highOffsetOnly ? allRows.filter((r) => (r.geoOffsetM || 0) > 15) : allRows),
+    [allRows, highOffsetOnly],
+  );
 
   // 实时刷新：每 15 秒拉一次
   useEffect(() => {
@@ -116,30 +121,35 @@ export function AuditPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="执行审计"
-        sub={stats7d ? `近 7 日 ${stats7d.total} 次执行 · 平均 ${stats7d.avgLatencyMs || "—"} ms` : "全量执行流水与调用链路"}
-        actions={
-          <>
-            <label className="flex cursor-pointer items-center gap-2 text-xs">
-              <Switch checked={auto} onCheckedChange={setAuto} aria-label="实时刷新" />
-              <span className={auto ? "text-foreground" : "text-muted-foreground"}>实时刷新</span>
-            </label>
-            <Button variant="outline" size="sm" disabled={!rows.length} onClick={exportCsv}>
-              <Download className="size-3.5" />
-              导出 CSV
-            </Button>
-            <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>
-              <RefreshCw className={`size-3.5 ${isFetching ? "animate-spin" : ""}`} />
-              刷新
-            </Button>
-          </>
-        }
-      />
+    <div className="view-panel space-y-5">
+      {/* 标题 + 操作 */}
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div>
+          <h1 className="tracking-headline text-2xl font-bold">执行审计</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {stats7d
+              ? `近 7 日 ${stats7d.total} 次执行 · 平均 ${stats7d.avgLatencyMs || "—"} ms`
+              : "全量执行流水与调用链路"}
+          </p>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-xs select-none">
+            <Switch checked={auto} onCheckedChange={setAuto} aria-label="实时刷新" />
+            <span className={auto ? "text-foreground" : "text-muted-foreground"}>实时刷新</span>
+          </label>
+          <Button variant="outline" size="sm" className="h-8 text-xs" disabled={!rows.length} onClick={exportCsv}>
+            <Download className="size-3.5" />
+            导出 CSV
+          </Button>
+          <Button variant="outline" size="sm" className="h-8 text-xs" disabled={isFetching} onClick={() => void refetch()}>
+            <RefreshCw className={cn("size-3.5", isFetching && "animate-spin")} />
+            刷新
+          </Button>
+        </div>
+      </div>
 
-      {/* 顶部指标 */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {/* 顶部指标：最后一张可点击切「只筛高偏移」 */}
+      <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-4">
         <HeadMetric label="执行总次数" value={stats7d ? stats7d.total : "—"} />
         <HeadMetric
           label="达标率"
@@ -147,11 +157,46 @@ export function AuditPage() {
           tone={stats7d && stats7d.total > 0 ? (stats7d.successRate >= 90 ? "ok" : "warn") : undefined}
         />
         <HeadMetric label="平均耗时" value={stats7d?.avgLatencyMs ? `${stats7d.avgLatencyMs} ms` : "—"} />
-        <HeadMetric
-          label="平均围栏偏移"
-          value={stats7d ? `${stats7d.avgGeoOffsetM.toFixed(0)} m` : "—"}
-          tone={stats7d && stats7d.total > 0 ? (stats7d.avgGeoOffsetM <= 200 ? "ok" : "warn") : undefined}
-        />
+        <button
+          type="button"
+          onClick={() => setHighOffsetOnly((v) => !v)}
+          aria-pressed={highOffsetOnly}
+          className={cn(
+            "group rounded-2xl border bg-card p-3.5 text-left transition-colors",
+            highOffsetOnly ? "border-success" : "border-border hover:border-border-strong",
+          )}
+        >
+          {/* 窄屏（手机 2 列）里标签与徽章挤一行会双双折行，
+              这里在 sm 以下改成上下两行，标签始终整词显示 */}
+          <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+            <span className="text-[11px] font-medium whitespace-nowrap text-muted-foreground">
+              平均围栏偏移
+            </span>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap",
+                highOffsetOnly
+                  ? "bg-success text-white"
+                  : "bg-[color:var(--subtle)] text-muted-foreground group-hover:text-success",
+              )}
+            >
+              {highOffsetOnly ? "已筛 >15m" : "点击筛高偏移"}
+            </span>
+          </div>
+          <p
+            className={cn(
+              "tracking-headline mt-1.5 text-xl font-bold tabular-nums",
+              stats7d && stats7d.total > 0
+                ? stats7d.avgGeoOffsetM <= 200
+                  ? "text-success"
+                  : "text-warning"
+                : "text-foreground",
+            )}
+          >
+            {stats7d ? stats7d.avgGeoOffsetM.toFixed(0) : "—"}
+            <span className="ml-1 text-xs font-normal text-muted-foreground">m</span>
+          </p>
+        </button>
       </div>
 
       {/* 筛选栏 */}
@@ -197,9 +242,10 @@ export function AuditPage() {
                     <button
                       type="button"
                       onClick={() => setSelectedId(r.id)}
-                      className={`w-full px-4 py-3 text-left transition-colors ${
-                        selectedId === r.id ? "bg-primary-soft/60" : ""
-                      }`}
+                      className={cn(
+                        "w-full cursor-pointer px-4 py-3 text-left transition-colors",
+                        selectedId === r.id && "bg-success-soft/70 dark:bg-success-soft/40",
+                      )}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0">
@@ -257,11 +303,11 @@ export function AuditPage() {
                     <TableRow
                       key={r.id}
                       onClick={() => setSelectedId(r.id)}
-                      className={
-                        selectedId === r.id
-                          ? "bg-primary-soft/60 cursor-pointer"
-                          : "cursor-pointer"
-                      }
+                      className={cn(
+                        "cursor-pointer",
+                        selectedId === r.id &&
+                          "bg-success-soft/70 hover:bg-success-soft/70 dark:bg-success-soft/40",
+                      )}
                     >
                       <TableCell className="pl-4">
                         <p className="font-mono text-xs tabular-nums">{clockOf(r.createdAt)}</p>
@@ -360,12 +406,10 @@ function HeadMetric({
   const toneCls =
     tone === "ok" ? "text-success-text" : tone === "warn" ? "text-warning-text" : "text-foreground";
   return (
-    <Card className="border-border">
-      <CardContent className="p-3.5">
-        <p className="text-muted-foreground tracking-label text-[10px] font-medium uppercase">{label}</p>
-        <p className={`tracking-headline mt-1.5 text-xl font-semibold tabular-nums ${toneCls}`}>{value}</p>
-      </CardContent>
-    </Card>
+    <div className="group rounded-2xl border border-border bg-card p-3.5">
+      <p className="text-[11px] font-medium text-muted-foreground">{label}</p>
+      <p className={cn("tracking-headline mt-1.5 text-xl font-bold tabular-nums", toneCls)}>{value}</p>
+    </div>
   );
 }
 

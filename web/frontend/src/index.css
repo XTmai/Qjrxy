@@ -7,14 +7,14 @@
 @custom-variant dark (&:is(.dark *));
 
 /* =========================================================
-   设计令牌 —— 「灰画布 + 浮起面板」
-   中性灰阶承担全部层级，唯一彩色强调（sky）只用于品牌与焦点；
-   语义色（成功/警告/危险）保留，因为操作台的判断依赖它们。
+   设计令牌 —— 「灰画布 + 白卡浮层 + 唯一彩色」
+   层级全部由中性灰阶承担；唯一彩色（翡翠绿）只表示「成功/就绪」，
+   不做装饰。色彩越少，状态色越能一眼被认出来。
    ========================================================= */
 
 :root {
   /* 画布（壳层）与面板（内容层）分离：面板才是「纸」 */
-  --canvas: #f1f2f4;
+  --canvas: #f7f8fa;
   --background: #ffffff;
   --foreground: #0f1115;
   --card: #ffffff;
@@ -22,7 +22,10 @@
   --popover: #ffffff;
   --popover-foreground: #0f1115;
 
-  /* 主色即「近黑」：实心按钮用深中性色，彩色留给强调点 */
+  /* 次级底：卡片内的信息格、筛选胶囊底、输入框底 */
+  --subtle: #f1f3f5;
+
+  /* 主色即「近黑」：实心按钮用深中性色，彩色留给状态 */
   --primary: #111318;
   --primary-foreground: #ffffff;
   --primary-hover: #26282e;
@@ -39,14 +42,14 @@
   --destructive: #e11d48;
   --destructive-foreground: #ffffff;
 
-  /* 唯一的彩色强调 */
-  --brand: #0ea5e9;
-  --brand-soft: #f0f9ff;
+  /* 唯一的彩色强调：翡翠绿（成功 = 就绪 = 已签到） */
+  --brand: #10b981;
+  --brand-soft: #ecfdf5;
 
   /* 语义状态（底色 / 文字 / 边框 三件套） */
   --success: #10b981;
   --success-soft: #ecfdf5;
-  --success-text: #065f46;
+  --success-text: #047857;
   --success-border: #a7f3d0;
 
   --warning: #d97706;
@@ -62,25 +65,25 @@
   --border: #e6e7eb;
   --border-strong: #d3d5db;
   --input: #e6e7eb;
-  --ring: #0ea5e9;
+  --ring: #10b981;
 
-  --chart-1: #0ea5e9;
-  --chart-2: #10b981;
-  --chart-3: #f59e0b;
+  --chart-1: #10b981;
+  --chart-2: #0f1115;
+  --chart-3: #d97706;
   --chart-4: #e11d48;
   --chart-5: #9ca3af;
 
   /* 侧边栏直接坐在画布上：同色、无边框 */
-  --sidebar: #f1f2f4;
+  --sidebar: #f7f8fa;
   --sidebar-foreground: #0f1115;
-  --sidebar-primary: #0ea5e9;
+  --sidebar-primary: #10b981;
   --sidebar-primary-foreground: #ffffff;
   --sidebar-accent: #ffffff;
   --sidebar-accent-foreground: #0f1115;
   --sidebar-border: #e6e7eb;
-  --sidebar-ring: #0ea5e9;
+  --sidebar-ring: #10b981;
 
-  --radius: 0.625rem;
+  --radius: 0.75rem;
 
   --shadow-l1: 0 1px 2px 0 rgb(15 17 21 / 0.04), 0 1px 1px 0 rgb(15 17 21 / 0.03);
   --shadow-l2: 0 6px 16px -6px rgb(15 17 21 / 0.1), 0 2px 6px -2px rgb(15 17 21 / 0.05);
@@ -90,32 +93,34 @@
 }
 
 .dark {
-  --canvas: #07080a;
-  --background: #101113;
+  --canvas: #0e1015;
+  --background: #161922;
   --foreground: #ededf0;
-  --card: #16181b;
+  --card: #161922;
   --card-foreground: #ededf0;
-  --popover: #1a1c20;
+  --popover: #1a1e28;
   --popover-foreground: #ededf0;
 
-  --primary: #ededf0;
-  --primary-foreground: #07080a;
-  --primary-hover: #ffffff;
-  --primary-active: #d4d6dc;
-  --primary-soft: #1d1f23;
-  --primary-border: #2a2c32;
+  --subtle: #1e222d;
 
-  --secondary: #1a1c20;
+  --primary: #ffffff;
+  --primary-foreground: #0e1015;
+  --primary-hover: #f4f5f7;
+  --primary-active: #d4d6dc;
+  --primary-soft: #1e222d;
+  --primary-border: #2a2f3a;
+
+  --secondary: #1e222d;
   --secondary-foreground: #ededf0;
-  --muted: #1a1c20;
+  --muted: #1e222d;
   --muted-foreground: #8e939c;
-  --accent: #1d1f23;
+  --accent: #222734;
   --accent-foreground: #ededf0;
   --destructive: #fb7185;
-  --destructive-foreground: #07080a;
+  --destructive-foreground: #0e1015;
 
-  --brand: #38bdf8;
-  --brand-soft: #0b1c26;
+  --brand: #34d399;
+  --brand-soft: #0b2a20;
 
   --success: #34d399;
   --success-soft: #052e24;
@@ -132,25 +137,25 @@
   --danger-text: #fda4af;
   --danger-border: #9f1239;
 
-  --border: #23252a;
-  --border-strong: #33363d;
-  --input: #23252a;
-  --ring: #38bdf8;
+  --border: #262b36;
+  --border-strong: #363c49;
+  --input: #262b36;
+  --ring: #34d399;
 
-  --chart-1: #38bdf8;
-  --chart-2: #34d399;
+  --chart-1: #34d399;
+  --chart-2: #ededf0;
   --chart-3: #fbbf24;
   --chart-4: #fb7185;
   --chart-5: #8e939c;
 
-  --sidebar: #07080a;
+  --sidebar: #0e1015;
   --sidebar-foreground: #ededf0;
-  --sidebar-primary: #38bdf8;
-  --sidebar-primary-foreground: #07080a;
-  --sidebar-accent: #1a1c20;
+  --sidebar-primary: #34d399;
+  --sidebar-primary-foreground: #0e1015;
+  --sidebar-accent: #1a1e28;
   --sidebar-accent-foreground: #ededf0;
-  --sidebar-border: #23252a;
-  --sidebar-ring: #38bdf8;
+  --sidebar-border: #262b36;
+  --sidebar-ring: #34d399;
 
   --shadow-l1: 0 1px 2px 0 rgb(0 0 0 / 0.4), 0 1px 1px 0 rgb(0 0 0 / 0.3);
   --shadow-l2: 0 6px 16px -6px rgb(0 0 0 / 0.5), 0 2px 6px -2px rgb(0 0 0 / 0.35);
@@ -160,6 +165,7 @@
 
 @theme inline {
   --color-canvas: var(--canvas);
+  --color-subtle: var(--subtle);
   --color-brand: var(--brand);
   --color-brand-soft: var(--brand-soft);
   --color-background: var(--background);
@@ -200,13 +206,17 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --radius-sm: calc(var(--radius) - 2px);
-  --radius-md: calc(var(--radius) + 1px);
-  --radius-lg: calc(var(--radius) + 5px);
-  --radius-xl: calc(var(--radius) + 9px);
+  /* 圆角刻度与 Tailwind 默认一致（sm4 / md6 / lg8 / xl12 / 2xl16）：
+     原型用的就是默认刻度，改基准会让全站控件比设计稿圆一圈。 */
+  --radius: 0.5rem;
+  /* 组件层局部覆盖：设计稿里按钮/输入框用 rounded-xl = 12px */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 
-  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-heading: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-heading: "Geist Variable", ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, monospace;
 
   --color-sidebar-ring: var(--sidebar-ring);
@@ -232,14 +242,23 @@
     @apply font-sans;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
-    /* 有/无滚动条的页面视口宽度差 15px，导航时整页横移一下；
-       预留滚动条槽位后视口宽度恒定，导航不再晃动 */
-    scrollbar-gutter: stable;
+    height: 100%;
+    /* 页面本体不滚动：滚动只发生在内容区的 main 里。
+       否则 main 的细滚动条和文档的粗滚动条会同时出现并互相咬合。 */
+    overflow: hidden;
   }
   body {
     @apply bg-canvas text-foreground;
+    height: 100%;
+    overflow: hidden;
     font-size: 14px;
     line-height: 20px;
+  }
+  /* 高度链：html → body → #root → SidebarProvider(h-full) → main。
+     缺了 #root 这一环时下游的 h-full 全部退化成 auto，
+      内容会把容器顶高、滚动落回文档层。 */
+  #root {
+    height: 100%;
   }
   .tabular-nums {
     font-variant-numeric: tabular-nums;
@@ -279,7 +298,42 @@
   }
 }
 
-/* 状态脉冲点 */
+/* ---------- 滚动条 ---------- */
+
+/* 跨浏览器超细滚动条（标准 scrollbar-width 与 WebKit 双写），
+   去掉 Windows 上那条又粗又带箭头的默认滚动条 */
+.thin-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(156 163 175 / 0.35) transparent;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.thin-scrollbar::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(156 163 175 / 0.35);
+  border-radius: 9999px;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgb(107 114 128 / 0.6);
+}
+
+/* 账号子列表底部柔和渐隐，暗示下方还能滚 */
+.sublist-fade-mask {
+  mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent 100%);
+}
+
+/* ---------- 状态脉冲点 ---------- */
+
 @keyframes pulse-dot {
   0%,
   100% {
@@ -293,6 +347,19 @@
 }
 .pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* 视图切换只淡入、不做垂直位移：位移会让整页在导航时「晃一下」 */
+@keyframes fade-only {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.view-panel {
+  animation: fade-only 0.16s ease-out;
 }
 
 /* 弹窗打开时暂停背景里的常驻动画。
@@ -338,4 +405,14 @@ body[data-scroll-locked] .hexagon-accent {
   stroke: color-mix(in srgb, var(--primary) 30%, transparent);
   stroke-width: 1;
   animation: hexagon-pulse 7s ease-in-out infinite;
+}
+
+/* 尊重「减少动态效果」：常驻动画与脉冲一律停下，界面仍完整可用 */
+@media (prefers-reduced-motion: reduce) {
+  .pulse-dot,
+  .hexagon-background,
+  .hexagon-accent,
+  .view-panel {
+    animation: none !important;
+  }
 }

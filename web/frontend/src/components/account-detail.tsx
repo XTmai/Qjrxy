@@ -1,4 +1,8 @@
-// 账号详情：任务 / 计划 / 记录 / 照片 / 设置 五个 tab（shadcn 版）。
+// 账号详情抽屉：任务 / 计划 / 记录 / 照片 / 设置 五个 tab，设置内支持子页下钻。
+//
+// 形态是右侧滑出的 540px Sheet 而不是居中 Dialog：账号详情里全是要对照着看
+// 的密集信息（任务窗口、指纹、坐标、照片池），横向空间比纵向更值钱；
+// 抽屉也不会把背后的账号列表整页盖住，切账号时不用反复关开。
 import { useEffect, useState } from "react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -9,24 +13,30 @@ import {
   DialogContent,
   DialogDescription,
   DialogFooter,
-  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 import {
   Bot,
   Check,
+  ChevronLeft,
   ChevronRight,
   ClipboardPaste,
+  Fingerprint,
+  ImageIcon,
   Loader2,
   LogIn,
   MapPin,
   QrCode,
+  TriangleAlert,
+  X,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime, relativeTime, taskState, taskTime } from "@/lib/task";
+import { cn } from "@/lib/utils";
 import { api } from "@/api";
 import type { Account, AccountPhoto, RunLog, RunOutcome, Task } from "@/lib/types";
 import { LoginBadge, RunStatusBadge, TaskStateBadge } from "@/components/status-badge";
@@ -40,16 +50,38 @@ import { LocationDialog } from "./location-dialog";
 
 export type DetailTab = "tasks" | "plans" | "records" | "photos" | "device";
 
+/** 设置页里可以下钻的子页 */
+export type DetailSubpage = "scan" | "manual" | "login" | "scan-login" | "range";
+
+const SUBPAGE_TITLE: Record<DetailSubpage, string> = {
+  scan: "重新扫码绑定设备",
+  manual: "手动填写设备信息",
+  login: "登录学校系统",
+  "scan-login": "扫码获取登录态",
+  range: "设置签到位置",
+};
+
+const TAB_LABEL: Record<DetailTab, string> = {
+  tasks: "查寝任务",
+  plans: "自动计划",
+  records: "执行记录",
+  photos: "照片",
+  device: "设置",
+};
+
 interface Props {
   account: Account;
   initialTab?: DetailTab;
+  /** 打开即下钻到某个设置子页（例如从调度页的健康度横幅跳过来） */
+  initialSubpage?: DetailSubpage | null;
   onClose: (deleted: boolean) => void;
 }
 
-export function AccountDetail({ account, initialTab = "tasks", onClose }: Props) {
-  // 弹窗内维护账号快照：上传照片/登录/设置位置后立即刷新，无需重开弹窗或刷新页面
+export function AccountDetail({ account, initialTab = "tasks", initialSubpage = null, onClose }: Props) {
+  // 抽屉内维护账号快照：上传照片/登录/设置位置后立即刷新，无需重开或刷新页面
   const [current, setCurrent] = useState<Account>(account);
   const [tab, setTab] = useState<DetailTab>(initialTab);
+  const [subpage, setSubpage] = useState<DetailSubpage | null>(initialSubpage);
   const [photos, setPhotos] = useState<AccountPhoto[]>([]);
   const [photosLoading, setPhotosLoading] = useState(true);
 
@@ -86,114 +118,222 @@ export function AccountDetail({ account, initialTab = "tasks", onClose }: Props)
   const needsPhoto = !photosLoading && !hasPhoto;
 
   return (
-    <Dialog open onOpenChange={(o) => !o && onClose(false)}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <Avatar size="lg">
-              <AvatarFallback className="bg-primary/10 text-primary text-sm font-bold">
-                {(current.alias || current.username).slice(0, 1)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <DialogTitle className="truncate">{current.alias || current.username}</DialogTitle>
-              <DialogDescription className="truncate">
-                {current.schoolName} · {current.username}
-              </DialogDescription>
+    <Sheet open onOpenChange={(o) => !o && onClose(false)}>
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className="w-full gap-0 p-0 sm:max-w-[540px]"
+      >
+        {subpage ? (
+          /* ── 子页头：下钻后主 Tab 让位，只留返回 + 标题 ── */
+          <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3.5">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 rounded-xl px-3 text-xs font-semibold"
+              onClick={() => setSubpage(null)}
+            >
+              <ChevronLeft className="size-3.5" />
+              返回设置
+            </Button>
+            <span className="text-sm font-bold">{SUBPAGE_TITLE[subpage]}</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground"
+              aria-label="关闭抽屉"
+              onClick={() => onClose(false)}
+            >
+              <X className="size-5" />
+            </Button>
+          </div>
+        ) : (
+          /* ── 一级头：账号身份 + 状态胶囊 + 5 段 Tab ── */
+          <div className="shrink-0 border-b border-border p-5 pb-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3.5">
+                <Avatar size="lg" className="size-11 rounded-2xl">
+                  <AvatarFallback className="rounded-2xl bg-[color:var(--subtle)] text-sm font-bold">
+                    {(current.alias || current.username).replace(/^2024级\s*/, "").slice(0, 1).toUpperCase()}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="min-w-0">
+                  <SheetTitle className="tracking-headline truncate font-mono text-lg font-bold">
+                    {current.alias || current.username}
+                  </SheetTitle>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {current.schoolName} · {current.username}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 text-muted-foreground"
+                aria-label="关闭抽屉"
+                onClick={() => onClose(false)}
+              >
+                <X className="size-5" />
+              </Button>
             </div>
-          </div>
-          {/* 关键状态：一眼看出还差什么 */}
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            <LoginBadge status={current.loginStatus} />
-            <Badge variant={current.deviceId ? "secondary" : "warning"}>
-              {current.deviceId ? current.deviceModel || "设备已绑定" : "设备未绑定"}
-            </Badge>
-            <Badge variant={hasPhoto ? "secondary" : "warning"}>
-              {poolCount > 0 ? `照片池 ${poolCount} 张` : current.photoUrl ? "已传照片" : "无照片"}
-            </Badge>
-            {current.address && <Badge variant="secondary">{current.address}</Badge>}
-          </div>
-        </DialogHeader>
 
-        {/* 待办：只列缺失项，点一下即处理 */}
-        {(needsLogin || needsDevice || needsPhoto) && (
-          <div className="bg-warning/10 border-warning/25 -mt-1 rounded-lg border px-3 py-2.5">
-            <p className="text-warning-strong text-[11px] font-medium">还需要完成</p>
-            <div className="mt-1.5 flex flex-wrap gap-2">
-              {needsLogin && (
-                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("device")}>
-                  登录账号
-                </Button>
-              )}
-              {needsDevice && (
-                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("device")}>
-                  扫码绑定设备
-                </Button>
-              )}
-              {needsPhoto && (
-                <Button size="sm" variant="outline" className="h-7 px-2.5 text-xs" onClick={() => setTab("photos")}>
-                  上传照片
-                </Button>
-              )}
+            {/* 关键状态：一眼看出还差什么 */}
+            <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
+              <LoginBadge status={current.loginStatus} />
+              <Badge variant={current.deviceId ? "secondary" : "warning"}>
+                {current.deviceModel || (current.deviceId ? "设备已绑定" : "设备未绑定")}
+              </Badge>
+              <Badge variant={hasPhoto ? "secondary" : "warning"}>
+                {poolCount > 0 ? `照片池 ${poolCount} 张` : current.photoUrl ? "已传照片" : "无照片"}
+              </Badge>
+              {current.address && <Badge variant="secondary">{current.address}</Badge>}
             </div>
+
+            <Tabs value={tab} onValueChange={(v) => setTab(v as DetailTab)} className="mt-4">
+              {/* 手机上 5 段横排每段只有 ~46px，四个汉字会折成竖排叠字；
+                  窄屏改 3+2 两行，宽到 sm 再回到一行五段。 */}
+              <TabsList className="grid !h-auto w-full auto-rows-fr grid-cols-3 gap-1 bg-[color:var(--subtle)] p-1 sm:grid-cols-5">
+                <TabsTrigger value="tasks" className="h-auto px-1 py-1.5 text-[13px]">
+                  {TAB_LABEL.tasks}
+                </TabsTrigger>
+                <TabsTrigger value="plans" className="h-auto px-1 py-1.5 text-[13px]">
+                  {TAB_LABEL.plans}
+                </TabsTrigger>
+                <TabsTrigger value="records" className="h-auto px-1 py-1.5 text-[13px]">
+                  {TAB_LABEL.records}
+                </TabsTrigger>
+                <TabsTrigger value="photos" className="h-auto px-1 py-1.5 text-[13px]">
+                  {TAB_LABEL.photos}
+                </TabsTrigger>
+                <TabsTrigger value="device" className="h-auto px-1 py-1.5 text-[13px]">
+                  {TAB_LABEL.device}
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
           </div>
         )}
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as DetailTab)}>
-          <TabsList className="bg-muted/50 w-full p-1">
-            <TabsTrigger value="tasks" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
-              查寝任务
-            </TabsTrigger>
-            <TabsTrigger value="plans" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
-              自动计划
-            </TabsTrigger>
-            <TabsTrigger value="records" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
-              执行记录
-            </TabsTrigger>
-            <TabsTrigger value="photos" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
-              照片
-            </TabsTrigger>
-            <TabsTrigger value="device" className="flex-1 px-2 text-[13px] sm:px-3 sm:text-sm">
-              设置
-            </TabsTrigger>
-          </TabsList>
+        {/* ── 抽屉主体：滚动区 ── */}
+        <div className="thin-scrollbar min-h-0 flex-1 overflow-y-auto p-5">
+          {subpage ? (
+            <SubpageBody subpage={subpage} account={current} onChanged={refreshAccount} />
+          ) : (
+            <Tabs value={tab} onValueChange={(v) => setTab(v as DetailTab)}>
+              {/* 待办清单：缺失项一行一条，点整行直达处理位置。
+                  比一排小胶囊更容易扫读，也不会在窄抽屉里换行挤成一团。 */}
+              {(needsLogin || needsDevice || needsPhoto) && (
+                <div className="mb-4 overflow-hidden rounded-xl border border-warning-border/70">
+                  <div className="flex items-center gap-1.5 border-b border-warning-border/50 bg-warning-soft/60 px-3.5 py-2">
+                    <TriangleAlert className="size-3.5 shrink-0 text-warning" />
+                    <span className="text-[11px] font-semibold text-warning-text">
+                      还需要完成 {[needsLogin, needsDevice, needsPhoto].filter(Boolean).length} 项
+                    </span>
+                  </div>
+                  <div className="divide-y divide-border bg-card">
+                    {needsLogin && (
+                      <TodoRow
+                        icon={LogIn}
+                        label="登录学校系统"
+                        hint="登录态已失效，无法同步任务"
+                        onClick={() => {
+                          setTab("device");
+                          setSubpage("login");
+                        }}
+                      />
+                    )}
+                    {needsDevice && (
+                      <TodoRow
+                        icon={Fingerprint}
+                        label="扫码绑定设备"
+                        hint="缺少设备指纹，提交会被拒绝"
+                        onClick={() => {
+                          setTab("device");
+                          setSubpage("scan");
+                        }}
+                      />
+                    )}
+                    {needsPhoto && (
+                      <TodoRow
+                        icon={ImageIcon}
+                        label="上传查寝照片"
+                        hint="要求照片的任务需要至少一张"
+                        onClick={() => setTab("photos")}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
 
-          <TabsContent value="tasks" className="m-0">
-            <TasksTab account={current} onChanged={refreshAccount} />
-          </TabsContent>
-          <TabsContent value="plans" className="m-0">
-            <PlansTab accountId={account.id} />
-          </TabsContent>
-          <TabsContent value="records" className="m-0">
-            <LogsTab accountId={account.id} />
-          </TabsContent>
-          <TabsContent value="photos" className="m-0">
-            <PhotoTab
-              account={current}
-              photos={photos}
-              loading={photosLoading}
-              onReload={loadPhotos}
-              onChanged={() => {
-                void refreshAccount();
-              }}
-            />
-          </TabsContent>
-          <TabsContent value="device" className="m-0">
-            <DeviceTab account={current} onChanged={refreshAccount} onDeleted={() => onClose(true)} />
-          </TabsContent>
-        </Tabs>
+              <TabsContent value="tasks" className="m-0">
+                <TasksTab account={current} onChanged={refreshAccount} />
+              </TabsContent>
+              <TabsContent value="plans" className="m-0">
+                <PlansTab accountId={account.id} />
+              </TabsContent>
+              <TabsContent value="records" className="m-0">
+                <LogsTab accountId={account.id} />
+              </TabsContent>
+              <TabsContent value="photos" className="m-0">
+                <PhotoTab
+                  account={current}
+                  photos={photos}
+                  loading={photosLoading}
+                  onReload={loadPhotos}
+                  onChanged={() => {
+                    void refreshAccount();
+                  }}
+                />
+              </TabsContent>
+              <TabsContent value="device" className="m-0">
+                <DeviceTab account={current} onDeleted={() => onClose(true)} onNavigate={setSubpage} />
+              </TabsContent>
+            </Tabs>
+          )}
+        </div>
 
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onClose(false)}>
+        {/* ── 底部栏 ── */}
+        <div className="flex shrink-0 items-center justify-between border-t border-border bg-[color:var(--subtle)]/40 p-4">
+          <span className="font-mono text-[11px] text-muted-foreground">按 ESC 键关闭抽屉</span>
+          <Button variant="outline" size="sm" className="h-8 px-4 text-xs" onClick={() => onClose(false)}>
             关闭
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
 /* ---------------- 任务 tab ---------------- */
+
+/** 待办清单里的一行：图标 + 标题 + 说明 + 右侧箭头，整行可点 */
+function TodoRow({
+  icon: Icon,
+  label,
+  hint,
+  onClick,
+}: {
+  icon: typeof LogIn;
+  label: string;
+  hint: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full cursor-pointer items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[color:var(--subtle)]"
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-warning-soft text-warning">
+        <Icon className="size-3.5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-xs font-semibold">{label}</span>
+        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">{hint}</span>
+      </span>
+      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+    </button>
+  );
+}
 
 function TasksTab({ account, onChanged }: { account: Account; onChanged: () => void }) {
   const accountId = account.id;
@@ -273,7 +413,7 @@ function TasksTab({ account, onChanged }: { account: Account; onChanged: () => v
   };
 
   return (
-    <div className="space-y-3 py-3">
+    <div className="space-y-2.5 py-1">
       <Button variant="outline" size="sm" className="w-full" disabled={syncing} onClick={() => void sync()}>
         {syncing ? <Loader2 className="size-4 animate-spin" /> : "拉取今日任务"}
       </Button>
@@ -283,43 +423,39 @@ function TasksTab({ account, onChanged }: { account: Account; onChanged: () => v
         </p>
       )}
       {loadError && (
-        <p className="text-danger-text bg-danger-soft rounded-lg px-3 py-2 text-xs">
+        <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger-text">
           {loadError}
-          <button type="button" className="ml-2 underline" onClick={() => void load()}>
+          <button type="button" className="ml-2 cursor-pointer underline" onClick={() => void load()}>
             重试
           </button>
         </p>
       )}
       {tasks && tasks.length === 0 && !loadError && (
-        <p className="text-muted-foreground py-4 text-center text-sm">暂无查寝任务，点上方按钮从学校同步</p>
+        <p className="py-6 text-center text-sm text-muted-foreground">
+          暂无查寝任务，点上方按钮从学校同步
+        </p>
       )}
       {tasks?.map((t) => {
         const st = taskState(t);
         return (
-          <div key={t.id} className="flex items-center gap-3 rounded-xl border p-3">
-            <div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg">
+          <div
+            key={t.id}
+            className="flex items-center gap-3 rounded-xl border border-border bg-[color:var(--subtle)]/60 p-3"
+          >
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground">
               <Bot className="size-4" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{t.taskName || "查寝"}</p>
-              <p className="text-muted-foreground mt-0.5 text-xs">{taskTime(t)}</p>
+              <p className="truncate text-xs font-semibold">{t.taskName || "查寝"}</p>
+              <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{taskTime(t)}</p>
             </div>
             <TaskStateBadge state={st} />
-            <Button
-              variant={st.runnable ? "default" : "ghost"}
-              size="sm"
-              disabled={!st.runnable || running !== null}
-              title={st.runnable ? "" : st.text}
-              onClick={() => void run(t)}
-            >
-              {running === t.signInstanceWid ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : st.runnable ? (
-                "执行"
-              ) : (
-                st.text
-              )}
-            </Button>
+            {/* 已完成的任务只留状态徽章，不再挂一个同样文字的禁用按钮 */}
+            {st.runnable && (
+              <Button size="sm" className="h-7 px-2.5 text-xs" disabled={running !== null} onClick={() => void run(t)}>
+                {running === t.signInstanceWid ? <Loader2 className="size-3.5 animate-spin" /> : "执行"}
+              </Button>
+            )}
           </div>
         );
       })}
@@ -348,23 +484,23 @@ function LogsTab({ accountId }: { accountId: number }) {
   }, [accountId]);
 
   return (
-    <div className="space-y-2 py-3">
+    <div className="space-y-2 py-1">
       {!logs && (
         <p className="text-muted-foreground flex items-center justify-center gap-2 py-3 text-sm">
           <Loader2 className="size-4 animate-spin" /> 加载中…
         </p>
       )}
-      {logs && logs.length === 0 && <p className="text-muted-foreground py-4 text-center text-sm">暂无执行记录</p>}
+      {logs && logs.length === 0 && <p className="text-muted-foreground py-6 text-center text-sm">暂无执行记录</p>}
       {logs?.map((l) => (
         <button
           key={l.id}
           type="button"
           onClick={() => setDetail(l)}
-          className="hover:bg-muted flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors"
+          className="flex w-full cursor-pointer items-center gap-3 rounded-xl border border-border bg-[color:var(--subtle)]/60 p-3 text-left transition-colors hover:bg-[color:var(--subtle)]"
         >
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm">{l.message || l.taskName}</p>
-            <p className="text-muted-foreground mt-0.5 text-xs">
+            <p className="truncate text-xs font-semibold">{l.message || l.taskName}</p>
+            <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
               {relativeTime(l.createdAt)} · {formatDateTime(l.createdAt)}
             </p>
           </div>
@@ -468,20 +604,15 @@ function LogDetailRows({ raw }: { raw: string }) {
 
 function DeviceTab({
   account,
-  onChanged,
   onDeleted,
+  onNavigate,
 }: {
   account: Account;
-  onChanged: () => void;
   onDeleted: () => void;
+  onNavigate: (sub: DetailSubpage) => void;
 }) {
   const { toast } = useToast();
   const { confirm, ConfirmDialog } = useConfirm();
-  const [showScan, setShowScan] = useState(false);
-  const [showManual, setShowManual] = useState(false);
-  const [showLogin, setShowLogin] = useState(false);
-  const [showLoginScan, setShowLoginScan] = useState(false);
-  const [showLocation, setShowLocation] = useState(false);
 
   const remove = async () => {
     try {
@@ -493,7 +624,13 @@ function DeviceTab({
     }
   };
 
-  const actions = [
+  const actions: Array<{
+    key: DetailSubpage;
+    title: string;
+    desc: string;
+    icon: typeof QrCode;
+    done: boolean;
+  }> = [
     {
       key: "scan",
       title: account.deviceId ? "重新扫码绑定" : "扫码绑定设备",
@@ -502,7 +639,6 @@ function DeviceTab({
         : "用平时打卡的手机扫一扫，自动获取设备信息",
       icon: QrCode,
       done: Boolean(account.deviceId),
-      run: () => setShowScan(true),
     },
     {
       key: "manual",
@@ -512,7 +648,6 @@ function DeviceTab({
         : "扫码拿不到时，手动粘贴设备 ID / UA 等字段",
       icon: ClipboardPaste,
       done: false,
-      run: () => setShowManual(true),
     },
     {
       key: "login",
@@ -525,14 +660,13 @@ function DeviceTab({
           : "选择账号密码或短信验证码登录",
       icon: LogIn,
       done: account.loginStatus === "authorized",
-      run: () => setShowLogin(true),
     },
     {
       key: "scan-login",
       title: "扫码获取登录态",
       desc: "用已登录今日校园的手机扫码，免密码换出学校会话",
       icon: QrCode,
-      run: () => setShowLoginScan(true),
+      done: false,
     },
     {
       key: "range",
@@ -544,47 +678,51 @@ function DeviceTab({
           : "填写高德坐标，或从学校签到任务读取",
       icon: MapPin,
       done: Boolean(account.address || (account.lon && account.lat)),
-      run: () => setShowLocation(true),
     },
   ];
 
   return (
-    <div className="space-y-3 py-3">
-      {/* 操作列表：每项说明状态 + 点击即执行 */}
-      <div className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+    <div className="space-y-2.5 py-1">
+      {/* 操作列表：每项说明状态 + 点击下钻到子页 */}
+      <div className="space-y-2.5">
         {actions.map((a) => (
           <button
             key={a.key}
             type="button"
-            onClick={a.run}
-            className="hover:bg-muted/50 flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors"
+            onClick={() => onNavigate(a.key)}
+            className="flex w-full items-center justify-between gap-3 rounded-xl border border-border bg-[color:var(--subtle)]/60 p-3.5 text-left transition-colors hover:bg-[color:var(--subtle)]"
           >
-            <span
-              className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${
-                a.done ? "bg-success/12 text-success" : "bg-muted text-muted-foreground"
-              }`}
-            >
-              <a.icon className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-medium">{a.title}</span>
-              <span className="text-muted-foreground block truncate text-xs">{a.desc}</span>
+            <span className="flex min-w-0 items-center gap-3">
+              <span
+                className={cn(
+                  "flex size-8 shrink-0 items-center justify-center rounded-lg",
+                  a.done
+                    ? "bg-success-soft text-success"
+                    : "bg-card text-muted-foreground",
+                )}
+              >
+                <a.icon className="size-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-bold">{a.title}</span>
+                <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                  {a.desc}
+                </span>
+              </span>
             </span>
             {a.done ? (
               <Check className="size-4 shrink-0 text-success" />
             ) : (
-              <ChevronRight className="text-muted-foreground/50 size-4 shrink-0" />
+              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
             )}
           </button>
         ))}
       </div>
 
-      {/* 照片已迁到独立的「照片」tab：池 + 单张兜底 */}
-
       <Button
         variant="ghost"
         size="sm"
-        className="text-destructive w-full"
+        className="text-destructive mt-2 w-full"
         onClick={async () => {
           const ok = await confirm({
             title: "删除账号",
@@ -598,69 +736,95 @@ function DeviceTab({
         删除账号
       </Button>
 
-      {showLogin && (
-        <SchoolLoginDialog
-          account={account}
-          onClose={(loggedIn) => {
-            setShowLogin(false);
-            if (loggedIn) {
-              toast({ title: "登录成功" });
-              onChanged();
-            }
-          }}
-        />
-      )}
-
-      {showLocation && (
-        <LocationDialog
-          account={account}
-          onClose={(saved) => {
-            setShowLocation(false);
-            if (saved) {
-              toast({ title: "位置已保存" });
-              onChanged();
-            }
-          }}
-        />
-      )}
-
-      {showManual && (
-        <DeviceManualDialog
-          account={account}
-          onClose={(changed) => {
-            setShowManual(false);
-            if (changed) onChanged();
-          }}
-        />
-      )}
-
-      {showScan && (
-        <DeviceScanDialog
-          accountId={account.id}
-          onClose={(collected) => {
-            setShowScan(false);
-            if (collected) {
-              toast({ title: "设备已绑定" });
-              onChanged();
-            }
-          }}
-        />
-      )}
-
-      {showLoginScan && (
-        <LoginScanDialog
-          accountId={account.id}
-          onClose={(collected) => {
-            setShowLoginScan(false);
-            if (collected) {
-              toast({ title: "登录态已更新" });
-              onChanged();
-            }
-          }}
-        />
-      )}
-
       {ConfirmDialog}
     </div>
+  );
+}
+
+/**
+ * 设置子页的落地内容。
+ *
+ * 每个子页只做一件事，进入后主 Tab 消失、只留返回按钮——比在抽屉里再叠一层
+ * 弹窗干净得多，也避免「关掉弹窗发现连抽屉一起关了」的经典翻车。
+ */
+function SubpageBody({
+  subpage,
+  account,
+  onChanged,
+}: {
+  subpage: DetailSubpage;
+  account: Account;
+  onChanged: () => void;
+}) {
+  const { toast } = useToast();
+
+  if (subpage === "login") {
+    return (
+      <SchoolLoginDialog
+        account={account}
+        onClose={(loggedIn) => {
+          if (loggedIn) {
+            toast({ title: "登录成功" });
+            onChanged();
+          }
+        }}
+        embedded
+      />
+    );
+  }
+
+  if (subpage === "range") {
+    return (
+      <LocationDialog
+        account={account}
+        onClose={(saved) => {
+          if (saved) {
+            toast({ title: "位置已保存" });
+            onChanged();
+          }
+        }}
+        embedded
+      />
+    );
+  }
+
+  if (subpage === "manual") {
+    return (
+      <DeviceManualDialog
+        account={account}
+        onClose={(changed) => {
+          if (changed) onChanged();
+        }}
+        embedded
+      />
+    );
+  }
+
+  if (subpage === "scan") {
+    return (
+      <DeviceScanDialog
+        accountId={account.id}
+        onClose={(collected) => {
+          if (collected) {
+            toast({ title: "设备已绑定" });
+            onChanged();
+          }
+        }}
+        embedded
+      />
+    );
+  }
+
+  return (
+    <LoginScanDialog
+      accountId={account.id}
+      onClose={(collected) => {
+        if (collected) {
+          toast({ title: "登录态已更新" });
+          onChanged();
+        }
+      }}
+      embedded
+    />
   );
 }

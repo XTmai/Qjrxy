@@ -1,4 +1,4 @@
-// 账号页：搜索/过滤 + 大卡片列表（指纹/照片/位置/计划四块）+ 单卡片创建（保存即登录）+ 批量登录态检测 + 详情弹窗。
+// 账号页：搜索/过滤 + 双列卡片（指纹/照片/位置/计划四块）+ 单卡片创建（保存即登录）+ 批量登录态检测 + 右侧详情抽屉。
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
@@ -12,11 +12,12 @@ import {
   QrCode,
   Search,
   Settings2,
+  ShieldCheck,
   Upload,
+  Users,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogBody,
@@ -51,9 +52,7 @@ import { CaptchaDialog } from "@/components/captcha-dialog";
 import { DeviceScanDialog } from "@/components/device-scan-dialog";
 import { LoginScanDialog } from "@/components/login-scan-dialog";
 import { LoginBadge } from "@/components/status-badge";
-import { EmptyBanner } from "@/components/empty-banner";
-import { PageHeader } from "@/components/page-header";
-import { maskUser } from "@/lib/utils";
+import { cn, maskUser } from "@/lib/utils";
 import type { Account, LoginChallenge, School } from "@/lib/types";
 
 type StatusFilter = "all" | "needs-login" | "needs-device";
@@ -192,120 +191,136 @@ export function AccountsPage() {
   const detail = accounts?.find((a) => a.id === detailId) ?? null;
 
   return (
-    <div className="space-y-5">
-      <PageHeader
-        title="账号"
-        sub={accounts ? `已绑定 ${accounts.length} 个账号` : undefined}
-        actions={
-          <>
-            {accounts && accounts.length > 0 && (
-              <Button variant="outline" size="sm" disabled={probe.isPending} onClick={probeAll}>
-                {probe.isPending ? <Loader2 className="size-4 animate-spin" /> : "检测登录态"}
-              </Button>
-            )}
-            <Button variant="outline" size="sm" onClick={() => setShowImport(true)}>
-              <Upload className="size-3.5" />
-              导入
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" disabled={!accounts || accounts.length === 0}>
-                  <Download className="size-3.5" />
-                  导出
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuLabel className="text-muted-foreground text-[10px] uppercase">
-                  不含密码 · 含登录态
-                </DropdownMenuLabel>
-                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("csv", true, false)}>
-                  CSV
-                </DropdownMenuItem>
-                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("json", true, false)}>
-                  JSON
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuLabel className="text-muted-foreground text-[10px] uppercase">
-                  含密码（明文，谨慎）
-                </DropdownMenuLabel>
-                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("csv", true, true)}>
-                  CSV + 密码
-                </DropdownMenuItem>
-                <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("json", true, true)}>
-                  JSON + 密码
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button variant="default" size="sm" onClick={() => setShowCreate(true)}>
-              <Plus className="size-3.5" />
-              添加账号
-            </Button>
-          </>
-        }
-      />
-
-      {/* 搜索 + 过滤 chips */}
-      {accounts && accounts.length > 0 && (
+    <div className="view-panel space-y-5">
+      {/* 页面标题 + 次级操作 */}
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div>
+          <h1 className="tracking-headline text-2xl font-bold">账号</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            已绑定 <span className="font-semibold text-foreground">{accounts?.length ?? 0}</span> 个账号 ·
+            点击任意卡片打开管理抽屉
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative w-full sm:w-auto sm:flex-1 sm:min-w-48">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2" />
+          {accounts && accounts.length > 0 && (
+            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={probe.isPending} onClick={probeAll}>
+              {probe.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <ShieldCheck className="size-3.5 text-success" />
+              )}
+              检测登录态
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setShowImport(true)}>
+            <Upload className="size-3.5" />
+            导入
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" disabled={!accounts || accounts.length === 0}>
+                <Download className="size-3.5" />
+                导出
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 rounded-xl">
+              <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase">
+                不含密码 · 含登录态
+              </DropdownMenuLabel>
+              <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("csv", true, false)}>
+                CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("json", true, false)}>
+                JSON
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] text-muted-foreground uppercase">
+                含密码（明文，谨慎）
+              </DropdownMenuLabel>
+              <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("csv", true, true)}>
+                CSV + 密码
+              </DropdownMenuItem>
+              <DropdownMenuItem className="cursor-pointer text-xs" onClick={() => void doExport("json", true, true)}>
+                JSON + 密码
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={() => setShowCreate(true)}>
+            <Plus className="size-3.5" />
+            添加账号
+          </Button>
+        </div>
+      </div>
+
+      {/* 搜索 + 状态筛选胶囊 */}
+      {accounts && accounts.length > 0 && (
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索别名、学号或学校"
-              className="pl-9"
+              placeholder="搜索别名、学号或学校..."
+              className="h-9 rounded-xl bg-[color:var(--subtle)] pl-10 text-xs focus:bg-card"
             />
           </div>
-          {(
-            [
-              ["all", "全部"],
-              ["needs-login", "需登录"],
-              ["needs-device", "待扫码"],
-            ] as const
-          ).map(([key, label]) => (
-            <Button
-              key={key}
-              variant={statusFilter === key ? "secondary" : "ghost"}
-              size="sm"
-              className={statusFilter === key ? "" : "text-muted-foreground"}
-              onClick={() => setStatusFilter(key)}
-            >
-              {label}
-            </Button>
-          ))}
+          <div className="inline-flex self-start rounded-xl border border-border bg-[color:var(--subtle)] p-1">
+            {(
+              [
+                ["all", "全部"],
+                ["needs-login", "需登录"],
+                ["needs-device", "待扫码"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setStatusFilter(key)}
+                className={cn(
+                  "cursor-pointer rounded-lg px-3 py-1 text-xs font-medium transition-colors",
+                  statusFilter === key
+                    ? "bg-card font-semibold text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
       {!accounts && (
-        <div className="space-y-3">
-          {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-24 rounded-lg" />
+        <div className="grid gap-4 lg:grid-cols-2">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-52 rounded-2xl" />
           ))}
         </div>
       )}
 
       {accounts && accounts.length === 0 && (
-        <EmptyBanner
-          tone="destructive"
-          title="还没有绑定账号"
-          description="添加今日校园账号后即可自动查寝。学校 + 学号 + 密码，保存后自动登录。"
-          action={
-            <Button variant="destructive" size="sm" onClick={() => setShowCreate(true)}>
-              去添加
-            </Button>
-          }
-        />
+        <div className="rounded-2xl border border-border bg-card p-8 text-center">
+          <div className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-[color:var(--subtle)]">
+            <Users className="size-5 text-muted-foreground" />
+          </div>
+          <h2 className="mt-3 text-sm font-bold">还没有绑定账号</h2>
+          <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
+            添加今日校园账号后即可自动查寝。学校 + 学号 + 密码，保存后自动登录。
+          </p>
+          <Button size="sm" className="mt-4 h-8 gap-1.5 text-xs" onClick={() => setShowCreate(true)}>
+            <Plus className="size-3.5" />
+            去添加
+          </Button>
+        </div>
       )}
 
       {accounts && accounts.length > 0 && filtered.length === 0 && (
-        <Card>
-          <CardContent className="text-muted-foreground py-10 text-center text-sm">
-            没有匹配的账号
-          </CardContent>
-        </Card>
+        <div className="rounded-2xl border border-border bg-card py-12 text-center text-sm text-muted-foreground">
+          没有匹配的账号
+        </div>
       )}
 
-      {/* 大卡片两列网格（独立 memo：打开弹窗只改 detailId，不波及列表） */}
+      {/* 双列 Bento 卡片网格（独立 memo：打开抽屉只改 detailId，不波及列表） */}
       <AccountGrid
         accounts={filtered}
         planCounts={planCounts}
@@ -440,14 +455,14 @@ const AccountCard = memo(function AccountCard({
   return (
     <div
       onClick={() => onOpen(account.id)}
-      className="bg-card border-border hover:border-border-strong cursor-pointer rounded-xl border p-4 transition-colors"
+      className="cursor-pointer space-y-3.5 rounded-2xl border border-border bg-card p-4 shadow-xs transition-colors hover:border-border-strong sm:p-5"
     >
       {/* 头部：头像 + 身份 + 状态 */}
       <div className="flex items-start gap-3">
         <span className="relative shrink-0">
-          <Avatar size="lg">
-            <AvatarFallback className="bg-primary-soft text-primary text-sm font-bold">
-              {(account.alias || account.username).slice(0, 1)}
+          <Avatar size="lg" className="size-10 rounded-full">
+            <AvatarFallback className="rounded-full border border-border bg-[color:var(--subtle)] text-[11px] font-bold text-foreground">
+              {(account.alias || account.username).replace(/^2024级\s*/, "").slice(0, 1)}
             </AvatarFallback>
           </Avatar>
           {/* 登录状态脉冲点 */}
@@ -463,17 +478,17 @@ const AccountCard = memo(function AccountCard({
         </span>
         <button type="button" onClick={() => onOpen(account.id)} className="min-w-0 flex-1 text-left">
           <div className="flex flex-wrap items-center gap-2">
-            <p className="truncate text-sm font-semibold">{account.alias || account.username}</p>
+            <p className="truncate font-mono text-sm font-bold">{account.alias || account.username}</p>
             <LoginBadge status={account.loginStatus} />
           </div>
-          <p className="text-muted-foreground mt-0.5 truncate font-mono text-[11px]">
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {maskUser(account.username)} · {account.schoolName}
           </p>
         </button>
       </div>
 
-      {/* 四块网格：缺失项琥珀高亮（内部有独立动作，点击不冒泡到整卡） */}
-      <div className="mt-3.5 grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
+      {/* 四块网格：缺失项只用少量语义色提示（内部有独立动作，点击不冒泡到整卡） */}
+      <div className="grid grid-cols-2 gap-2.5" onClick={(e) => e.stopPropagation()}>
         <InfoBlock
           icon={Fingerprint}
           label="设备指纹"
@@ -516,12 +531,9 @@ const AccountCard = memo(function AccountCard({
       </div>
 
       {/* 操作区：登录/扫码 优先，管理常驻 */}
-      <div
-        className="border-border mt-3.5 flex flex-wrap gap-2 border-t pt-3"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
         {needsLogin && (
-          <Button variant="default" size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onLogin(account.id)}>
+          <Button size="sm" className="h-8 flex-1 gap-1 text-xs" onClick={() => onLogin(account.id)}>
             {needsDevice ? "登录账号" : "重新登录"}
           </Button>
         )}
@@ -543,7 +555,7 @@ const AccountCard = memo(function AccountCard({
             管理账号
           </Button>
         )}
-        <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => onOpen(account.id)}>
+        <Button variant="ghost" size="sm" className="h-8 px-3 text-xs" onClick={() => onOpen(account.id)}>
           详情
         </Button>
       </div>
@@ -570,31 +582,35 @@ function InfoBlock({
   // 缩略图可能 404（照片被换/账号被清），失败时直接不占位，别留一个破图标
   const [thumbFailed, setThumbFailed] = useState(false);
   return (
-    <div className="border-border/70 bg-muted/40 rounded-lg border p-2.5">
+    <div className="rounded-xl border border-border bg-[color:var(--subtle)]/60 p-3">
       <div className="flex items-center gap-1.5">
-        <Icon className={`size-3 ${ok ? "text-muted-foreground" : "text-warning"}`} />
-        <span className="text-muted-foreground tracking-label truncate text-[10px] font-medium uppercase">
+        <Icon className={cn("size-3 shrink-0", ok ? "text-muted-foreground" : "text-warning")} />
+        <span className="truncate text-[11px] font-medium text-muted-foreground">
           {label}
         </span>
         {thumb && !thumbFailed && (
           <img
             src={thumb}
             alt={label}
-            className="ring-border ml-auto size-6 rounded object-cover ring-1"
+            className="ml-auto size-6 rounded border border-border object-cover"
             loading="lazy"
             decoding="async"
             onError={() => setThumbFailed(true)}
           />
         )}
       </div>
-      <p className={`mt-1.5 truncate text-xs font-medium ${ok ? "" : "text-muted-foreground"}`} title={value}>
+      {/* 设备指纹这类长值在手机上允许折两行，别截成「24031PN0DC · A…」 */}
+      <p
+        className={cn("mt-1 line-clamp-2 text-xs font-semibold break-words", !ok && "text-muted-foreground")}
+        title={value}
+      >
         {value}
       </p>
       {action && (
         <button
           type="button"
           onClick={action.onClick}
-          className="text-muted-foreground hover:text-foreground mt-1 text-[10px] font-medium hover:underline hover:underline-offset-2"
+          className="mt-1 cursor-pointer text-[10px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
           {action.text} →
         </button>

@@ -14,7 +14,6 @@ import { useTheme } from "@/lib/theme";
 import { QQ_GROUP_URL } from "@/lib/links";
 import { api } from "@/api";
 import { useToast } from "@/hooks/use-toast";
-import { PageHeader } from "@/components/page-header";
 import { setToken } from "@/api/client";
 import type { AdminConfig } from "@/lib/types";
 
@@ -82,41 +81,48 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <PageHeader title="设置" sub={user ? `当前登录：${user.nickname || user.username}` : undefined} />
+    <div className="view-panel space-y-5">
+      <div>
+        <h1 className="tracking-headline text-2xl font-bold">设置</h1>
+        <p className="mt-1 text-xs text-muted-foreground">
+          当前登录：
+          <span className="font-mono font-semibold text-foreground">{user?.nickname || user?.username || "—"}</span>
+          {" · "}整合个人偏好与全局系统管理
+        </p>
+      </div>
 
       <Tabs value={tab} onValueChange={(v) => switchTab(v as Tab)}>
-        <TabsList className="bg-muted/50 w-full p-1">
-          <TabsTrigger value="appearance" className="flex-1 px-6">
+        <TabsList className="grid !h-auto w-full auto-rows-fr grid-cols-2 gap-1 bg-[color:var(--subtle)] p-1 sm:grid-cols-4">
+          <TabsTrigger value="appearance" className="h-auto px-2 py-1.5 sm:px-6">
             外观
           </TabsTrigger>
-          <TabsTrigger value="security" className="flex-1 px-6">
+          <TabsTrigger value="security" className="h-auto px-2 py-1.5 sm:px-6">
             安全
           </TabsTrigger>
           {quotaOn && (
-            <TabsTrigger value="quota" className="flex-1 px-6">
+            <TabsTrigger value="quota" className="h-auto px-2 py-1.5 sm:px-6">
               额度
             </TabsTrigger>
           )}
           {isAdmin && (
-            <TabsTrigger value="admin" className="flex-1 px-6">
+            <TabsTrigger value="admin" className="h-auto px-2 py-1.5 sm:px-6">
               管理员
             </TabsTrigger>
           )}
-          <TabsTrigger value="about" className="flex-1 px-6">
+          <TabsTrigger value="about" className="h-auto px-2 py-1.5 sm:px-6">
             关于
           </TabsTrigger>
         </TabsList>
 
         {/* 外观 */}
         <TabsContent value="appearance" className="m-0 space-y-5">
-          <Card className="border-border/50">
+          <Card className="border-border">
             <CardHeader>
-              <CardTitle className="text-base">外观主题</CardTitle>
-              <CardDescription>选择界面的配色方案</CardDescription>
+              <CardTitle className="tracking-headline text-sm font-bold">外观主题</CardTitle>
+              <CardDescription className="text-xs">选择界面的配色方案</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {(
                   [
                     { key: "light", label: "浅色", bg: "bg-white", fg: "bg-neutral-200", accent: "bg-neutral-900" },
@@ -127,14 +133,15 @@ export function SettingsPage() {
                     key={t.key}
                     type="button"
                     onClick={() => setTheme(t.key)}
-                    className={`flex flex-col items-center gap-3 rounded-xl border p-4 transition-all ${
+                    aria-pressed={theme === t.key}
+                    className={`flex cursor-pointer flex-col items-center gap-3 rounded-2xl border p-4 text-center transition-colors ${
                       theme === t.key
-                        ? "border-foreground/25 bg-card shadow-l1"
-                        : "border-border/60 hover:border-border-strong"
+                        ? "border-2 border-foreground bg-card"
+                        : "border border-border hover:border-border-strong"
                     }`}
                   >
                     {/* mini 预览 */}
-                    <div className={`h-16 w-full overflow-hidden rounded-lg border border-border/50 ${t.bg}`}>
+                    <div className={`h-16 w-full overflow-hidden rounded-xl border border-border/50 ${t.bg}`}>
                       <div className="flex h-full flex-col gap-1 p-2">
                         <div className={`h-2 w-1/3 rounded-full ${t.accent}`} />
                         <div className={`h-1.5 w-2/3 rounded-full ${t.fg}`} />
@@ -142,10 +149,14 @@ export function SettingsPage() {
                         <div className={`mt-auto h-3 w-full rounded ${t.fg} opacity-40`} />
                       </div>
                     </div>
-                    <span className={`text-sm font-medium ${theme === t.key ? "text-primary" : "text-muted-foreground"}`}>
+                    <span className={`text-xs font-bold ${theme === t.key ? "text-foreground" : "text-muted-foreground"}`}>
                       {t.label}
                     </span>
-                    {theme === t.key && <Badge variant="default">当前</Badge>}
+                    {theme === t.key && (
+                      <span className="rounded-full bg-foreground px-3 py-0.5 text-[11px] font-semibold text-background">
+                        当前
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
@@ -156,9 +167,9 @@ export function SettingsPage() {
         {/* 安全 */}
         <TabsContent value="security" className="m-0 space-y-5">
           {singleUser ? (
-            <Card className="border-border/50">
+            <Card className="border-border">
               <CardHeader>
-                <CardTitle className="text-base">单用户模式</CardTitle>
+                <CardTitle className="tracking-headline text-sm font-bold">单用户模式</CardTitle>
                 <CardDescription>
                   当前以单用户模式运行：打开即用，无需账号密码，数据只保存在本机。
                   如需多人使用并开启登录，请在服务端设置环境变量 QINGJIN_MULTI_USER=true 后重启。
@@ -166,9 +177,9 @@ export function SettingsPage() {
               </CardHeader>
             </Card>
           ) : (
-            <Card className="border-border/50">
+            <Card className="border-border">
               <CardHeader>
-                <CardTitle className="text-base">修改登录密码</CardTitle>
+                <CardTitle className="tracking-headline text-sm font-bold">修改登录密码</CardTitle>
                 <CardDescription>用于登录本系统的密码，与今日校园的密码无关</CardDescription>
               </CardHeader>
               <CardContent className="max-w-2xl space-y-4">
@@ -191,7 +202,7 @@ export function SettingsPage() {
                     autoComplete="new-password"
                   />
                 </Field>
-                {pwError && <p className="text-destructive text-sm">{pwError}</p>}
+                {pwError && <p className="text-sm font-medium text-danger">{pwError}</p>}
                 <Button variant="default" size="sm" disabled={busy} onClick={() => void changePassword()}>
                   更新密码
                 </Button>

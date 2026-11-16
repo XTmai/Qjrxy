@@ -1,18 +1,18 @@
-// 语义状态徽章：openilink 的 Badge 只有 4 个 variant，状态色用类名映射补齐。
+// 语义状态徽章：全部走设计令牌，深色模式自动跟随，不再硬编码调色板。
 import { Badge } from "@/components/ui/badge";
 import type { TaskState } from "@/lib/task";
 
 const toneClasses: Record<string, string> = {
-  ok: "border-transparent bg-green-500/15 text-green-700 dark:bg-green-500/20 dark:text-green-400",
-  warn: "border-transparent bg-amber-500/15 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400",
-  err: "border-transparent bg-red-500/15 text-red-700 dark:bg-red-500/20 dark:text-red-400",
-  info: "border-transparent bg-blue-500/15 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400",
-  plain: "border-transparent bg-muted text-muted-foreground",
+  ok: "border-success-border/60 bg-success-soft text-success-text",
+  warn: "border-warning-border/60 bg-warning-soft text-warning-text",
+  err: "border-danger-border/60 bg-danger-soft text-danger-text",
+  info: "border-border bg-[color:var(--subtle)] text-muted-foreground",
+  plain: "border-border bg-[color:var(--subtle)] text-muted-foreground",
 };
 
 export function StatusBadge({ tone, text }: { tone: string; text: string }) {
   return (
-    <Badge variant="outline" className={toneClasses[tone] ?? toneClasses.plain}>
+    <Badge variant="outline" className={`border ${toneClasses[tone] ?? toneClasses.plain}`}>
       {text}
     </Badge>
   );

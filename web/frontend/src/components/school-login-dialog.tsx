@@ -12,7 +12,6 @@ import {
   DialogBody,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -23,9 +22,11 @@ type Method = "password" | "sms";
 interface Props {
   account: Account;
   onClose: (loggedIn: boolean) => void;
+  /** 嵌在账号抽屉的子页里：只渲染表单，不套 Dialog 壳 */
+  embedded?: boolean;
 }
 
-export function SchoolLoginDialog({ account, onClose }: Props) {
+export function SchoolLoginDialog({ account, onClose, embedded = false }: Props) {
   const [method, setMethod] = useState<Method>("password");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -179,16 +180,10 @@ export function SchoolLoginDialog({ account, onClose }: Props) {
   };
   const action = primary();
 
-  return (
-    <Dialog open onOpenChange={(o) => !o && !busy && onClose(false)}>
-      <DialogContent className="max-w-sm">
-        <DialogTitle>登录学校系统</DialogTitle>
-        <DialogDescription className="truncate">
-          {account.schoolName} · {account.username}
-        </DialogDescription>
-        <DialogBody className="space-y-4">
+  const body = (
+    <div className="space-y-4">
           {/* 二选一：两种认证因子并列，避免看起来像两个独立功能 */}
-          <div className="bg-muted grid grid-cols-2 gap-1 rounded-lg p-1">
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-[color:var(--subtle)] p-1">
             {(
               [
                 ["password", "账号密码"],
@@ -199,8 +194,10 @@ export function SchoolLoginDialog({ account, onClose }: Props) {
                 key={m}
                 type="button"
                 onClick={() => switchMethod(m)}
-                className={`rounded-md py-1.5 text-sm transition-colors ${
-                  method === m ? "bg-background text-foreground font-medium shadow-sm" : "text-muted-foreground"
+                className={`cursor-pointer rounded-lg py-1.5 text-sm transition-colors ${
+                  method === m
+                    ? "bg-card font-semibold text-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {label}
@@ -328,16 +325,29 @@ export function SchoolLoginDialog({ account, onClose }: Props) {
             </div>
           )}
 
-          {error && <p className="text-destructive text-xs">{error}</p>}
-        </DialogBody>
-        <DialogFooter>
-          <Button variant="ghost" disabled={busy} onClick={() => onClose(false)}>
-            取消
-          </Button>
-          <Button disabled={action.disabled} onClick={() => void action.run()}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : action.label}
-          </Button>
-        </DialogFooter>
+          {error && <p className="text-xs font-medium text-danger">{error}</p>}
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <Button variant="ghost" disabled={busy} onClick={() => onClose(false)}>
+          取消
+        </Button>
+        <Button disabled={action.disabled} onClick={() => void action.run()}>
+          {busy ? <Loader2 className="size-4 animate-spin" /> : action.label}
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (embedded) return body;
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose(false)}>
+      <DialogContent className="max-w-sm">
+        <DialogTitle>登录学校系统</DialogTitle>
+        <DialogDescription className="truncate">
+          {account.schoolName} · {account.username}
+        </DialogDescription>
+        <DialogBody>{body}</DialogBody>
       </DialogContent>
     </Dialog>
   );

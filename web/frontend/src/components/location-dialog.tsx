@@ -8,7 +8,6 @@ import {
   DialogBody,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -66,9 +65,12 @@ export function parseCoordinateText(raw: string): { lon: number; lat: number } |
 export function LocationDialog({
   account,
   onClose,
+  embedded = false,
 }: {
   account: Account;
   onClose: (saved: boolean) => void;
+  /** 嵌在账号抽屉的子页里：只渲染内容，不套 Dialog 壳 */
+  embedded?: boolean;
 }) {
   const [lon, setLon] = useState(account.lon ? account.lon.toFixed(6) : "");
   const [lat, setLat] = useState(account.lat ? account.lat.toFixed(6) : "");
@@ -157,6 +159,120 @@ export function LocationDialog({
     }
   };
 
+  const body = (
+    <div className={embedded ? "space-y-4" : "space-y-4"}>
+      {/* 取点指引：不内置地图，避免开源项目绑定地图 key */}
+      <div className="space-y-1.5 rounded-xl border border-border bg-[color:var(--subtle)]/70 p-3">
+        <p className="flex items-center gap-1.5 text-xs font-semibold">
+          <MapPin className="size-3.5" />
+          不知道坐标？用高德地图拾取
+        </p>
+        <ol className="list-decimal space-y-0.5 pl-4 text-[11px] text-muted-foreground">
+          <li>
+            打开{" "}
+            <a
+              href={AMAP_PICKER_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-success underline underline-offset-2"
+            >
+              高德坐标拾取页
+              <ExternalLink className="size-3" />
+            </a>
+          </li>
+          <li>搜索或缩放到宿舍楼，点击地图上的点</li>
+          <li>复制「经度,纬度」，粘贴到下面</li>
+        </ol>
+        <p className="text-[11px] text-muted-foreground">
+          拾取页返回的是 GCJ-02 坐标，与国内校园 App 常用坐标系一致。不要使用
+          Google/OSM 的 WGS-84 坐标，否则会有几百米偏移。
+        </p>
+      </div>
+
+      <div className="flex gap-2">
+        <Input
+          value={paste}
+          onChange={(e) => setPaste(e.target.value)}
+          onPaste={(e) => onPaste(e.clipboardData.getData("text"), () => e.preventDefault())}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              applyPaste();
+            }
+          }}
+          placeholder="粘贴坐标：116.397428,39.909230"
+          autoComplete="off"
+          className="font-mono"
+        />
+        <Button variant="outline" onClick={applyPaste} disabled={!paste.trim()}>
+          识别
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field>
+          <FieldLabel htmlFor="loc-lon">经度</FieldLabel>
+          <Input
+            id="loc-lon"
+            value={lon}
+            onChange={(e) => setLon(e.target.value)}
+            placeholder="116.397428"
+            inputMode="decimal"
+            autoComplete="off"
+            className="font-mono"
+          />
+        </Field>
+        <Field>
+          <FieldLabel htmlFor="loc-lat">纬度</FieldLabel>
+          <Input
+            id="loc-lat"
+            value={lat}
+            onChange={(e) => setLat(e.target.value)}
+            placeholder="39.909230"
+            inputMode="decimal"
+            autoComplete="off"
+            className="font-mono"
+          />
+        </Field>
+      </div>
+
+      <Field>
+        <FieldLabel htmlFor="loc-address">位置名称（可选）</FieldLabel>
+        <Input
+          id="loc-address"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder="如：XX大学 3 号宿舍楼"
+          autoComplete="off"
+        />
+        <FieldDescription>仅用于界面显示，不影响提交。</FieldDescription>
+      </Field>
+
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="ghost" size="sm" onClick={() => void readFromSchool()} disabled={reading}>
+          {reading ? <Loader2 className="size-3.5 animate-spin" /> : <MapPin className="size-3.5" />}
+          从学校读取签到点
+        </Button>
+        <span className="text-[11px] text-muted-foreground">学校下发的最准确</span>
+      </div>
+
+      {error && <p className="text-xs font-medium text-danger">{error}</p>}
+      {!error && hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <Button variant="ghost" onClick={() => onClose(false)} disabled={busy}>
+          取消
+        </Button>
+        <Button onClick={() => void save()} disabled={busy || reading}>
+          {busy && <Loader2 className="size-3.5 animate-spin" />}
+          保存位置
+        </Button>
+      </div>
+    </div>
+  );
+
+  if (embedded) return body;
+
   return (
     <Dialog open onOpenChange={(o) => !o && !busy && onClose(false)}>
       <DialogContent className="max-w-md">
@@ -166,110 +282,7 @@ export function LocationDialog({
             {account.alias || account.username} · 提交查寝时使用这组坐标
           </DialogDescription>
         </DialogHeader>
-
-        <DialogBody className="space-y-4">
-          {/* 取点指引：不内置地图，避免开源项目绑定地图 key */}
-          <div className="bg-muted/50 border-border space-y-1.5 rounded-lg border p-3">
-            <p className="text-xs font-medium">不知道坐标？用高德地图拾取</p>
-            <ol className="text-muted-foreground list-decimal space-y-0.5 pl-4 text-[11px]">
-              <li>
-                打开{" "}
-                <a
-                  href={AMAP_PICKER_URL}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-brand inline-flex items-center gap-0.5 underline underline-offset-2"
-                >
-                  高德坐标拾取页
-                  <ExternalLink className="size-3" />
-                </a>
-              </li>
-              <li>搜索或缩放到宿舍楼，点击地图上的点</li>
-              <li>复制「经度,纬度」，粘贴到下面</li>
-            </ol>
-            <p className="text-muted-foreground text-[11px]">
-              拾取页返回的是 GCJ-02 坐标，与国内校园 App 常用坐标系一致。不要使用
-              Google/OSM 的 WGS-84 坐标，否则会有几百米偏移。
-            </p>
-          </div>
-
-          <div className="flex gap-2">
-            <Input
-              value={paste}
-              onChange={(e) => setPaste(e.target.value)}
-              onPaste={(e) => onPaste(e.clipboardData.getData("text"), () => e.preventDefault())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  applyPaste();
-                }
-              }}
-              placeholder="粘贴坐标：116.397428,39.909230"
-              autoComplete="off"
-            />
-            <Button variant="outline" onClick={applyPaste} disabled={!paste.trim()}>
-              识别
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field>
-              <FieldLabel htmlFor="loc-lon">经度</FieldLabel>
-              <Input
-                id="loc-lon"
-                value={lon}
-                onChange={(e) => setLon(e.target.value)}
-                placeholder="116.397428"
-                inputMode="decimal"
-                autoComplete="off"
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="loc-lat">纬度</FieldLabel>
-              <Input
-                id="loc-lat"
-                value={lat}
-                onChange={(e) => setLat(e.target.value)}
-                placeholder="39.909230"
-                inputMode="decimal"
-                autoComplete="off"
-              />
-            </Field>
-          </div>
-
-          <Field>
-            <FieldLabel htmlFor="loc-address">位置名称（可选）</FieldLabel>
-            <Input
-              id="loc-address"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="如：XX大学 3 号宿舍楼"
-              autoComplete="off"
-            />
-            <FieldDescription>仅用于界面显示，不影响提交。</FieldDescription>
-          </Field>
-
-          <div className="flex items-center justify-between gap-2">
-            <Button variant="ghost" size="sm" onClick={() => void readFromSchool()} disabled={reading}>
-              {reading ? <Loader2 className="size-3.5 animate-spin" /> : <MapPin className="size-3.5" />}
-              从学校读取签到点
-            </Button>
-            <span className="text-muted-foreground text-[11px]">学校下发的最准确</span>
-          </div>
-
-          {error && <p className="text-destructive text-xs">{error}</p>}
-          {!error && hint && <p className="text-muted-foreground text-xs">{hint}</p>}
-        </DialogBody>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onClose(false)} disabled={busy}>
-            取消
-          </Button>
-          <Button onClick={() => void save()} disabled={busy || reading}>
-            {busy && <Loader2 className="size-3.5 animate-spin" />}
-            保存位置
-          </Button>
-        </DialogFooter>
+        <DialogBody>{body}</DialogBody>
       </DialogContent>
     </Dialog>
   );
