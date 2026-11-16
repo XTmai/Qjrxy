@@ -22,9 +22,10 @@ import (
 //
 // 好消息是它不需要抓包也不在 App 里：学校门户的 cpdailyLogin 端点会自己
 // 302 到带正确 client_id 的 authorize 地址，把它解析出来即可。实测：
-//   三峡大学科技学院 16896453639520707
-//   韩山师范学院     16896435830199132
-//   上海工程技术大学 16951737968849022
+//
+//	三峡大学科技学院 16896453639520707
+//	韩山师范学院     16896435830199132
+//	上海工程技术大学 16951737968849022
 //
 // 结果按 host 缓存：同一学校反复扫码不必每次都打门户。
 func (s *Service) ResolveScanLoginOAuth(ctx context.Context, host string) (*cpdaily.ScanLoginOAuth, error) {
@@ -60,6 +61,10 @@ func (s *Service) ResolveScanLoginOAuth(ctx context.Context, host string) (*cpda
 type ScanLoginResult struct {
 	// Ticket 是学校业务票据 MOD_AUTH_CAS，等同一次真实登录的产物。
 	Ticket string `json:"ticket"`
+	// TGC 是授权链路 set-cookie 里落下的 CASTGC。之前只收 MOD_AUTH_CAS、
+	// 把它丢掉，导致扫码账号业务票过期后没有任何可续期凭据，只能重扫；
+	// 存下来后走与账密/短信同一套 renewSessionWithTGC 静默续期。
+	TGC string `json:"tgc"`
 	// AppUserID 是今日校园 App 账号体系的 userId，用来防止把别人的登录态
 	// 绑到这条账号记录上（同一记录两次扫码 userId 不同即拒绝）。
 	AppUserID string `json:"appUserId"`
@@ -194,6 +199,7 @@ func (s *Service) resolveTenantByIDCached(ctx context.Context, account *store.Ac
 // 这里不删除票据——主页面要靠轮询来读取结果，爽约的票据交给 TTL 清理。
 func (s *Service) SubmitScanLogin(ticket string, result ScanLoginResult) error {
 	result.Ticket = strings.TrimSpace(result.Ticket)
+	result.TGC = strings.TrimSpace(result.TGC)
 	result.AppUserID = strings.TrimSpace(result.AppUserID)
 	result.Host = cpdaily.NormalizeHost(result.Host)
 
@@ -220,6 +226,15 @@ func (s *Service) SubmitScanLogin(ticket string, result ScanLoginResult) error {
 	for _, r := range result.Ticket {
 		if r <= 0x20 || r == 0x7f {
 			return errors.New("登录票据格式异常")
+		}
+	}
+	// TGC 与票据同一口径：先查长度再看内容，不给伪造票据字段级提示。
+	if len(result.TGC) > 2048 {
+		return errors.New("CAS 票据过长，疑似异常")
+	}
+	for _, r := range result.TGC {
+		if r <= 0x20 || r == 0x7f {
+			return errors.New("CAS 票据格式异常")
 		}
 	}
 
@@ -325,6 +340,18 @@ func (s *Service) CollectScanLogin(ctx context.Context, userID int64, ticket str
 		account.Host = host
 		if err := s.db.UpdateAccount(ctx, account); err != nil {
 			return nil, err
+		}
+	}
+
+	// 授权链路落下的 CASTGC 一并存为续期凭据：扫码账号从此具备与
+	// 账密/短信同等的静默续期能力，业务票过期不再需要重新扫码。
+	// （与 SubmitSMSLogin 保存 tgc 的理由一致：这是唯一可自愈的凭据。）
+	if tgc := strings.TrimSpace(result.TGC); tgc != "" {
+		if enc, err := secure.Encrypt(s.cfg.SecretKey, tgc); err == nil {
+			account.TGCEnc = enc
+			if err := s.db.UpdateAccount(ctx, account); err != nil {
+				return nil, err
+			}
 		}
 	}
 

@@ -689,8 +689,8 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
     if (busy) return;
     setError("");
     if (!school.trim()) return setError("请填写学校全称");
-    // NOTCLOUD 学校走扫码登录，不需要密码：只建一条学校+学号的记录，
-    // 登录态在卡片上点「扫码登录」获取。
+    // NOTCLOUD 学校不走通用账密登录：只建一条学校+学号的记录，
+    // 登录态在卡片上通过短信验证码或「扫码登录」获取。
     const unsupported = isUnsupportedSchool(school.trim());
     if (unsupported && password) {
       setSchoolUnsupported(school.trim());
@@ -713,11 +713,12 @@ function CreateAccountDialog({ onClose }: { onClose: (created: boolean) => void 
       const existed = !!created.existed;
       setCreatedId(accountId);
 
-      // NOTCLOUD 学校没有密码，账密登录必然失败——直接收尾，让用户去扫码。
+      // NOTCLOUD 学校创建时不走账密登录；保存后在卡片的「学校登录」里
+      // 可选择短信验证码（缺 TGC 会自动补签），也可继续使用扫码登录。
       if (unsupported) {
         toast({
           title: existed ? "账号已存在" : "账号已添加",
-          description: "请点卡片上的「扫码登录」获取登录态",
+          description: "请在卡片的「学校登录」里选择短信验证码，或使用「扫码登录」",
         });
         onClose(true);
         return;

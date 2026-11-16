@@ -336,6 +336,43 @@ func RefreshTGCBySession(ctx context.Context, device DeviceProfile, tenantID, se
 	return &res, nil
 }
 
+// EnsureAppLoginTGC 补齐短信登录首次未下发的 CAS 票。
+//
+// 部分 NOTCLOUD 学校的 mobileLogin 只返回 sessionToken。App 会紧接着用
+// validation/v-9012 补签 tgc；若省略这一步，首次登录只能拿到无法访问业务
+// 接口的账号会话，必须等后续探测/续期才可能恢复。
+//
+// 已有 tgc 或没有 sessionToken 时不发请求。补签响应只合并会话与票据状态；
+// tenantId 不在这里覆盖，NOTCLOUD 的学校门户/租户处理仍由调用方负责。
+func EnsureAppLoginTGC(ctx context.Context, device DeviceProfile, tenantID string, result *AppLoginResult) error {
+	if result == nil {
+		return errors.New("短信登录结果为空")
+	}
+	if strings.TrimSpace(result.TGC) != "" || strings.TrimSpace(result.SessionToken) == "" {
+		return nil
+	}
+
+	refreshed, err := RefreshTGCBySession(ctx, device, tenantID, result.SessionToken, "")
+	if err != nil {
+		return err
+	}
+	if token := strings.TrimSpace(refreshed.SessionToken); token != "" {
+		result.SessionToken = token
+	}
+	if refreshed.Status != "" {
+		result.Status = refreshed.Status
+	}
+	if refreshed.TGCStatus != "" {
+		result.TGCStatus = refreshed.TGCStatus
+	}
+	result.TGC = strings.TrimSpace(refreshed.TGC)
+	if result.TGC == "" {
+		return fmt.Errorf("账号体系补签后仍未返回 CAS 票（status=%s, tgcStatus=%s）",
+			orDash(result.Status), orDash(result.TGCStatus))
+	}
+	return nil
+}
+
 // orDash 空串显示为 "-"，便于日志与错误信息阅读。
 func orDash(s string) string {
 	if strings.TrimSpace(s) == "" {

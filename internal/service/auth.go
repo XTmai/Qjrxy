@@ -276,9 +276,23 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		}
 	}
 
+	// 部分 NOTCLOUD 学校首次短信登录只返回 sessionToken，tgc 要紧接着通过
+	// validation/v-9012 补签。旧实现只在后续探测/续期时补签，导致首次登录
+	// 直接以无业务票据告终；这里复用与 App、续期路径相同的协议立即补齐。
+	var refreshErr error
+	if strings.TrimSpace(result.TGC) == "" && strings.TrimSpace(result.SessionToken) != "" {
+		refreshErr = cpdaily.EnsureAppLoginTGC(ctx, device, account.TenantID, result)
+		if refreshErr != nil {
+			log.Printf("[auth] 账号 %d 短信登录补签 CAS 票失败：%v", account.ID, refreshErr)
+		} else {
+			log.Printf("[auth] 账号 %d 短信登录已通过 sessionToken 补签 CAS 票", account.ID)
+		}
+	}
+
 	client := cpdaily.NewClient(s.opts, nil)
 	// App 登录成功后本来就是带 sessionToken 的，部分学校（不下发 CAS 票）只有它。
-	// 先种进去，任务接口的 sessionToken/sessionTokenKey 才拿得到值。
+	// 先种进去，任务接口的 sessionToken/sessionTokenKey 才拿得到值。若补签接口
+	// 轮换了 sessionToken，这里必须使用最新值，不能继续用首次登录的旧会话。
 	if token := strings.TrimSpace(result.SessionToken); token != "" {
 		client.SetCookies(map[string]string{
 			"sessionToken": token,
@@ -286,8 +300,8 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		})
 	}
 
-	// tgc 为空说明该校不走 IAP CAS 换票（账号体系会话直接可用），
-	// 这时不该拦在「缺少换票参数」上，交给 finishSession 实测会话是否有效。
+	// 优先使用登录响应或刚补签的 tgc 换票；确实没有票据时，再交给
+	// finishSession 实测 sessionToken 是否可直接访问业务接口。
 	tgc := strings.TrimSpace(result.TGC)
 	// 保存 tgc：短信登录没有密码，业务票过期后这是唯一的自动恢复凭据
 	// （重新走 /iap/login 换新票，不需要用户再收短信）。
@@ -308,6 +322,9 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 		if exchangeErr != nil {
 			return nil, exchangeErr
 		}
+		if refreshErr != nil {
+			return nil, fmt.Errorf("账号会话无法访问业务接口，且自动补签 CAS 票失败：%w", refreshErr)
+		}
 		return nil, err
 	}
 	fresh, err := s.db.AccountByID(ctx, userID, accountID)
@@ -321,7 +338,10 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	// 没有票据、sessionToken 也访问不了业务接口：这次登录实际是失败的，
 	// 不能因为 finishSession 已经把 cookies 落库就报成功。
 	if tgc == "" && fresh.LoginStatus != "authorized" {
-		return nil, errors.New("该校登录未下发换票票据，且账号会话无法访问业务接口；请改用账密登录或网页登录")
+		if refreshErr != nil {
+			return nil, fmt.Errorf("短信登录未直接下发换票票据，自动补签失败：%w", refreshErr)
+		}
+		return nil, errors.New("该校登录未下发换票票据，且账号会话无法访问业务接口；请改用扫码登录或账号迁移")
 	}
 	return fresh, nil
 }

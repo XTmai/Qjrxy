@@ -348,8 +348,8 @@ func (s *Service) CreateAccount(ctx context.Context, userID int64, in AccountInp
 	notCloud := !cpdaily.SchoolSupported(tenant.JoinType)
 	if notCloud && strings.TrimSpace(in.Password) != "" {
 		return nil, false, fmt.Errorf(
-			"「%s」使用学校自建统一身份认证，不支持账密/短信登录。"+
-				"请把密码留空创建账号，然后在账号卡片上点「扫码登录」获取登录态",
+			"「%s」使用学校自建统一身份认证，不支持通用账密登录。"+
+				"请把密码留空创建账号，然后在账号卡片上使用短信验证码或扫码登录",
 			tenant.Name)
 	}
 

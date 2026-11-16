@@ -205,12 +205,12 @@ export function SchoolLoginDialog({ account, onClose, embedded = false }: Props)
             ))}
           </div>
 
-          {/* NOTCLOUD 学校的短信登录只能建立今日校园账号会话，换不出学校凭证。
-              这里提前说明，避免用户反复试错。 */}
+          {/* NOTCLOUD 的短信认证走今日校园账号体系，不走学校网页短信入口。
+              首次响应缺少 TGC 时服务端会自动补签，再换取查寝业务会话。 */}
           {method === "sms" && account.joinType === "NOTCLOUD" && (
             <div className="bg-warning-soft text-warning-text rounded-lg px-3 py-2 text-[11px] leading-relaxed">
-              该校使用自建统一身份认证，短信只能建立今日校园账号会话，无法直接换出查寝凭证。
-              建议改用「网页登录」（在账号设置里），在那里完成学校认证即可。
+              请使用今日校园账号绑定的手机号。若首次登录未直接下发查寝票据，系统会自动补签并重试；
+              仍失败时可改用「扫码登录」。
             </div>
           )}
 
