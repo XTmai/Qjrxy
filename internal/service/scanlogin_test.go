@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"qjrxy/internal/secure"
 	"qjrxy/internal/store"
 )
 
@@ -195,5 +196,55 @@ func TestScanLoginTargetReturnsHost(t *testing.T) {
 	}
 	if host != acc.Host {
 		t.Errorf("host 应原样返回：got %q want %q", host, acc.Host)
+	}
+}
+
+// TestCollectScanLoginPersistsTGC 校验扫码带回的 CASTGC 被存为续期凭据。
+//
+// 旧实现只收 MOD_AUTH_CAS、把授权链路落下的 CASTGC 丢掉，扫码账号业务票
+// 过期后没有任何可自愈凭据，只能重新扫码。TGC 落库发生在 finishSession
+// 探测之前（测试环境里 t.campusphere.net 不可达、探测必然失败），所以
+// 探测报错后账号也应已带上续期凭据。
+func TestCollectScanLoginPersistsTGC(t *testing.T) {
+	resetScanLoginTickets()
+	svc, user := newTestService(t)
+	acc := newTestAccount(t, svc, user.ID)
+	ctx := context.Background()
+
+	ticket, _, err := svc.CreateScanLoginTicket(ctx, user.ID, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TGC 校验与票据同口径：先长度后内容
+	if err := svc.SubmitScanLogin(ticket, ScanLoginResult{Ticket: "ST-iap:ok", TGC: strings.Repeat("B", 3000)}); err == nil {
+		t.Error("超长 TGC 应被拒绝")
+	}
+	if err := svc.SubmitScanLogin(ticket, ScanLoginResult{Ticket: "ST-iap:ok", TGC: "bad tgc"}); err == nil {
+		t.Error("含空白的 TGC 应被拒绝")
+	}
+	if err := svc.SubmitScanLogin(ticket, ScanLoginResult{
+		Ticket: "ST-iap:ok", TGC: "iap-10-TGT-scan-987654321", Host: "t.campusphere.net",
+	}); err != nil {
+		t.Fatalf("合法提交不应报错：%v", err)
+	}
+
+	// finishSession 探测假域名会失败；这里只关心 TGC 是否已先落库。
+	if _, err := svc.CollectScanLogin(ctx, user.ID, ticket); err == nil {
+		t.Log("测试环境探测意外成功，不影响断言")
+	}
+	fresh, err := svc.DB().AccountByID(ctx, user.ID, acc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.TGCEnc == "" {
+		t.Fatal("扫码带回的 CASTGC 未落库：账号将无法静默续期")
+	}
+	dec, derr := secure.Decrypt(svc.cfg.SecretKey, fresh.TGCEnc)
+	if derr != nil {
+		t.Fatalf("解密 TGC 失败：%v", derr)
+	}
+	if dec != "iap-10-TGT-scan-987654321" {
+		t.Errorf("TGC 落库值不符：%q", dec)
 	}
 }

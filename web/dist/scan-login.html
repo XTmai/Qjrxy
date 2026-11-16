@@ -765,6 +765,7 @@
     host: '',
     device: null,
     ticket: '',
+    castgc: '',
     appUserId: '',
     busy: false
   };
@@ -951,6 +952,19 @@
     return m ? m[1] : '';
   }
 
+  // CASTGC 是授权链路落下的 TGC：业务票过期后服务端靠它静默续期，
+  // 之前只收 MOD_AUTH_CAS 把它丢掉，扫码账号一过期就只能重扫。
+  // 与票据同源（同一条 set-cookie），随提交一起回传。
+  function grabCASTGC(setCookie) {
+    var m = /CASTGC=([^;]+)/.exec(setCookie || '');
+    return m ? m[1].trim() : '';
+  }
+
+  function rememberCASTGC(setCookie) {
+    var v = grabCASTGC(setCookie);
+    if (v) state.castgc = v;
+  }
+
   // ---------- 取设备 ----------
   function loadDevice() {
     var ua = parseUA(navigator.userAgent);
@@ -1039,7 +1053,9 @@
       // 关键：换票成功的标志就写在 authorize 响应自己的 set-cookie 里
       // （CASTGC + MOD_AUTH_CAS）。实测安卓/鸿蒙端它直接出现在这一跳，
       // 不需要再打业务接口。先查这里，查到就直接成功。
-      var ticket = grabModAuthCAS(headerOf(res, 'set-cookie'));
+      var setCookie = headerOf(res, 'set-cookie');
+      rememberCASTGC(setCookie);
+      var ticket = grabModAuthCAS(setCookie);
       var body = bodyOf(res);
       diag('authorize', 'landed=' + (landed || '(空，App未回传url头)')
         + ' | directTicket=' + (ticket ? '有' : '无')
@@ -1094,6 +1110,7 @@
       var a = attempts[i++];
       return nativeGet(a.url).then(function (res) {
         var setCookie = headerOf(res, 'set-cookie') || headerOf(res, 'Set-Cookie');
+        rememberCASTGC(setCookie);
         var ticket = grabModAuthCAS(setCookie);
         var body = bodyOf(res);
         // Tomcat 错误页的标题在 400 字之后，专门把状态行抠出来
@@ -1190,6 +1207,7 @@
       body: JSON.stringify({
         ticket: TICKET,
         modAuthCas: state.ticket,
+        tgc: state.castgc,
         appUserId: state.appUserId,
         host: state.host,
         school: state.target ? state.target.schoolName : '',

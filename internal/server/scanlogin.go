@@ -80,13 +80,13 @@ func (s *Server) handleScanLoginInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeData(w, http.StatusOK, map[string]any{
-		"schoolName":     school,
-		"username":       username,
-		"alias":          alias,
-		"host":           host,
-		"clientId":       oauth.ClientID,
-		"redirectUri":    oauth.RedirectURI,
-		"state":          oauth.State,
+		"schoolName":      school,
+		"username":        username,
+		"alias":           alias,
+		"host":            host,
+		"clientId":        oauth.ClientID,
+		"redirectUri":     oauth.RedirectURI,
+		"state":           oauth.State,
 		"storedAppUserId": storedAppUserID,
 	})
 }
@@ -96,6 +96,7 @@ func (s *Server) handleScanLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Ticket    string `json:"ticket"`
 		ModAuth   string `json:"modAuthCas"`
+		TGC       string `json:"tgc"`
 		AppUserID string `json:"appUserId"`
 		Host      string `json:"host"`
 		School    string `json:"school"`
@@ -116,6 +117,7 @@ func (s *Server) handleScanLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.svc.SubmitScanLogin(req.Ticket, service.ScanLoginResult{
 		Ticket:    req.ModAuth,
+		TGC:       req.TGC,
 		AppUserID: req.AppUserID,
 		Host:      req.Host,
 		School:    req.School,
