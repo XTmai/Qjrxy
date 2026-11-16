@@ -214,6 +214,34 @@ func (db *DB) TodayStats(ctx context.Context, userID int64) (LogStats, error) {
 	return stats, rows.Err()
 }
 
+// TodaySuccessAccountIDs 返回今天有成功记录的账号 ID（按任务类过滤，kind 为空表示不限）。
+//
+// 工作台的「今日完成账号数」用它：任务签完之后会从待办缓存里消失，
+// 只看 account_tasks 会把刚签完的账号算成「未完成」，进度条反而归零。
+func (db *DB) TodaySuccessAccountIDs(ctx context.Context, userID int64, kind string) ([]int64, error) {
+	start := time.Now().Format("2006-01-02")
+	where := `user_id = ? AND status = ? AND substr(created_at, 1, 10) = ?`
+	args := []any{userID, StatusSuccess, start}
+	if kind != "" {
+		where += ` AND kind = ?`
+		args = append(args, kind)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT DISTINCT account_id FROM logs WHERE `+where, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // DayStat 是单天的执行统计（趋势图用）。
 type DayStat struct {
 	Date    string `json:"date"` // YYYY-MM-DD

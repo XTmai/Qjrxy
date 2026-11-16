@@ -498,6 +498,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	logs, _, _ := s.svc.DB().ListLogs(ctx, store.LogFilter{UserID: user.ID, Limit: 6})
 
 	views := s.accountViews(ctx, user.ID, accounts)
+	// 今日已完成的账号：按查寝成功记录去重算。
+	// 不能用 account_tasks 的 status——学校签完后任务会从待办列表消失，
+	// ReplaceTasks 一清空，刚签完的账号就变成「没有任务」，进度反而归零。
+	doneIDs, err := s.svc.DB().TodaySuccessAccountIDs(ctx, user.ID, "attendance")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	pending := 0
 	for _, t := range tasks {
 		if t.Status != "done" {
@@ -511,15 +519,16 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeData(w, http.StatusOK, map[string]any{
-		"stats":       stats,
-		"accounts":    views,
-		"tasks":       tasks,
-		"pendingTask": pending,
-		"plans":       len(plans),
-		"activePlans": activePlans,
-		"recentLogs":  logs,
-		"user":        user,
-		"today":       service.TodayLabel(time.Now()),
+		"stats":          stats,
+		"accounts":       views,
+		"tasks":          tasks,
+		"doneAccountIDs": doneIDs,
+		"pendingTask":    pending,
+		"plans":          len(plans),
+		"activePlans":    activePlans,
+		"recentLogs":     logs,
+		"user":           user,
+		"today":          service.TodayLabel(time.Now()),
 	})
 }
 

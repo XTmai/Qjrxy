@@ -471,6 +471,8 @@ export class GardenEngine {
   private autoIntroDone = false;
   private introAnimating = false;
   private introElapsed = 0;
+  /** intro 的墙钟起点：低帧率下按帧累加 dt 会把 4.8 秒动画拖成几十秒 */
+  private introStartedAt = -1;
   private introDuration = 4.8;
 
   // 只有横向位置参与计算：花是朝光标方向弯腰，纵向距离不需要
@@ -540,6 +542,14 @@ export class GardenEngine {
     this.introAnimating = false;
     this.realV = clamp01(v);
     this.targetV = this.realV;
+    // 数字立刻对齐到新目标：动画帧可能被节流（后台标签、面板未合成帧），
+    // 只靠帧循环平滑会让标题长期停在旧值，与进度条自相矛盾。
+    const shown = Math.round(this.realV * 100);
+    if (shown !== this.lastShownPct) {
+      this.pct = this.realV * 100;
+      this.lastShownPct = shown;
+      this.opts.onProgress?.(shown);
+    }
   }
 
   /** 重播一次「从 0 长到当前真实进度」的开花动画 */
@@ -560,6 +570,7 @@ export class GardenEngine {
     }
     window.setTimeout(() => {
       this.introElapsed = 0;
+      this.introStartedAt = -1;
       this.introAnimating = true;
     }, 60);
   }
@@ -622,7 +633,10 @@ export class GardenEngine {
     this.pointerOver += ((this.pointerInside ? 1 : 0) - this.pointerOver) * (1 - Math.exp(-8 * dt));
 
     if (this.introAnimating) {
-      this.introElapsed += dt;
+      // 用墙钟推进，不用逐帧累加的 dt：后者在低帧率/后台节流下会被
+      // 0.05s 的 dt 上限吃掉，4.8 秒动画能拖成几十秒，标题长时间停在中间值。
+      if (this.introStartedAt < 0) this.introStartedAt = now;
+      this.introElapsed = (now - this.introStartedAt) / 1000;
       const p = clamp01(this.introElapsed / this.introDuration);
       // easeOutQuart：前段从容铺展，末段柔和减速。
       // 长到「真实进度」就停，不是固定长满——只有全部签完才会开满。
@@ -635,9 +649,14 @@ export class GardenEngine {
 
     this.draw(dt);
 
-    // 数字平滑跟随，避免每帧跳整数
+    // 数字平滑跟随，避免每帧跳整数。
+    // 收敛到 0.4 个百分点以内就直接吸附：指数平滑永远逼近不到终值，
+    // 低帧率下（面板失焦/省电模式）会长期停在 74% 而真实值是 75%。
     if (this.first) this.pct = this.targetV * 100;
-    else this.pct += (this.targetV * 100 - this.pct) * (1 - Math.exp(-dt / 0.2));
+    else {
+      const goal = this.targetV * 100;
+      this.pct = Math.abs(goal - this.pct) < 0.4 ? goal : this.pct + (goal - this.pct) * (1 - Math.exp(-dt / 0.2));
+    }
     const shown = Math.round(this.pct);
     if (shown !== this.lastShownPct) {
       this.lastShownPct = shown;

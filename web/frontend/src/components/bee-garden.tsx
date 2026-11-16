@@ -96,14 +96,15 @@ export function BeeGarden({ progress, onProgress, bandPx, handleRef }: BeeGarden
   }, []);
 
   // 进度变化：数据晚于引擎挂载回来时，把真实值补上。
-  // 只有在没在播 intro 的情况下才对齐，避免一次 refetch 把开花动画腰斩。
+  //
+  // 这里必须无条件对齐。之前的版本只在「减少动效」下才 setProgress，
+  // 结果接口数据回来后新进度被整个丢弃，花园永远停在挂载那一瞬间的 0，
+  // 蜜蜂也就不动了。开花动画由引擎自己判：正在播 intro 时 setProgress
+  // 会打断它，但那只发生在用户主动重播期间，可接受。
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine || !startedRef.current) return;
-    const reduced =
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced) engine.setProgress(progress);
+    engine.setProgress(progress);
   }, [progress]);
 
   useImperativeHandle(handleRef, () => ({ replay: () => engineRef.current?.replay() }), []);

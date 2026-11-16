@@ -43,6 +43,12 @@ function isAccountDone(tasks: Task[]): boolean {
   });
 }
 
+/** 一个账号今天算不算「已完成」：优先看当天成功执行记录，其次看任务缓存 */
+function isAccountDoneToday(accountId: number, tasks: Task[], doneIDs: Set<number>): boolean {
+  if (doneIDs.has(accountId)) return true;
+  return isAccountDone(tasks);
+}
+
 /** 账号是否就绪：登录态 + 设备指纹 + 签到坐标三项齐备 */
 function isReady(a: Account) {
   return a.loginStatus === "authorized" && Boolean(a.deviceId) && Boolean(a.lon) && Boolean(a.lat);
@@ -141,18 +147,25 @@ export function HomePage() {
     );
   }
 
-  const { stats, accounts, activePlans } = data;
+  const { stats, accounts, activePlans, doneAccountIDs } = data;
   const tasks = tasksData?.tasks ?? [];
 
+  // 「今日已完成」以当天成功执行记录为准（后端 doneAccountIDs）。
+  // 不能用任务缓存：学校签完后任务会从待办列表消失，缓存一清空，
+  // 刚签完的账号就会被算成「暂无任务 → 未完成」，进度条反而归零。
+  const doneSet = new Set(doneAccountIDs ?? []);
   const rows = accounts.map((a: Account) => {
     const list = tasks.filter((t) => t.accountId === a.id && t.kind === "attendance");
-    return { account: a, list, summary: summarize(list), done: isAccountDone(list) };
+    const done = isAccountDoneToday(a.id, list, doneSet);
+    // 已签完的账号任务往往已从待办里消失，此时按执行记录显示「已完成」，
+    // 而不是「暂无任务」——后者会让流水看起来像没跑过。
+    const summary = done && list.length === 0 ? { text: "已完成", tone: "ok" as const } : summarize(list);
+    return { account: a, list, summary, done };
   });
 
   const readyCount = accounts.filter(isReady).length;
   const doneCount = rows.filter((r) => r.done).length;
   const total = accounts.length;
-  const readiness = total ? Math.round((readyCount / total) * 100) : 0;
   const progress = total ? doneCount / total : 0;
   const allDone = total > 0 && doneCount === total;
 
@@ -168,6 +181,16 @@ export function HomePage() {
       : enabledPlans.length > 0
         ? `${enabledPlans.length} 个计划待执行`
         : "暂无启用的自动计划";
+
+  // 副标题里只挂一条最紧急的告警（重登 > 计划阻断 > 待绑设备）。
+  // 多条同时存在时其余仍以 headline 文案呈现，不会丢信息。
+  const alert = needsLogin > 0
+    ? { text: `${needsLogin} 个需重登`, to: "/accounts", className: "text-danger" }
+    : blockedPlans.length > 0
+      ? { text: `${blockedPlans.length} 个计划待处理`, to: "/schedules", className: "text-warning-text" }
+      : needsDevice > 0
+        ? { text: `${needsDevice} 个待绑设备`, to: "/accounts", className: "text-warning-text" }
+        : null;
 
   // 流水按「异常优先」排：需重登 → 待补 → 未完成 → 已完成，用户第一眼看到的就是要处理的
   const flow = [...rows].sort((a, b) => {
@@ -207,16 +230,42 @@ export function HomePage() {
         {/* 标题区 */}
         <div className="relative z-20 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            {/* 标题数字用花园进度（今日已完成账号占比），与下方进度条同源。
+                就绪率是「能不能跑」，不是「跑到哪」，两者混在一个数字里
+                会出现「就绪率 100% + 进度条 0%」的自相矛盾画面。 */}
             <h1 className="tracking-headline text-base font-bold whitespace-nowrap sm:text-lg">
-              今日就绪率 {readiness}%
+              今日进度 {shownPct}%
             </h1>
             <span className="inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap text-success">
               <span className="size-1.5 rounded-full bg-success" />
               调度引擎在线
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {total} 个账号中 {readyCount} 个已就绪 · {headline}
+          {/* 副标题：就绪情况 + 一条告警链接。
+              告警在手机端才降级到这里（桌面端右上角有独立徽章，重复显示反而啰嗦）。
+              原来是三个彩色按钮堆在操作区，窄屏上把横幅撑得很满。 */}
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              {total} 个账号中 {readyCount} 个已就绪
+            </span>
+            <span className="text-faint">·</span>
+            {alert ? (
+              <>
+                <Link
+                  to={alert.to}
+                  className={cn(
+                    "inline-flex items-center gap-0.5 font-medium hover:underline md:hidden",
+                    alert.className,
+                  )}
+                >
+                  {alert.text}
+                  <ArrowRight className="size-3" />
+                </Link>
+                <span className="hidden md:inline">{headline}</span>
+              </>
+            ) : (
+              <span>{headline}</span>
+            )}
           </p>
         </div>
 
@@ -226,8 +275,6 @@ export function HomePage() {
             needsLogin={needsLogin}
             needsDevice={needsDevice}
             blockedCount={blockedPlans.length}
-            doneCount={doneCount}
-            total={total}
             onReplay={() => window.setTimeout(() => gardenRef.current?.replay(), 0)}
             onForceRun={() => setConfirmForce(true)}
           />
@@ -237,78 +284,30 @@ export function HomePage() {
             省掉「JS 里读 window.innerWidth」这种不随 resize 重算的写法 */}
         <BeeGarden progress={progress} onProgress={setShownPct} bandPx={0} handleRef={gardenRef} />
 
-        {/* 手机端：操作栏落在花下面单独一行（把卡片 pb 吃掉一部分，
-            让花与操作栏之间自然衔接，不再和标题抢右侧空间） */}
-        <div className="relative z-20 -mt-2 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-3 md:hidden">
-          <div className="flex flex-wrap items-center gap-2">
-            {needsLogin > 0 && (
-              <Button
-                size="sm"
-                className="h-8 gap-1.5 rounded-lg bg-danger px-2.5 text-[11px] font-semibold text-white hover:bg-danger/90"
-                asChild
-              >
-                <Link to="/accounts">
-                  <LogIn className="size-3.5" />
-                  {needsLogin} 个需重登
-                </Link>
-              </Button>
-            )}
-            {blockedPlans.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5 rounded-lg border-warning-border bg-warning-soft px-2.5 text-[11px] font-semibold text-warning-text"
-                asChild
-              >
-                <Link to="/schedules">
-                  <TriangleAlert className="size-3.5" />
-                  {blockedPlans.length} 个计划待处理
-                </Link>
-              </Button>
-            )}
-            {needsDevice > 0 && needsLogin === 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5 rounded-lg border-warning-border bg-warning-soft px-2.5 text-[11px] font-semibold text-warning-text"
-                asChild
-              >
-                <Link to="/accounts">
-                  <QrCode className="size-3.5" />
-                  {needsDevice} 个待绑设备
-                </Link>
-              </Button>
-            )}
-            <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-              <span className="text-[11px] font-medium text-muted-foreground">今日执行</span>
-              <span className="font-mono text-sm font-bold tabular-nums">
-                {doneCount}
-                <span className="font-normal text-muted-foreground"> / {total}</span>
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon-sm"
-              className="size-8 rounded-lg"
-              title="重播今日开花进度动画"
-              aria-label="重播开花动画"
-              onClick={() => {
-                window.setTimeout(() => gardenRef.current?.replay(), 0);
-              }}
-            >
-              <RefreshCw className="size-3.5" />
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 gap-1.5 rounded-lg px-3 text-[11px] font-semibold"
-              onClick={() => setConfirmForce(true)}
-            >
-              <Play className="size-3.5" />
-              补测 / 重跑
-            </Button>
-          </div>
+        {/* 手机端：只留「重播 + 补测」两个按钮，靠右一行。
+            告警已经降级进副标题，这里不再堆彩色按钮。
+            别用负边距往上提——border-t 会正好压在副标题那一行上。 */}
+        <div className="relative z-20 flex items-center justify-end gap-2 border-t border-border/70 pt-3 md:hidden">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            className="size-8 rounded-lg"
+            title="重播今日开花进度动画"
+            aria-label="重播开花动画"
+            onClick={() => {
+              window.setTimeout(() => gardenRef.current?.replay(), 0);
+            }}
+          >
+            <RefreshCw className="size-3.5" />
+          </Button>
+          <Button
+            size="sm"
+            className="h-8 gap-1.5 rounded-lg px-3 text-[11px] font-semibold"
+            onClick={() => setConfirmForce(true)}
+          >
+            <Play className="size-3.5" />
+            补测 / 重跑
+          </Button>
         </div>
       </div>
 
@@ -523,22 +522,19 @@ export function HomePage() {
   );
 }
 
-/** 横幅右上角的操作组（桌面端）：告警 → 分隔线 → 今日执行 → 重播 / 补测。
- *  手机端由横幅底部那一行等价渲染，见 HomePage 里的 md:hidden 分支。 */
+/** 横幅右上角的操作组（桌面端）：告警 → 分隔线 → 重播 / 补测。
+ *  手机端由横幅底部那一行渲染，见 HomePage 里的 md:hidden 分支。
+ *  「今日执行 N / M」不再重复渲染：标题的「今日进度 X%」就是同一个数。 */
 function BannerActions({
   needsLogin,
   needsDevice,
   blockedCount,
-  doneCount,
-  total,
   onReplay,
   onForceRun,
 }: {
   needsLogin: number;
   needsDevice: number;
   blockedCount: number;
-  doneCount: number;
-  total: number;
   onReplay: () => void;
   onForceRun: () => void;
 }) {
@@ -585,14 +581,6 @@ function BannerActions({
       )}
 
       {hasAlert && <span className="h-5 w-px bg-border" />}
-
-      <div className="flex items-baseline gap-1.5 whitespace-nowrap">
-        <span className="text-[11px] font-medium text-muted-foreground">今日执行</span>
-        <span className="font-mono text-sm font-bold tabular-nums">
-          {doneCount}
-          <span className="font-normal text-muted-foreground"> / {total}</span>
-        </span>
-      </div>
 
       <Button
         variant="outline"

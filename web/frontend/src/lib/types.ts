@@ -196,6 +196,12 @@ export interface Dashboard {
   stats: TodayStats;
   accounts: Account[];
   tasks: Task[];
+  /**
+   * 今日有查寝成功记录的账号 ID（已去重）。
+   * 任务签完后会从待办缓存里消失，所以「账号今日是否完成」只能看执行记录，
+   * 不能看 account_tasks——否则全部签完时缓存被清空，进度反而归零。
+   */
+  doneAccountIDs?: number[];
   pendingTask: number;
   plans: number;
   activePlans: number;

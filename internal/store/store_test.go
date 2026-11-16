@@ -297,6 +297,19 @@ func TestLogsAndStats(t *testing.T) {
 		t.Errorf("统计不符：%+v", stats)
 	}
 
+	// 今日完成账号按成功记录去重：同一账号两次成功只算一个。
+	ids2, err := db.TodaySuccessAccountIDs(ctx, u.ID, "attendance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids2) != 1 || ids2[0] != acc.ID {
+		t.Errorf("今日完成账号应为去重后的 1 个，得到 %v", ids2)
+	}
+	// 换成不存在的任务类应查不到账号——避免「签到了查寝日志」被算成查寝完成。
+	if other, err := db.TodaySuccessAccountIDs(ctx, u.ID, "sign"); err != nil || len(other) != 0 {
+		t.Errorf("按 kind 过滤失效：%v err=%v", other, err)
+	}
+
 	logs, total, err := db.ListLogs(ctx, LogFilter{UserID: u.ID, Limit: 10})
 	if err != nil || total != 4 || len(logs) != 4 {
 		t.Fatalf("列表异常：%v total=%d len=%d", err, total, len(logs))
