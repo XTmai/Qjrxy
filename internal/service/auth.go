@@ -38,6 +38,10 @@ func (s *Service) BeginLogin(ctx context.Context, userID, accountID int64) (*Log
 	if err != nil {
 		return nil, err
 	}
+	// 诊断：账密登录整条链路（打开登录页 → 取验证码 → 提交）都带上
+	// 账号标识与链路名，排查时能直接从日志定位到是哪一步断的。
+	ctx = cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowPasswordLogin)
+
 	password, err := secure.Decrypt(s.cfg.SecretKey, account.PasswordEnc)
 	if err != nil {
 		return nil, errors.New("账号密码解析失败，请重新填写密码")
@@ -138,7 +142,9 @@ func (s *Service) BeginSMSLogin(ctx context.Context, userID, accountID int64, ph
 			}
 		}
 	}
-	if err := cpdaily.SendAppSMSCode(ctx, device, tenantID, phone); err != nil {
+	// 诊断：标上账号与链路，日志里一眼看出这是谁的发码请求。
+	smsCtx := cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowSMSCode)
+	if err := cpdaily.SendAppSMSCode(smsCtx, device, tenantID, phone); err != nil {
 		return nil, err
 	}
 
@@ -208,8 +214,9 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	}
 	var result *cpdaily.AppLoginResult
 	var lastErr error
+	smsCtx := cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowSMSLogin)
 	for i, channel := range channels {
-		result, lastErr = cpdaily.AppMobileLogin(ctx, device, account.TenantID, phone, code, channel)
+		result, lastErr = cpdaily.AppMobileLogin(smsCtx, device, account.TenantID, phone, code, channel)
 		if lastErr == nil {
 			if i > 0 {
 				log.Printf("[auth] 短信登录渠道 %s 成功（备选渠道生效）", channel)
@@ -281,7 +288,9 @@ func (s *Service) SubmitSMSLogin(ctx context.Context, userID, accountID int64, t
 	// 直接以无业务票据告终；这里复用与 App、续期路径相同的协议立即补齐。
 	var refreshErr error
 	if strings.TrimSpace(result.TGC) == "" && strings.TrimSpace(result.SessionToken) != "" {
-		refreshErr = cpdaily.EnsureAppLoginTGC(ctx, device, account.TenantID, result)
+		refreshErr = cpdaily.EnsureAppLoginTGC(
+			cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowSMSRefreshTGC),
+			device, account.TenantID, result)
 		if refreshErr != nil {
 			log.Printf("[auth] 账号 %d 短信登录补签 CAS 票失败：%v", account.ID, refreshErr)
 		} else {
@@ -418,9 +427,15 @@ func (s *Service) SubmitCaptcha(ctx context.Context, userID, accountID int64, ti
 	if err != nil {
 		return err
 	}
+	// 诊断：验证码完成登录属于账密登录的后半段，flow 保持一致。
+	// 这里重建客户端时也要带上账号标识，否则这一步的请求在日志里没有 label，
+	// 和前面「打开登录页」的记录对不上号。
+	ctx = cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowPasswordLogin)
+	opts := s.opts
+	opts.Label = accountLabel(account.ID)
 	// 用登录页拿到的 cookie 重建客户端，保证 lt / captcha 会话一致。
-	client := cpdaily.NewClient(s.opts, state.Cookies)
-	done, err := cpdaily.FinishLoginWith(ctx, s.opts, state, code, client)
+	client := cpdaily.NewClient(opts, state.Cookies)
+	done, err := cpdaily.FinishLoginWith(ctx, opts, state, code, client)
 	if err != nil {
 		return err
 	}
@@ -633,6 +648,8 @@ func hasCredentials(a *store.Account) bool {
 // 旧实现到这里就直接失败，导致「验证码登录活不过一个业务票周期」。
 func (s *Service) renewSessionWithTGC(ctx context.Context, account *store.Account) error {
 	device := deviceProfile(account, account.Lon, account.Lat)
+	// 诊断：续期是「会话够不够活」的关键路径，标上账号与链路。
+	ctx = cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowTicketExchange)
 
 	var tgc string
 	if strings.TrimSpace(account.TGCEnc) != "" {
@@ -672,7 +689,9 @@ func (s *Service) renewSessionWithTGC(ctx context.Context, account *store.Accoun
 	} else {
 		log.Printf("[auth] 账号 %d 无 CAS 票，改用 sessionToken 刷新", account.ID)
 	}
-	res, err := cpdaily.RefreshTGCBySession(ctx, device, account.TenantID, sessionToken, tgc)
+	res, err := cpdaily.RefreshTGCBySession(
+		cpdaily.WithFlow(boundCtx(ctx, account.ID), cpdaily.FlowSMSRefreshTGC),
+		device, account.TenantID, sessionToken, tgc)
 	if err != nil {
 		log.Printf("[auth] 账号 %d 用 sessionToken 刷新 CAS 票失败：%v", account.ID, err)
 		return fmt.Errorf("刷新 CAS 票失败：%w", err)

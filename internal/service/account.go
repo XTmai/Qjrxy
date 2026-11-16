@@ -700,8 +700,19 @@ func (s *Service) PhotoAbsPath(rel string) string {
 // clientFor 用账号保存的 cookie 构造协议客户端。
 func (s *Service) clientFor(a *store.Account) *cpdaily.Client {
 	opts := s.opts
-	opts.Label = fmt.Sprintf("account:%d", a.ID)
+	opts.Label = accountLabel(a.ID)
 	return cpdaily.NewClient(opts, decodeCookies(a.Cookies))
+}
+
+// accountLabel 是诊断日志里的流量标识。
+func accountLabel(accountID int64) string {
+	return fmt.Sprintf("account:%d", accountID)
+}
+
+// boundCtx 给 context 打上账号标识，供没有 Client 承载 label 的链路
+// （账号体系短信、补签 CAS 票等包级函数）在诊断里也能对上账号。
+func boundCtx(ctx context.Context, accountID int64) context.Context {
+	return cpdaily.WithLabel(ctx, accountLabel(accountID))
 }
 
 // deviceProfile 从账号生成设备信息。

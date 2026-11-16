@@ -54,13 +54,29 @@ type ClientOptions struct {
 
 func defaultHTTPClient(opts ClientOptions) *http.Client {
 	if opts.HTTPClient != nil {
-		return opts.HTTPClient
+		// 外部注入的客户端也要套诊断，否则这条链路的请求在日志里是空的。
+		// 复制一份而不是改原对象：调用方可能共用同一个 *http.Client。
+		clone := *opts.HTTPClient
+		clone.Transport = WrapTransport(opts.HTTPClient.Transport, opts.Label)
+		return &clone
 	}
 	jar, _ := cookiejar.New(nil)
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
+	return &http.Client{
+		Jar:     jar,
+		Timeout: timeout,
+		// Transport 统一套诊断：client.do 之外那些直接走 c.http.Do 的地方
+		// （CAS 密码登录提交、换票等）也就能被记录到。
+		Transport: WrapTransport(newTransport(opts), opts.Label),
+	}
+}
+
+// newTransport 按选项造一个裸 Transport（TLS/代理策略）。
+// 需要诊断的调用方自己再套 WrapTransport。
+func newTransport(opts ClientOptions) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = tlsConfigFor(opts.InsecureHosts)
 	if opts.ProxyURL != "" {
@@ -68,7 +84,7 @@ func defaultHTTPClient(opts ClientOptions) *http.Client {
 			transport.Proxy = http.ProxyURL(u)
 		}
 	}
-	return &http.Client{Jar: jar, Timeout: timeout, Transport: transport}
+	return transport
 }
 
 // Client 封装一个账号的会话。
@@ -208,20 +224,14 @@ func (c *Client) doRequest(ctx context.Context, method, rawURL string, headers m
 			}
 		}
 	}
-	// 诊断：请求头设置完毕后开一条记录，响应体读取时镜像，Close 落盘。
-	rec := c.diagStart(ctx, req)
+	// 诊断由 Transport 层统一记录（见 diagTransport），这里不再手工埋点，
+	// 否则同一次请求会在日志里出现重复的两条。
 	resp, err := c.http.Do(req)
 	if err != nil {
-		if rec != nil {
-			rec.finish("", err)
-		}
 		return nil, err
 	}
 	c.absorb(resp)
 	resp.Body = decompressBody(resp)
-	if rec != nil {
-		rec.wrap(resp)
-	}
 	return resp, nil
 }
 
@@ -429,7 +439,8 @@ func (c *Client) doNoRedirect(ctx context.Context, method, rawURL string, header
 		}
 	}
 
-	// 复用同一份 Transport / Jar，但临时禁用跟随
+	// 复用同一份 Transport / Jar，但临时禁用跟随。
+	// Transport 已套诊断，所以这里同样不需要手工埋点。
 	noFollow := &http.Client{
 		Transport: c.http.Transport,
 		Jar:       c.http.Jar,
@@ -438,19 +449,10 @@ func (c *Client) doNoRedirect(ctx context.Context, method, rawURL string, header
 			return http.ErrUseLastResponse
 		},
 	}
-	rec := c.diagStart(ctx, req)
 	resp, err := noFollow.Do(req)
 	if err != nil {
-		if rec != nil {
-			rec.finish("", err)
-		}
 		return nil, err
 	}
 	c.absorb(resp)
-	if rec != nil {
-		// doNoRedirect 的响应体由调用方（换票/登录）完整读取，
-		// 包一层镜像，Close 时落盘。
-		rec.wrap(resp)
-	}
 	return resp, nil
 }

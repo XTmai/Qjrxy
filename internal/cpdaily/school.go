@@ -26,9 +26,9 @@ func httpGetJSON(ctx context.Context, rawURL string, out any) error {
 		return err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Linux; Android 14) cpdaily/"+AppVersion)
-	client := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
-	}}
+	// 学校列表决定后续登录发往哪个域名，出问题时日志里必须有这条请求。
+	client := HTTPClient("", 20*time.Second,
+		&http.Transport{TLSClientConfig: tlsConfigFor(TLSInsecureHosts())}, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("请求学校列表失败：%w", err)
@@ -42,6 +42,7 @@ func httpGetJSON(ctx context.Context, rawURL string, out any) error {
 
 // ListSchools 拉取全部学校（可缓存）。
 func ListSchools(ctx context.Context) ([]School, error) {
+	ctx = WithFlow(ctx, FlowSchoolList)
 	var payload struct {
 		Data []struct {
 			ID       string `json:"id"`

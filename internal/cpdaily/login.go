@@ -323,6 +323,8 @@ func submitCAS(ctx context.Context, client *Client, tenant *Tenant, state *Login
 	req.Header.Set("User-Agent", casUserAgent)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Cookie", client.CookieString())
+	// 直接走 client.http.Do 即可：它的 Transport 已经套了诊断拦截，
+	// 这次提交的表单体与学校返回的错误页都会落盘。
 	resp, err := client.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("提交登录请求失败：%w", err)

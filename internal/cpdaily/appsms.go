@@ -149,6 +149,9 @@ func appSMSHeaders(device DeviceProfile, tenantID string) map[string]string {
 }
 
 // appSMSPost 发送加密请求并解析外层 JSON。
+//
+// 走 HTTPClient 而不是裸 &http.Client：账号体系这条链路以前完全不进诊断
+// 日志，导致「短信登录到底发没发出去、服务端回了什么」永远查不到。
 func appSMSPost(ctx context.Context, path string, plain string, headers map[string]string) (map[string]json.RawMessage, error) {
 	enc, err := appSMSEncrypt(plain)
 	if err != nil {
@@ -162,9 +165,8 @@ func appSMSPost(ctx context.Context, path string, plain string, headers map[stri
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
-	}}
+	client := HTTPClient("", 20*time.Second,
+		&http.Transport{TLSClientConfig: tlsConfigFor(TLSInsecureHosts())}, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求今日校园账号服务失败：%w", err)
@@ -290,9 +292,8 @@ func RefreshTGCBySession(ctx context.Context, device DeviceProfile, tenantID, se
 	for k, v := range h {
 		req.Header.Set(k, v)
 	}
-	resp, err := (&http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{
-		TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
-	}}).Do(req)
+	resp, err := HTTPClient("", 20*time.Second,
+		&http.Transport{TLSClientConfig: tlsConfigFor(TLSInsecureHosts())}, nil).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求 CAS 票服务失败：%w", err)
 	}
@@ -440,17 +441,15 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		return strings.Join(parts, "; ")
 	}
 
-	noRedirect := &http.Client{
-		Timeout: 20 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfigFor(TLSInsecureHosts()),
-		},
-		// 必须显式禁止自动跟随：未认证时业务域会与门户互相跳转，
-		// 自动跟随会一路跑到 10 次重定向上限。
-		CheckRedirect: func(*http.Request, []*http.Request) error {
+	// 必须显式禁止自动跟随：未认证时业务域会与门户互相跳转，
+	// 自动跟随会一路跑到 10 次重定向上限。
+	// 套上诊断后，每一步换票的响应都能在日志里看到（这是排查
+	// 「补签成功但业务接口仍然 401」的关键证据）。
+	noRedirect := HTTPClient("", 20*time.Second,
+		&http.Transport{TLSClientConfig: tlsConfigFor(TLSInsecureHosts())},
+		func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
-		},
-	}
+		})
 
 	offSite := ""
 	for hop := 0; hop < 6; hop++ {

@@ -48,9 +48,12 @@ var (
 // Entry 是一条诊断记录。ReqHeaders/ReqBody/RespBody 由调用方脱敏后传入，
 // 或直接使用本包的 Sanitize 辅助函数。
 type Entry struct {
-	TS         string            `json:"ts"`
-	Label      string            `json:"label,omitempty"`
-	TraceID    string            `json:"traceId,omitempty"`
+	TS      string `json:"ts"`
+	Label   string `json:"label,omitempty"`
+	TraceID string `json:"traceId,omitempty"`
+	// Flow 是业务链路名（password-login / sms-login / sms-tgc …）。
+	// 排查登录类问题时先按它分组，比在混合流量里翻 URL 快得多。
+	Flow       string            `json:"flow,omitempty"`
 	Method     string            `json:"method"`
 	URL        string            `json:"url"`
 	Status     int               `json:"status,omitempty"`
@@ -59,6 +62,9 @@ type Entry struct {
 	ReqHeaders map[string]string `json:"reqHeaders,omitempty"`
 	ReqBody    string            `json:"reqBody,omitempty"`
 	RespBody   string            `json:"respBody,omitempty"`
+
+	// flushDone 是 Flush 的同步哨兵：非 nil 时 worker 只关闭它、不写盘。
+	flushDone chan struct{} `json:"-"`
 }
 
 // Configure 设置诊断日志的存储位置与默认开关。
@@ -105,14 +111,13 @@ func KeepDays() int {
 }
 
 func start() {
-	mu.RLock()
-	dir := cfg.dataDir
-	mu.RUnlock()
 	mu.Lock()
 	ch = make(chan Entry, 256)
 	mu.Unlock()
 	wg.Add(1)
-	go worker(dir)
+	// 不把目录传死：Configure 可能在运行期改 dataDir（管理员换目录、
+	// 测试换临时目录），worker 每写一条时再取当前值。
+	go worker()
 }
 
 // Record 提交一条诊断记录（异步）。未启用或队列满时静默丢弃。
@@ -145,6 +150,10 @@ func DroppedCount() int64 {
 }
 
 // Close 停止 worker 并把队列里剩余的记录写完。进程退出时调用。
+//
+// 这是终态：Close 之后本进程不再记录，也无法重新 Configure 启动。
+// 测试里需要多条用例独立写日志时，用 Flush 同步已排队记录，
+// 只在全部结束时 Close 一次。
 func Close() {
 	closeOnce.Do(func() {
 		mu.Lock()
@@ -157,11 +166,60 @@ func Close() {
 	})
 }
 
-func worker(dataDir string) {
+// Flush 等队列里已提交的记录全部落盘。
+//
+// 诊断是异步写的，测试断言文件内容前必须先 Flush，否则会读到空文件。
+// 实现是往队列里塞一条哨兵：worker 串行消费，处理到哨兵时说明它前面的
+// 记录都已写完，此时关闭该哨兵自带的 done channel。
+func Flush() {
+	mu.RLock()
+	c, isClosed := ch, closed
+	mu.RUnlock()
+	if isClosed || c == nil {
+		return
+	}
+	done := make(chan struct{})
+	if !RecordSync(Entry{flushDone: done}) {
+		// 队列满或已关闭：退化成短等待，不让调用方永久阻塞。
+		time.Sleep(50 * time.Millisecond)
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+	}
+}
+
+// RecordSync 把一条带 done 通道的哨兵入队；返回是否成功。
+func RecordSync(e Entry) bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	if !cfg.enabled || closed || ch == nil {
+		return false
+	}
+	select {
+	case ch <- e:
+		return true
+	default:
+		return false
+	}
+}
+
+// idleClose 是文件句柄的空闲关闭时间。
+//
+// 日志量很小（每天几千条），但长期持有句柄会在 Windows 上挡住目录删除与
+// 日志轮转（运维与测试都踩过）。主循环在队列空转超过这个时间后就关掉文件，
+// 下次写入再开——不引入额外 goroutine，也就不存在并发访问 f 的竞争。
+//
+// 取 300ms：连续写入之间几乎不会走到这里，而闲置后很快就把句柄还回去。
+const idleClose = 300 * time.Millisecond
+
+func worker() {
 	defer wg.Done()
 	var (
 		day    string
 		purged string
+		dir    string
 		f      *os.File
 		enc    *json.Encoder
 		broken bool
@@ -170,11 +228,50 @@ func worker(dataDir string) {
 		if f != nil {
 			f.Close()
 			f = nil
+			enc = nil
+			dir, day = "", ""
 		}
 	}
 	defer closeFile()
 
-	for e := range ch {
+	for {
+		// 队列空转 idleClose 后关文件；有记录进来就继续写。
+		// 用带超时的 select 而不是 time.AfterFunc：状态只在主 goroutine 里改，
+		// 不需要额外加锁。
+		var e Entry
+		var ok bool
+		select {
+		case e, ok = <-ch:
+			if !ok {
+				return
+			}
+			select {
+			case <-time.After(idleClose):
+				// 期间没有新记录：先关文件，再处理手上这条。
+				closeFile()
+			default:
+			}
+		case <-time.After(idleClose):
+			// 这段时间队列一直是空的：把句柄还回去，继续等。
+			closeFile()
+			continue
+		}
+
+		// Flush 哨兵：前面的记录都已按序写入。这里同时关掉文件——
+		// Flush 的语义就是「确保落盘」，而关句柄顺带把 Windows 上的
+		// 文件占用一并释放（不关的话目录删除会失败）。
+		if e.flushDone != nil {
+			closeFile()
+			close(e.flushDone)
+			continue
+		}
+		// 每写一条取一次当前目录：Configure 可以在运行期换目录。
+		mu.RLock()
+		dataDir := cfg.dataDir
+		mu.RUnlock()
+		if f != nil && dataDir != dir {
+			closeFile()
+		}
 		day2 := time.Now().Format("20060102")
 		if f == nil || day2 != day {
 			closeFile()
@@ -184,13 +281,12 @@ func worker(dataDir string) {
 			nf, err := os.OpenFile(filepath.Join(dataDir, "diag", "diag-"+day2+".jsonl"),
 				os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 			if err != nil {
-				day = ""
 				continue
 			}
-			f, day = nf, day2
+			f, day, dir = nf, day2, dataDir
 			enc = json.NewEncoder(f)
 			broken = false
-			// 每天第一个文件只清理一次过期日志
+			// 每天第一次打开时清理一次过期日志
 			if purged != day2 {
 				purge(dataDir)
 				purged = day2
@@ -200,7 +296,7 @@ func worker(dataDir string) {
 			continue
 		}
 		if err := enc.Encode(e); err != nil {
-			// 磁盘满等写失败：当天文件不再写，避免每条都报错
+			// 磁盘满等写失败：当天不再尝试，避免每条都报错刷屏。
 			broken = true
 		}
 	}
@@ -286,8 +382,14 @@ func sanitizeCookies(values []string) string {
 	return strings.Join(parts, "; ")
 }
 
-// SanitizeBody 把 JSON 体里的密码类字段替换为 <redacted>，并截断。
-// 非 JSON 体原样截断。
+// SanitizeBody 把请求/响应体里的密码类字段替换为 <redacted>，并截断。
+//
+// 支持两种形态：
+//   - JSON：递归按字段名脱敏
+//   - application/x-www-form-urlencoded：CAS 登录表单走这条，密码字段是
+//     password / pwdEncryptSalt 加密后的串。不脱敏等于把凭据写进日志。
+//
+// 其它形态（multipart、二进制）只截断。
 func SanitizeBody(body []byte, limit int) string {
 	var v any
 	if err := json.Unmarshal(body, &v); err == nil {
@@ -295,12 +397,57 @@ func SanitizeBody(body []byte, limit int) string {
 		if cleaned, err := json.Marshal(v); err == nil {
 			body = cleaned
 		}
+	} else if redacted, ok := redactFormBody(body); ok {
+		body = redacted
 	}
 	s := string(body)
 	if len(s) > limit {
 		s = s[:limit] + "…(截断)"
 	}
 	return s
+}
+
+// sensitiveFormFields 是表单体里需要脱敏的字段名（小写）。
+//
+// pwdEncryptSalt 不是密码本身但它是加密盐，配合密文等价于口令；
+// lt / cllt / dllt 之类是流程参数，保留有助于排查。
+var sensitiveFormFields = map[string]bool{
+	"password":       true,
+	"pwd":            true,
+	"oldpassword":    true,
+	"newpassword":    true,
+	"loginpwd":       true,
+	"pwdencryptsalt": true,
+	"smspassword":    true,
+	"dynamiccode":    false, // 短信验证码保留：排查「验证码用错渠道」需要它
+}
+
+// redactFormBody 对 urlencoded 表单体脱敏。返回 ok=false 表示不像表单体。
+func redactFormBody(body []byte) ([]byte, bool) {
+	s := string(body)
+	if s == "" || strings.ContainsAny(s, "\x00\n") {
+		return nil, false
+	}
+	// 必须至少有一个 k=v，否则不当作表单处理（避免把普通文本改坏）。
+	if !strings.Contains(s, "=") {
+		return nil, false
+	}
+	pairs := strings.Split(s, "&")
+	changed := false
+	for i, pair := range pairs {
+		name, _, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		if sensitiveFormFields[strings.ToLower(strings.TrimSpace(name))] {
+			pairs[i] = name + "=<redacted>"
+			changed = true
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	return []byte(strings.Join(pairs, "&")), true
 }
 
 func redactJSON(v any) {

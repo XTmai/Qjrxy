@@ -52,6 +52,9 @@ func FetchOAuthClientID(ctx context.Context, opts ClientOptions, host, service s
 	if host == "" {
 		return nil, errors.New("缺少学校域名，无法换票")
 	}
+	// 诊断：扫码取 OAuth 参数这条链路的 UA 选择很微妙（iOS UA 才返回
+	// client_id），出问题时必须能看到实际发出的头与那一跳 Location。
+	ctx = WithFlow(ctx, FlowScanLogin)
 	if strings.TrimSpace(service) == "" {
 		service = "https://" + host + "/wec-counselor-attendance-apps/student/attendance/index.html"
 	}
@@ -70,14 +73,13 @@ func FetchOAuthClientID(ctx context.Context, opts ClientOptions, host, service s
 	req.Header.Set("Accept-Language", "zh-CN,zh-Hans;q=0.9")
 
 	// 必须手动跟随：我们要的是「带 client_id 的那一跳」的 Location，
-	// 自动跟随会一路跑到学校首页，把参数丢掉。
-	client := &http.Client{
-		Timeout:   20 * time.Second,
-		Transport: &http.Transport{TLSClientConfig: tlsConfigFor(opts.InsecureHosts)},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
+	// 自动跟随会一路跑到学校首页，把参数丢掉。套诊断后这跳的
+	// Location 与 set-cookie 都能在日志里核对。
+	client := HTTPClient(opts.Label, 20*time.Second,
+		&http.Transport{TLSClientConfig: tlsConfigFor(opts.InsecureHosts)},
+		func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
-		},
-	}
+		})
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("无法获取该校扫码登录参数：%w", err)
