@@ -398,6 +398,74 @@ func freshMODAuthCAS(initial string, cookies map[string]string) bool {
 	return cur != "" && cur != strings.TrimSpace(initial)
 }
 
+// officialOAuthHosts 是今日校园官方中央 OAuth 网关。NOTCLOUD 学校换票时，
+// /iap/login 会先 302 到该网关的 /connect/oauth2/authorize 换一个 code，
+// 再带着 code 回本校 /iap/oauthCallback 下发 MOD_AUTH_CAS。网关域名与学校
+// 无关（client_id 才是每校一份），见 scanlogin.go 的 FetchOAuthClientID
+// 注释与实测。
+//
+// 旧版 sameSite 只认同校域名，把这一跳误判为「跳出学校站点」并中止，
+// 于是 NOTCLOUD 账号始终换不到业务票；CLOUD 学校不走中央网关，不受影响。
+var officialOAuthHosts = []string{"api.campushoy.com"}
+
+func isOfficialOAuthGateway(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, allowed := range officialOAuthHosts {
+		// 精确匹配或其子域；"api.campushoy.com.attacker.com" 不会命中。
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
+			return true
+		}
+	}
+	return false
+}
+
+// exchangeHopPolicy 判断换票链路的下一跳是否可信，以及是否允许携带票据。
+//
+//   - 同站（本校所在可注册域）：放行，照旧带 CASTGC/AUTHTGC 与加密 TGC 头；
+//   - 官方 OAuth 网关：仅放行 /connect/oauth2/authorize，且 redirect_uri
+//     必须精确回指本校 /iap/oauthCallback；放行但不带任何票据——浏览器
+//     跨域跳转本来也不会把学校域 cookie 带过去；
+//   - 其余（含伪装成 campushoy.com 前缀的第三方域名）：一律中止。
+//
+// 判定只依赖「网关域名 + redirect_uri 回指本校」，不枚举学校名单，
+// 因此对任何走同一套官方 OAuth 协议的 NOTCLOUD 学校都自动适用。
+func exchangeHopPolicy(target, originHost string) (allow bool, sendCredentials bool) {
+	u, err := url.Parse(target)
+	if err != nil || u.Hostname() == "" {
+		return false, false
+	}
+	if sameSite(u.Hostname(), registrableDomain(originHost)) {
+		return true, true
+	}
+	if !isOfficialOAuthGateway(u.Hostname()) || u.Path != "/connect/oauth2/authorize" {
+		return false, false
+	}
+	ru, err := url.Parse(u.Query().Get("redirect_uri"))
+	if err != nil {
+		return false, false
+	}
+	// 相对 redirect_uri 按本校域名补全（部分学校这么下发）。
+	if !ru.IsAbs() {
+		ru = (&url.URL{Scheme: "https", Host: originHost}).ResolveReference(ru)
+	}
+	originHostname := (&url.URL{Host: originHost}).Hostname()
+	if ru.Hostname() == "" || !strings.EqualFold(ru.Hostname(), originHostname) ||
+		!strings.HasSuffix(ru.Path, "/iap/oauthCallback") {
+		return false, false
+	}
+	return true, false
+}
+
+// exchangeClientFactory 抽出换票用的 HTTP 客户端，便于单测注入本地服务。
+// 默认实现走 HTTPClient，让换票逐跳也被诊断 Transport 记录。
+var exchangeClientFactory = func() *http.Client {
+	return HTTPClient("", 20*time.Second,
+		&http.Transport{TLSClientConfig: tlsConfigFor(TLSInsecureHosts())},
+		func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		})
+}
+
 // ExchangeTGC 用学校 CAS 票（tgc）换取业务域会话（MOD_AUTH_CAS）。
 //
 // 两个容易踩的点：
@@ -424,7 +492,6 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		return fmt.Errorf("构造换票凭证失败：%w", err)
 	}
 	target := iapLoginURL(host)
-	originSite := registrableDomain(host)
 
 	// 记录进入前已有的 MOD_AUTH_CAS：它通常是过期票。若把它当成换票成功，
 	// 调用方会以为会话已恢复，实际后续业务请求仍然 401。
@@ -443,21 +510,19 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 
 	// 必须显式禁止自动跟随：未认证时业务域会与门户互相跳转，
 	// 自动跟随会一路跑到 10 次重定向上限。
-	// 套上诊断后，每一步换票的响应都能在日志里看到（这是排查
-	// 「补签成功但业务接口仍然 401」的关键证据）。
-	noRedirect := HTTPClient("", 20*time.Second,
-		&http.Transport{TLSClientConfig: tlsConfigFor(TLSInsecureHosts())},
-		func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		})
+	// 客户端由 exchangeClientFactory 构造（默认走 HTTPClient 套诊断埋点），
+	// 换票每一跳的响应都能进日志，是排查「补签成功但业务接口仍 401」
+	// 的关键证据。
+	noRedirect := exchangeClientFactory()
 
 	offSite := ""
 	for hop := 0; hop < 6; hop++ {
-		// 逐跳前先校验目标是否还在本校站点内：换票链路带着明文
-		// CASTGC/AUTHTGC 和加密 TGC 头，跳到中央域或第三方主机等于把
-		// CAS 票送出去。跳出站点时不带凭据硬闯，而是停下——
+		// 逐跳前先判断目标是否还在可信链路内：换票链路带着明文
+		// CASTGC/AUTHTGC 和加密 TGC 头，跳到第三方主机等于把 CAS 票送出去。
+		// 官方 OAuth 网关是例外，但那一跳不带任何票据；其余一律停下，
 		// 若此时已换到新票就正常返回，否则在循环外报错说明原因。
-		if u, perr := url.Parse(target); perr != nil || !sameSite(u.Hostname(), originSite) {
+		allow, sendCredentials := exchangeHopPolicy(target, host)
+		if !allow {
 			offSite = target
 			break
 		}
@@ -466,12 +531,14 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 			return err
 		}
 		req.Header.Set("User-Agent", casUserAgent)
-		req.Header.Set("TGC", tgcHeader)
-		req.Header.Set("Cookie", cookieHeader())
-		// 复用短信登录的设备头，但 Cookie 要换成 CAS 票
+		if sendCredentials {
+			req.Header.Set("TGC", tgcHeader)
+			req.Header.Set("Cookie", cookieHeader())
+		}
+		// 复用短信登录的设备头；票据头只在同站跳设置，跨域跳一律不带。
 		for k, v := range appSMSHeaders(device, tenantID) {
 			switch k {
-			case "Cookie", "Content-Type":
+			case "Cookie", "Content-Type", "TGC":
 				continue
 			}
 			req.Header.Set(k, v)
@@ -483,9 +550,12 @@ func ExchangeTGC(ctx context.Context, client *Client, host, tgc string, device D
 		}
 		client.absorb(resp)
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-		for _, ck := range resp.Cookies() {
-			if ck.Name != "" && ck.MaxAge >= 0 {
-				jar[ck.Name] = ck.Value
+		// 中央网关下发的 cookie 不并入本校票据罐，避免带回学校域。
+		if sendCredentials {
+			for _, ck := range resp.Cookies() {
+				if ck.Name != "" && ck.MaxAge >= 0 {
+					jar[ck.Name] = ck.Value
+				}
 			}
 		}
 		loc := resp.Header.Get("Location")
