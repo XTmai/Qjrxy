@@ -1,14 +1,23 @@
-.PHONY: build run test vet clean linux windows mac docker release
+.PHONY: build run test vet clean linux windows mac docker release frontend frontend-dev
 
 BINARY := bin/qjrxy
-VERSION := 1.6.1
+VERSION := 1.6.2
 RELEASE := release
+
+# 前端产物（web/dist）是 go:embed 的输入。只改后端时不需要跑这个。
+frontend:
+	npm --prefix web/frontend install
+	npm --prefix web/frontend run build
+
+# 前端热更新，/api 代理到 :8090（需先另开一个终端跑 make run）
+frontend-dev:
+	npm --prefix web/frontend run dev
 
 build:
 	go build -trimpath -o $(BINARY) ./cmd/qingjin
 
 run: build
-	./$(BINARY) -addr :8080 -data ./data
+	./$(BINARY) -addr :8090 -data ./data
 
 vet:
 	go vet ./...
