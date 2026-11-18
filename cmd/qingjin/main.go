@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Command qjrxy 启动 Qjrxy 服务：HTTP API + 内嵌前端 + 自动查寝调度器。
 package main
 

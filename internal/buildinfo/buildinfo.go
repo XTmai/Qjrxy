@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package buildinfo 存放产品自身的构建信息。
 //
 // 与 cpdaily.AppVersion 区分开：后者是「模拟今日校园客户端的版本号」（9.9.24），
@@ -7,4 +10,4 @@ package buildinfo
 
 // Version 是产品版本号。发布时改这里，构建机也可用
 // -ldflags "-X qjrxy/internal/buildinfo.Version=x.y.z" 覆盖。
-var Version = "1.6.1"
+var Version = "1.6.2"

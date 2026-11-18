@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package scheduler
 
 import (
@@ -38,6 +41,9 @@ type Scheduler struct {
 	attemptMu sync.Mutex
 	attemptAt map[int64]time.Time
 	wakeAt    map[int64]time.Time
+	// gapAt 按计划覆盖 attemptGap，用于「有任务窗口但暂无任务」这类
+	// 需要更密探测、又绝不能退化成每 30 秒一次的路径。
+	gapAt map[int64]time.Duration
 }
 
 // attemptGap 是同一计划两次「尝试」之间的最小间隔。
@@ -45,6 +51,16 @@ type Scheduler struct {
 // 没有它的话：任务未到签到时间 → 不写 last_run_at → 30 秒后再次触发
 // → 每分钟 2 次任务同步，一天数千次请求，既浪费也容易被判为异常。
 const attemptGap = 10 * time.Minute
+
+// noTaskGap 是「同步成功但确实没有可执行任务」时的重试间隔。
+//
+// 之所以不直接复用 attemptGap：自定义计划窗口可以很窄（现网最窄
+// 15 分钟，如 21:05–21:20），10 分钟间隔在窗口内只剩 1~2 次机会。
+// 任务常在窗口中间才下发，这时多探几次比省几次请求更重要。
+// 而 3 分钟已经足够把请求量压到合理范围：即使一整天都没有任务，
+// 也只有 480 次同步（30s tick 节流到 3min），相比修复前的 21488 次
+// 是量级下降，且窗口内仍能覆盖到后下发的任务。
+const noTaskGap = 3 * time.Minute
 
 // New 创建调度器。
 func New(svc *service.Service) *Scheduler {
@@ -55,6 +71,7 @@ func New(svc *service.Service) *Scheduler {
 		probeCheckEvery: time.Minute,
 		attemptAt:       map[int64]time.Time{},
 		wakeAt:          map[int64]time.Time{},
+		gapAt:           map[int64]time.Duration{},
 	}
 }
 
@@ -320,18 +337,38 @@ func (s *Scheduler) shouldWake(planID int64, now time.Time) bool {
 // claimAttempt 判断该计划本次是否允许尝试执行，并记录尝试时间。
 //
 // 这是「未到窗口时不消耗当天机会」与「不重复轰炸接口」之间的折中：
-// 允许周期性重试，但两次之间至少间隔 attemptGap。
+// 允许周期性重试，但两次之间至少间隔该计划当前的生效间隔
+// （默认 attemptGap，可由 setAttemptGap 调到 noTaskGap）。
 func (s *Scheduler) claimAttempt(planID int64, now time.Time) bool {
 	s.attemptMu.Lock()
 	defer s.attemptMu.Unlock()
 	if s.attemptAt == nil {
 		s.attemptAt = map[int64]time.Time{}
 	}
-	if last, ok := s.attemptAt[planID]; ok && now.Sub(last) < attemptGap {
+	gap := attemptGap
+	if g, ok := s.gapAt[planID]; ok && g > 0 {
+		gap = g
+	}
+	if last, ok := s.attemptAt[planID]; ok && now.Sub(last) < gap {
 		return false
 	}
 	s.attemptAt[planID] = now
 	return true
+}
+
+// setAttemptGap 调整该计划下一次尝试的间隔。
+//
+// 「同步成功但没有可执行任务」这条路径确实发过请求，不该像纯本地判断
+// 那样撤销记账（撤销会退化成每 30 秒一次，就是 2026-11-17 那个
+// 一天 21488 次请求的 bug），但也不该把窄窗口（现网最窄 15 分钟）
+// 的机会吃掉一半。所以这条路径把间隔改小到 noTaskGap。
+func (s *Scheduler) setAttemptGap(planID int64, gap time.Duration) {
+	s.attemptMu.Lock()
+	defer s.attemptMu.Unlock()
+	if s.gapAt == nil {
+		s.gapAt = map[int64]time.Duration{}
+	}
+	s.gapAt[planID] = gap
 }
 
 // releaseAttempt 撤销一次「尝试」记账。
@@ -381,21 +418,41 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 		// 本地没有可用窗口（可能任务还没下发）：此时才需要同步一次。
 		// custom 模式同样要同步，否则任务在计划时段内才下发时会整段错过。
 		if _, err := s.svc.SyncTasks(ctx, account.UserID, account.ID); err != nil {
-			// 同步失败多数是临时问题（网络、会话），不能占用当天机会，
-			// 否则一次抖动就会让计划当天彻底不执行。
-			s.releaseAttempt(plan.ID)
-			log.Printf("计划 %d 同步任务失败，稍后重试：%v", plan.ID, err)
+			// 同步失败多数是临时问题（网络、会话）。这里**不能**调用
+			// releaseAttempt：attemptGap 是内存里的重试节流，与「当天
+			// 机会」（last_run_at）无关，撤销它只会让下一个 30 秒 tick
+			// 再撞一次同步接口，形成无限重试。
+			// 2026-11-17 实锤：辽宁工程技术大学某账号只有请假任务，
+			// 每 30 秒重新同步一轮，一天 21488 次请求。
+			//
+			// 需要人工介入的失败（如学校登录页要图形验证码）必须落一次
+			// 执行结果：否则「每 10 分钟撞一次登录页」会持续一整天，
+			// 既有风控风险，用户也无法从计划卡片上看出到底卡在哪。
+			if !isTransientFailure(err) {
+				s.recordPlanRun(ctx, plan, "需人工处理："+err.Error())
+				log.Printf("计划 %d 同步失败且无法自动恢复，已停止当天自动重试：%v", plan.ID, err)
+				return
+			}
+			log.Printf("计划 %d 同步任务失败，%s 后重试：%v", plan.ID, attemptGap, err)
 			return
 		}
 		w, ok := s.svc.NextTaskWindow(ctx, account.ID, kind)
 		if !ok {
-			// 只读了本地缓存/同步结果，没有提交：撤销记账。
-			s.releaseAttempt(plan.ID)
-			log.Printf("计划 %d 当前无可用查寝任务，等待下个周期", plan.ID)
+			// 同步成功但没有可执行任务（任务还没下发 / 只有请假任务）。
+			// 关键：**不能** releaseAttempt。那样会让调度器 30 秒后再次
+			// 同步，形成请求风暴（2026-11-17 实测单账号一天 21488 次）。
+			// 改成把该计划的间隔缩短到 noTaskGap：既保证不风暴，又能在
+			// 窄窗口（15 分钟）里跟上窗口中间才下发的任务。
+			s.setAttemptGap(plan.ID, noTaskGap)
+			log.Printf("计划 %d 当前无可用查寝任务，%s 后再同步", plan.ID, noTaskGap)
 			return
 		}
+		// 重新拿到窗口后恢复默认间隔，避免 noTaskGap 一直生效。
+		s.setAttemptGap(plan.ID, attemptGap)
 		if !w.Ready {
 			s.scheduleWake(plan.ID, w.Start)
+			// 这条路确实没有向学校发请求（窗口来自刚同步到的缓存），
+			// 撤销尝试记账，避免 wake 到点时被 attemptGap 挡住。
 			s.releaseAttempt(plan.ID)
 			log.Printf("计划 %d 等待任务窗口：%s 于 %s 开始", plan.ID, w.TaskName,
 				w.Start.Format("15:04"))
@@ -485,7 +542,7 @@ func isTransientFailure(err error) bool {
 	// 确定性失败：重试也不会成功
 	deterministic := []string{
 		"已过签到时间", "已签到", "无需重复", "尚未绑定设备", "请先在账号里扫码",
-		"额度已用完", "没有待处理的查寝任务", "今日查寝任务已完成",
+		"没有待处理的查寝任务", "今日查寝任务已完成",
 		// 需要人工介入的情况：自动重试只会反复撞登录接口（风控风险），
 		// 必须停下来等用户处理。
 		"需要图形验证码", "手动登录", "未保存密码", "密码解析失败",

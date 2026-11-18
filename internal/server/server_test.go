@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package server_test
 
 import (
@@ -29,7 +32,6 @@ func newEnv(t *testing.T) *testEnv {
 	cfg := &config.Config{
 		Addr:         ":0",
 		SecretKey:    bytes.Repeat([]byte{7}, 32),
-		QuotaEnabled: true, // 兑换等用例依赖额度体系
 		RegisterOpen: true, // 多用户用例需要在同一实例内注册多个账号
 	}
 	return newEnvWith(t, cfg)
@@ -193,8 +195,8 @@ func TestDashboardEmpty(t *testing.T) {
 		t.Errorf("初始账号列表应为空：%v", accounts)
 	}
 	user, _ := data["user"].(map[string]any)
-	if user["quota"] != float64(50) {
-		t.Errorf("初始额度应为 50：%v", user["quota"])
+	if user["username"] == "" {
+		t.Errorf("dashboard 应返回当前用户：%v", user)
 	}
 }
 
@@ -227,48 +229,6 @@ func TestValidation(t *testing.T) {
 		t.Errorf("未知路由不应返回 200")
 	}
 	_ = body
-}
-
-// TestRedeemQuota 校验卡密兑换。
-func TestRedeemQuota(t *testing.T) {
-	env := newEnv(t)
-
-	// 卡密必须由运维预置入库，面额以库中的发卡记录为准。
-	if err := env.db.CreateRedeemCode(context.Background(), "QJ-A1B2-C3D4", 30); err != nil {
-		t.Fatalf("预置卡密失败：%v", err)
-	}
-
-	status, body := env.do(t, http.MethodPost, "/api/quota/redeem",
-		map[string]string{"code": "QJ-A1B2-C3D4"}, env.token)
-	if status != http.StatusOK {
-		t.Fatalf("兑换失败：%d %v", status, body)
-	}
-	data, _ := body["data"].(map[string]any)
-	if data["granted"] != float64(30) {
-		t.Errorf("应兑换 30 次，得到 %v", data["granted"])
-	}
-
-	// 同一张卡密只能兑换一次。
-	status, _ = env.do(t, http.MethodPost, "/api/quota/redeem",
-		map[string]string{"code": "QJ-A1B2-C3D4"}, env.token)
-	if status != http.StatusBadRequest {
-		t.Errorf("重复兑换应被拒绝，得到 %d", status)
-	}
-
-	// 格式合法但未入库的卡密必须失败（回归：早期实现会白送 30 次）。
-	status, _ = env.do(t, http.MethodPost, "/api/quota/redeem",
-		map[string]string{"code": "QJ-0000-0000"}, env.token)
-	if status != http.StatusBadRequest {
-		t.Errorf("未入库的卡密应被拒绝，得到 %d", status)
-	}
-
-	for _, bad := range []string{"", "ABC", "QJ-XX", "QJ-GGGG-HHHH"} {
-		status, _ := env.do(t, http.MethodPost, "/api/quota/redeem",
-			map[string]string{"code": bad}, env.token)
-		if status != http.StatusBadRequest {
-			t.Errorf("非法卡密 %q 应返回 400，得到 %d", bad, status)
-		}
-	}
 }
 
 // TestChangePassword 校验改密流程。
@@ -499,7 +459,7 @@ func TestSingleUserMode(t *testing.T) {
 		t.Fatalf("打开老库失败：%v", err)
 	}
 	defer db2.Close()
-	if _, err := db2.CreateUser(context.Background(), "legacyuser", "老用户", "hash", 50); err != nil {
+	if _, err := db2.CreateUser(context.Background(), "legacyuser", "老用户", "hash"); err != nil {
 		t.Fatalf("预置老用户失败：%v", err)
 	}
 	svc2 := service.New(&config.Config{

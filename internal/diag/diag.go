@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package diag 记录对学校服务器的 HTTP 层诊断日志。
 //
 // 目的：出现「验证码验签失败」这类无法复现的业务拒绝时，能回放我们

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package server
 
 import (
@@ -132,9 +135,6 @@ func (s *Server) Handler(static http.Handler) http.Handler {
 	// ---- 工作台 ----
 	mux.HandleFunc("GET /api/stats/7d", s.withUser(s.handleStats7d))
 	mux.HandleFunc("GET /api/dashboard", s.withUser(s.handleDashboard))
-
-	// ---- 额度 ----
-	mux.HandleFunc("POST /api/quota/redeem", s.withUser(s.handleRedeemQuota))
 
 	// ---- 管理员（role=admin 或单用户模式；页面与其余用户隔离） ----
 	mux.HandleFunc("GET /api/admin/config", s.withUser(s.requireAdmin(s.handleAdminGetConfig)))

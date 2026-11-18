@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package server
 
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -103,14 +105,6 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, badRequest("请选择账号"))
 		return
 	}
-	// 额度关闭（个人自部署默认）：不预检、不扣减，直接放行。
-	// 托管运营场景（QINGJIN_QUOTA_ENABLED=true）才启用额度体系。
-	if s.svc.Config().QuotaEnabled {
-		// 先预检额度：额度不足时直接拦下，不发起任何提交。
-		if !s.hasQuota(w, r, user) {
-			return
-		}
-	}
 	// 与请求解耦：签到可能停下来等用户点验证码（最长 100 秒），
 	// 期间用户刷新页面、切后台都会断开这个请求。若沿用 r.Context()，
 	// 断线会让后续的 validate 与提交全部以 context canceled 失败，
@@ -129,37 +123,10 @@ func (s *Server) handleRunTask(w http.ResponseWriter, r *http.Request) {
 		Source:    "manual",
 	})
 	if err != nil {
-		// 前置拦截（未到时间、未绑设备、没有任务等）没有向学校发起请求，
-		// 不应扣额度——额度在真正提交后才计费。
 		writeError(w, err)
 		return
 	}
-	// 只对「真正签到成功」扣一次额度。
-	// 失败与待核对不该向用户收费——那等于当天没签上还要掉一次额度。
-	// 用解耦后的 runCtx 而不是 r.Context()：客户端断开（刷新/切网）后
-	// r.Context() 已取消，扣费会静默失败，成功执行却不计额度。
-	if s.svc.Config().QuotaEnabled && outcome.Status == store.StatusSuccess {
-		if _, qerr := s.svc.DB().ConsumeQuota(runCtx, user.ID); qerr != nil {
-			log.Printf("扣减额度失败（user=%d log=%d）：%v", user.ID, outcome.LogID, qerr)
-		}
-	}
 	writeData(w, http.StatusOK, outcome)
-}
-
-// hasQuota 预检额度是否足够；不足时写出 402 并返回 false。
-func (s *Server) hasQuota(w http.ResponseWriter, r *http.Request, user *store.User) bool {
-	fresh, err := s.svc.DB().UserByID(r.Context(), user.ID)
-	if err != nil {
-		writeError(w, err)
-		return false
-	}
-	remaining := fresh.Quota - fresh.QuotaUsed
-	if remaining <= 0 {
-		writeError(w, &APIError{Status: 402, Code: "quota_exhausted",
-			Message: "额度已用完，请兑换卡密后重试"})
-		return false
-	}
-	return true
 }
 
 // ---------- 计划 ----------

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package cpdaily
 
 import (
@@ -242,8 +245,6 @@ type taskLists struct {
 }
 
 // fetchTaskLists 拉取某类任务的当日列表（含已签到分区）。
-//
-// 第一次请求用于获取 cookie（部分学校需要），忽略结果。
 func (c *Client) fetchTaskLists(ctx context.Context, host string, kind TaskKind) (*taskLists, error) {
 	// host 可能是用户手填的（带 scheme/路径），拼上 "https://" 就会变成
 	// https://https://…；这里统一成纯域名，所有任务请求都经过这一处。
@@ -252,9 +253,12 @@ func (c *Client) fetchTaskLists(ctx context.Context, host string, kind TaskKind)
 		return nil, errors.New("学校域名无效，请检查账号的 host 设置")
 	}
 	endpoints := EndpointsFor(kind)
-	if _, err := c.postJSON(ctx, "https://"+host+endpoints.List, nil, nil); err != nil {
-		return nil, err
-	}
+	// 只发一次。历史上这里连着发两次、只取第二次的结果，注释说是
+	// 「第一次用于获取 cookie」——但会话票据本来就由 client 显式携带，
+	// 不需要靠一次请求去换。2026-11-17 的 diag 统计：全天 16113 对
+	// 这类重复请求里，响应逐字节相同；仅有的 31 对差异中，有一次是
+	// 第一跳成功、第二跳反而返回登录页——重复请求不仅没用，还会把一个
+	// 本来成功的同步变成失败。去掉它等于把列表请求量直接减半。
 	resp, err := c.postJSON(ctx, "https://"+host+endpoints.List, nil, nil)
 	if err != nil {
 		return nil, err
@@ -424,6 +428,24 @@ func signStatusText(v string) string {
 	return ""
 }
 
+// ErrTaskGone 表示任务在提交时已被学校删除（详情接口回 code=5
+// 「该查寝已不存在，可能已被删除！」）。
+//
+// 这不是「失败」，而是本地缓存过期：实测 2026-11-17 三峡大学科技学院
+// 在 16:00 后把旧任务删掉、重发了一条新任务（signInstanceWid 从 41461
+// 变成 41488，任务名也微调了），缓存里仍是旧 wid 的账号全部报这个错。
+// 调用方收到它应该刷新任务列表后按新 wid 重试，而不是当天放弃。
+var ErrTaskGone = errors.New("查寝任务已不存在（可能已被学校删除）")
+
+// taskGoneCodes 是「任务已不存在」的业务码。目前实测为 5；
+// 同时用 message 兜底，因为同类错误在不同部署上的 code 并不统一。
+func isTaskGone(code, message string) bool {
+	if strings.TrimSpace(code) == "5" {
+		return true
+	}
+	return strings.Contains(message, "已不存在") || strings.Contains(message, "已被删除")
+}
+
 // FetchDetail 拉取任务详情。
 func (c *Client) FetchDetail(ctx context.Context, host string, kind TaskKind, task Task) (*TaskDetail, error) {
 	endpoints := EndpointsFor(kind)
@@ -433,6 +455,12 @@ func (c *Client) FetchDetail(ctx context.Context, host string, kind TaskKind, ta
 	params := map[string]any{"signInstanceWid": task.SignInstanceWID, "signWid": task.SignWID}
 	resp, err := c.postJSON(ctx, "https://"+host+endpoints.Detail, nil, params)
 	if err != nil {
+		// postJSON 会把非 0 业务码包成 APIError；任务被删是缓存过期，
+		// 需要与网络/登录错误区分开，所以单独翻成 ErrTaskGone。
+		var ae *APIError
+		if errors.As(err, &ae) && isTaskGone(ae.Code, ae.Message) {
+			return nil, fmt.Errorf("%w（signInstanceWid=%s）", ErrTaskGone, task.SignInstanceWID)
+		}
 		return nil, err
 	}
 	detail := &TaskDetail{Raw: resp.Data}
@@ -909,16 +937,35 @@ func captchaBy(byManual bool) string {
 	return "auto"
 }
 
+// captchaIrrelevantHints 是学校复用 2210060000 时给出的、明确与验证码
+// 无关的原因。命中它们时不必再解验证码——解了也会被同一个原因拒绝。
+//
+// 2026-11-17 实锤两例：安徽城市管理职业学院「当前查寝任务不支持手机
+// 签到，请前往nfc机器位置签到！」、中国矿业大学「签到身份不一致，请
+// 重新登录保持签到身份一致！」，两者 checkValidation 都是 false。
+var captchaIrrelevantHints = []string{"nfc", "身份不一致"}
+
 // needsCaptcha 判断本次失败是否因为缺少验证码 ticket。
-// 业务码优先；个别学校返回的 code 不稳定，message 里带「验证码」也认。
+//
+// 2210060000 在多数学校确实是「验证码验签失败」，但它不是专属业务码：
+// 同一天在 cmoc、cumt 上分别表示「只能 NFC 打卡」与「签到身份不一致」。
+// 只看 code 会白跑一整轮九宫格（下载 9 张图 + 换票），最后用户看到的
+// 仍是一句与真实原因无关的「请配置识别服务」。
 func needsCaptcha(r *SignResult) bool {
 	if r == nil {
 		return false
 	}
-	if r.Code == captchaRequiredCode {
+	hint := strings.ToLower(strings.TrimSpace(r.Message))
+	for _, irrelevant := range captchaIrrelevantHints {
+		if strings.Contains(hint, strings.ToLower(irrelevant)) {
+			return false
+		}
+	}
+	// message 自己说了「验证码」的，无论 code 是什么都要走验证码链。
+	if strings.Contains(r.Message, "验证码") {
 		return true
 	}
-	return strings.Contains(r.Message, "验证码")
+	return r.Code == captchaRequiredCode
 }
 
 // submitOnce 是一次完整的提交：加密、签名、发请求、解析结果。
@@ -1115,14 +1162,23 @@ func urlEncodeSorted(m map[string]any) string {
 }
 
 // ExplainFailure 把服务端错误翻译成可操作的建议。
+//
+// 判定顺序刻意「先具体后笼统」：2210060000 这类多义业务码放在最后，
+// 且只有服务端没给出更明确原因时才落到「需要图形验证码」。
 func ExplainFailure(code, message string) string {
+	hint := strings.ToLower(message)
 	switch {
 	case code == "3" || strings.Contains(message, "更换手机") || strings.Contains(message, "已被") || strings.Contains(message, "授权"):
 		return "设备未授权：当前设备 ID 与该账号绑定的设备不一致。请用「设备码」扫码，在你平时打卡的那台手机上获取设备 ID；" +
 			"或先用那台手机在今日校园正常签到一次，也可联系辅导员在「辅导猫 → 手机授权管理」中授权"
 	case strings.Contains(message, "版本过低"):
 		return "服务端拒绝了本次请求（提示版本过低），通常是加密密钥或客户端版本已轮换，请更新服务端配置"
-	case code == captchaRequiredCode || strings.Contains(message, "验证码"):
+	// 复用 2210060000 的两种非验证码原因：照实翻译，不要指向识别服务。
+	case strings.Contains(hint, "nfc"):
+		return "该查寝任务只支持到 NFC 设备上打卡，手机提交一律被拒；自动化对这个任务不生效，需要本人到现场的机器上签"
+	case strings.Contains(message, "身份不一致"):
+		return "学校认为当前登录身份与任务不匹配：请在账号页重新登录一次，让会话身份与学号重新绑定后再执行"
+	case strings.Contains(message, "验证码") || code == captchaRequiredCode:
 		return "该校签到需要图形验证码。手动执行时面板会弹窗让你选出目标图片；" +
 			"定时任务请先在管理员设置里配置识别服务，否则到点只能失败"
 	case code == "4":

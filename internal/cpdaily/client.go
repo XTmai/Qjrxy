@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package cpdaily
 
 import (
@@ -13,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -58,6 +62,7 @@ func defaultHTTPClient(opts ClientOptions) *http.Client {
 		// 复制一份而不是改原对象：调用方可能共用同一个 *http.Client。
 		clone := *opts.HTTPClient
 		clone.Transport = WrapTransport(opts.HTTPClient.Transport, opts.Label)
+		clone.CheckRedirect = chainRedirectHook(opts.HTTPClient.CheckRedirect)
 		return &clone
 	}
 	jar, _ := cookiejar.New(nil)
@@ -70,7 +75,58 @@ func defaultHTTPClient(opts ClientOptions) *http.Client {
 		Timeout: timeout,
 		// Transport 统一套诊断：client.do 之外那些直接走 c.http.Do 的地方
 		// （CAS 密码登录提交、换票等）也就能被记录到。
-		Transport: WrapTransport(newTransport(opts), opts.Label),
+		Transport:     WrapTransport(newTransport(opts), opts.Label),
+		CheckRedirect: chainRedirectHook(nil),
+	}
+}
+
+// redirectTrace 在一条请求的重定向链上记录每一跳的去向。
+//
+// 需要它是因为「会话失效 → 302 到登录页 → 302 回业务路径 → 405」这条链
+// 的**最终** resp.Request.URL 已经是业务路径，看不出中途经过登录页。
+// 只有把每一跳都记下来，才能区分「真的方法错误」和「被踢回登录页」。
+type redirectTrace struct {
+	mu   sync.Mutex
+	hops []string
+}
+
+func (t *redirectTrace) add(rawURL string) {
+	t.mu.Lock()
+	t.hops = append(t.hops, rawURL)
+	t.mu.Unlock()
+}
+
+// passedLoginPath 报告重定向链里是否出现过登录/认证路径。
+func (t *redirectTrace) passedLoginPath() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, hop := range t.hops {
+		lower := strings.ToLower(hop)
+		for _, marker := range sessionRedirectMarkers {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sessionRedirectMarkers 是登录/认证路径的特征片段。
+var sessionRedirectMarkers = []string{"/iap/", "/authserver", "/portal/login", "/cas/"}
+
+type redirectTraceKey struct{}
+
+// chainRedirectHook 返回一个 CheckRedirect：记录每一跳，并沿用调用方
+// 原有的策略（原有策略拒绝时照旧拒绝，默认策略下限制 10 跳）。
+func chainRedirectHook(existing func(*http.Request, []*http.Request) error) func(*http.Request, []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if t, ok := req.Context().Value(redirectTraceKey{}).(*redirectTrace); ok {
+			t.add(req.URL.String())
+		}
+		if existing != nil {
+			return existing(req, via)
+		}
+		return nil // 交给 net/http 的默认上限（10 跳）
 	}
 }
 
@@ -298,6 +354,9 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, headers map[string
 	for k, v := range headers {
 		h[k] = v
 	}
+	// 记录重定向链：405 判定需要知道中途有没有经过登录页。
+	trace := &redirectTrace{}
+	ctx = context.WithValue(ctx, redirectTraceKey{}, trace)
 	resp, err := c.do(ctx, http.MethodPost, rawURL, h, body)
 	if err != nil {
 		return nil, err
@@ -308,6 +367,15 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, headers map[string
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
+		// 405 常常不是「请求方法写错」，而是会话失效的副产物：
+		// POST 业务接口 → 302 到 /iap/login → 重定向按 302 semantics 改成
+		// GET → 落到业务路径上 → Tomcat 回 405。实测 2026-11-17 安徽师范
+		// 全天都是这条链，而 405 的 body 是 Tomcat 错误页，一个会话失效
+		// 关键词都没有，IsAuthExpired 因此返回 false，自动续期永远不触发，
+		// 用户只看到「拉取不到任务」。
+		if resp.StatusCode == http.StatusMethodNotAllowed && looksLikeSessionRedirect(resp, raw, trace) {
+			return nil, &APIError{Code: "401", Message: "登录状态已失效（业务接口被重定向到登录页），需要重新登录"}
+		}
 		return nil, &APIError{Code: strconv.Itoa(resp.StatusCode),
 			Message: truncate(string(raw), 200)}
 	}
@@ -354,19 +422,22 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("%s（code=%s）", e.Message, e.Code)
 }
 
-// IsAuthExpired 判断是否为登录失效。
 // IsAuthExpired 判断错误是否属于「会话失效，需要重新登录」。
 //
 // 今日校园不同接口表达会话失效的方式并不统一：有的返回 401/403，
-// 有的返回登录页 HTML，有的在业务 message 里带「登录」字样。
-// 三种都要识别，否则自动重登录会在部分接口上静默失效。
+// 有的返回登录页 HTML，有的在业务 message 里带「登录」字样，
+// 还有的（实测安徽师范）把业务接口 302 到登录页，再以 405 收场。
+// 都要识别，否则自动重登录会在部分接口上静默失效。
 func IsAuthExpired(err error) bool {
 	if err == nil {
 		return false
 	}
 	var ae *APIError
 	if errors.As(err, &ae) {
-		if ae.Code == "401" || ae.Code == "403" {
+		switch ae.Code {
+		// 405 只有在 postJSON 判定为「会话重定向」时才会被改写成 401，
+		// 所以这里不会把真正的方法错误误判成登录失效。
+		case "401", "403":
 			return true
 		}
 		msg := ae.Message
@@ -422,6 +493,43 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// looksLikeSessionRedirect 判断一个 4xx 响应是否其实来自「会话失效后被
+// 重定向到登录页」这条链，而不是真正的方法/参数错误。
+//
+// 判定依据（任一条成立即可）：
+//   - 这条请求的重定向链里出现过登录/认证路径（最可靠：实测 405 的最终
+//     地址已经是业务路径，只有链上看得出中途去过 /iap/login）；
+//   - 响应体带有登录页特征（部分部署把登录页直接 200/405 回来）。
+//
+// 实测样本（2026-11-17 安徽师范）：POST 业务接口 302 → GET /iap/login
+// 302 → GET 业务路径 405，405 的 body 是 Apache Tomcat 8.0.50 错误页。
+func looksLikeSessionRedirect(resp *http.Response, raw []byte, trace *redirectTrace) bool {
+	if trace != nil && trace.passedLoginPath() {
+		return true
+	}
+	if resp != nil && resp.Request != nil && resp.Request.URL != nil {
+		path := strings.ToLower(resp.Request.URL.Path)
+		for _, marker := range sessionRedirectMarkers {
+			if strings.Contains(path, marker) {
+				return true
+			}
+		}
+	}
+	// 405 的 body 本身通常没有登录文案，但部分学校会带一个到登录页的
+	// 跳转提示。宁可多认一次会话失效（后果是多刷一次票），也不要把
+	// 「需要重新登录」静默吞成一条普通失败。
+	if looksLikeLoginPage(raw) {
+		return true
+	}
+	lower := strings.ToLower(string(raw))
+	for _, marker := range []string{"iap/login", "authserver", "统一身份认证"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // doNoRedirect 与 do 相同，但不自动跟随重定向，用于需要读取 Location 的场景。

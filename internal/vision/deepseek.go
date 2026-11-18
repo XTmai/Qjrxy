@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package vision 调用多模态大模型识别图片。
 //
 // 当前用途：今日校园的「以图判图」签到验证码。服务端下发 9 张候选图

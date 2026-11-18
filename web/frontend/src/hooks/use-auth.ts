@@ -45,7 +45,7 @@ export function useRegister() {
   });
 }
 
-/** 服务端信息（quotaEnabled 等） */
+/** 服务端信息（版本、单/多用户模式等） */
 export function useInfo() {
   return useQuery({
     queryKey: queryKeys.info(),
@@ -54,4 +54,4 @@ export function useInfo() {
   });
 }
 
-/** 当前服务端信息（quotaEnabled 等） */
+/** 当前服务端信息 */

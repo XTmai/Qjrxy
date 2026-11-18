@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package store
 
 import (
@@ -20,7 +23,7 @@ func newTestDB(t *testing.T) *DB {
 
 func mustUser(t *testing.T, db *DB) *User {
 	t.Helper()
-	u, err := db.CreateUser(context.Background(), "tester", "测试", "hash", 50)
+	u, err := db.CreateUser(context.Background(), "tester", "测试", "hash")
 	if err != nil {
 		t.Fatalf("创建用户失败：%v", err)
 	}
@@ -31,11 +34,11 @@ func TestCreateAndFetchUser(t *testing.T) {
 	db := newTestDB(t)
 	ctx := context.Background()
 
-	u, err := db.CreateUser(ctx, "alice", "爱丽丝", "hash1", 50)
+	u, err := db.CreateUser(ctx, "alice", "爱丽丝", "hash1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.ID == 0 || u.Username != "alice" || u.Quota != 50 {
+	if u.ID == 0 || u.Username != "alice" {
 		t.Errorf("用户字段异常：%+v", u)
 	}
 
@@ -44,7 +47,7 @@ func TestCreateAndFetchUser(t *testing.T) {
 		t.Errorf("按用户名查询失败：%v", err)
 	}
 
-	if _, err := db.CreateUser(ctx, "alice", "", "hash2", 10); err == nil {
+	if _, err := db.CreateUser(ctx, "alice", "", "hash2"); err == nil {
 		t.Error("重复用户名应报错")
 	}
 
@@ -85,37 +88,6 @@ func TestExpiredSession(t *testing.T) {
 	}
 	if _, err := db.SessionUser(ctx, "old"); !errors.Is(err, ErrNotFound) {
 		t.Error("过期会话应返回 ErrNotFound")
-	}
-}
-
-func TestQuota(t *testing.T) {
-	db := newTestDB(t)
-	ctx := context.Background()
-	u, _ := db.CreateUser(ctx, "quota", "", "h", 2)
-
-	for i := 0; i < 2; i++ {
-		ok, err := db.ConsumeQuota(ctx, u.ID)
-		if err != nil || !ok {
-			t.Fatalf("第 %d 次扣减应成功：%v %v", i+1, ok, err)
-		}
-	}
-	ok, err := db.ConsumeQuota(ctx, u.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok {
-		t.Error("超出额度不应扣减成功")
-	}
-
-	if err := db.GrantQuota(ctx, u.ID, 5); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ := db.UserByID(ctx, u.ID)
-	if updated.Quota != 7 {
-		t.Errorf("充值后总额度应为 7，得到 %d", updated.Quota)
-	}
-	if ok, _ := db.ConsumeQuota(ctx, u.ID); !ok {
-		t.Error("充值后应可继续扣减")
 	}
 }
 
@@ -161,7 +133,7 @@ func TestAccountCRUD(t *testing.T) {
 	}
 
 	// 其他用户无法访问
-	other, _ := db.CreateUser(ctx, "other", "", "h", 10)
+	other, _ := db.CreateUser(ctx, "other", "", "h")
 	if _, err := db.AccountByID(ctx, other.ID, acc.ID); !errors.Is(err, ErrNotFound) {
 		t.Error("跨用户访问应返回 ErrNotFound")
 	}

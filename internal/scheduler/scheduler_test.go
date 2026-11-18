@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package scheduler
 
 import (
@@ -296,6 +299,13 @@ func TestIsTransientFailureHumanIntervention(t *testing.T) {
 		errors.New("该账号未保存密码"),
 		errors.New("账号密码解析失败，请重新填写密码"),
 		errors.New("账号已被冻结，请联系学校管理员"),
+		// 2026-11-17 安徽师范的实际错误形态：外层是「拉取任务失败 +
+		// 会话失效」，真正的确定性原因藏在末尾的「自动恢复失败」里。
+		// 这种形态必须仍被判成需要人工介入，否则调度器会每 10 分钟
+		// 再撞一次学校登录页（该校 checkNeedCaptcha 恒为 isNeed:true）。
+		errors.New("拉取任务失败：登录状态已失效（业务接口被重定向到登录页），需要重新登录" +
+			"（自动重登未通过（若该校登录页要求图形验证码，只能手动登录一次）；请在账号页点「重新登录」；" +
+			"自动恢复失败：本次登录需要图形验证码，请到账号页手动登录一次（自动重试不会通过））"),
 	}
 	for _, err := range needsHuman {
 		if isTransientFailure(err) {
@@ -304,6 +314,10 @@ func TestIsTransientFailureHumanIntervention(t *testing.T) {
 	}
 	if !isTransientFailure(errors.New("网络请求失败")) {
 		t.Error("网络错误应允许重试")
+	}
+	// 纯会话失效（没有恢复失败信息）仍应允许重试：可能只是票据需要刷新。
+	if !isTransientFailure(errors.New("拉取任务失败：登录状态已失效，需要重新登录")) {
+		t.Error("没有恢复失败信息时，会话失效应允许重试一次")
 	}
 }
 
@@ -414,5 +428,88 @@ func TestReleaseAttemptOnEmptyMap(t *testing.T) {
 		if _, ok := s.attemptAt[99]; ok {
 			t.Error("不应存在残留记录")
 		}
+	}
+}
+
+// TestNoTaskKeepsAttemptThrottle 校验「同步成功但没有可执行任务」时
+// 仍然保留 attemptGap 节流。
+//
+// 回归（2026-11-17 生产实锤）：辽宁工程技术大学某账号名下只有请假任务，
+// NextTaskWindow 永远返回 ok=false，于是每轮 tick 都走「同步一次」的
+// 分支；旧实现在这条路径上调用 releaseAttempt，把 10 分钟节流直接抹掉，
+// 调度器 30 秒一轮无限重拉，单个账号一天发了 21488 次请求。
+//
+// 关键点：attemptGap 是内存里的「请求节流」，与「当天执行机会」
+// （last_run_at）是两件事。同步成功但无任务既没有提交、也不该允许
+// 每 30 秒重来一次，所以不能撤销记账。
+func TestNoTaskKeepsAttemptThrottle(t *testing.T) {
+	s := &Scheduler{attemptAt: map[int64]time.Time{}}
+	base := time.Date(2026, 11, 17, 0, 0, 19, 0, time.Local)
+
+	if !s.claimAttempt(1, base) {
+		t.Fatal("首次同步应被允许")
+	}
+	// 模拟 runPlan 走「同步成功、NextTaskWindow 返回 false」分支：
+	// 该分支不调用 releaseAttempt（这是本次修复的核心）。
+	syncedAt := base
+	for _, delta := range []time.Duration{30 * time.Second, 60 * time.Second, 5 * time.Minute, 9*time.Minute + 59*time.Second} {
+		if s.claimAttempt(1, syncedAt.Add(delta)) {
+			t.Errorf("同步后 %v 的 tick 应被节流拒绝，否则会形成请求风暴", delta)
+		}
+	}
+	// 满 attemptGap 后才允许下一次同步
+	if !s.claimAttempt(1, syncedAt.Add(attemptGap)) {
+		t.Error("超过 attemptGap 后应允许再次同步（任务可能在白天任何时刻下发）")
+	}
+	// 无任务分支会把间隔缩短到 noTaskGap，让窄窗口内仍能跟上后下发的任务。
+	// 从「刚允许过一次」的时刻重新计：上面的 claimAttempt 已经把
+	// attemptAt 推进到 syncedAt+attemptGap，这里以它为基线。
+	s.setAttemptGap(1, noTaskGap)
+	base2 := syncedAt.Add(attemptGap)
+	if s.claimAttempt(1, base2.Add(noTaskGap-time.Second)) {
+		t.Error("noTaskGap 内应被节流")
+	}
+	if !s.claimAttempt(1, base2.Add(noTaskGap)) {
+		t.Error("超过 noTaskGap 后应允许再探一次（窗口中间下发的任务）")
+	}
+}
+
+// TestOneDayRequestBudget 用真实 tick 频率估算单账号一天的请求上限。
+//
+// 「一直没有可执行任务」是最坏情况（任务没下发 / 只有请假任务）。
+// 这条路径用 noTaskGap 探测，每轮同步最多 3 个列表请求，
+// 全天约 24h/3min × 3 ≈ 1440 次。
+// 修复前是 21488 次（实测辽宁工程技术大学某账号），量级下降一个数量级。
+// 同时要求至少每 3 分钟探一次，保证窗口内后下发的任务能被跟上。
+func TestOneDayRequestBudget(t *testing.T) {
+	const (
+		tickEvery  = 30 * time.Second
+		reqPerSync = 3 // attendance + sign + collect 三类列表
+		day        = 24 * time.Hour
+	)
+	maxExpected := int(day/noTaskGap)*reqPerSync + 20
+
+	s := &Scheduler{attemptAt: map[int64]time.Time{}}
+	start := time.Date(2026, 11, 17, 0, 0, 0, 0, time.Local)
+	// 模拟 runPlan 在「同步成功但无任务」分支的做法
+	s.setAttemptGap(1, noTaskGap)
+
+	syncs := 0
+	for at := start; at.Before(start.Add(day)); at = at.Add(tickEvery) {
+		if s.claimAttempt(1, at) {
+			syncs++
+		}
+	}
+	if got := syncs * reqPerSync; got > maxExpected {
+		t.Errorf("单账号一天发出 %d 次列表请求（%d 次同步），超过预算 %d —— 节流失效",
+			got, syncs, maxExpected)
+	}
+	// 一天至少要探到 400 次以上（约每 3.6 分钟一次），否则会把
+	// 窗口中间下发的任务拖太晚。
+	if syncs < 400 {
+		t.Errorf("一天只同步了 %d 次，节流过度会把新下发的任务拖太晚", syncs)
+	}
+	if syncs*reqPerSync > 5000 {
+		t.Errorf("请求量 %d 仍然偏高（修复前 21488），需要进一步收敛", syncs*reqPerSync)
 	}
 }

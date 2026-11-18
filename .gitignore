@@ -1,6 +1,14 @@
 # Go
 bin/
 *.exe
+# 构建产物：本仓库只发布源码，不提供预编译二进制或部署包。
+# 任何平台的可执行文件都不该被提交（见 README「本项目不提供什么」）。
+/qjrxy
+/qjrxy-*
+qjrxy-linux-*
+qjrxy-darwin-*
+qjrxy-windows-*
+qjrxy-v*-all.zip
 
 # 前端依赖与构建缓存
 web/frontend/node_modules/

@@ -10,7 +10,7 @@
 { "ok": false, "error": { "code": "bad_request", "message": "请填写学校全称" } }
 ```
 
-错误码：`bad_request`(400)、`unauthorized`(401)、`not_found`(404)、`quota_exhausted`(402)、`failed`(400)。
+错误码：`bad_request`(400)、`unauthorized`(401)、`not_found`(404)、`failed`(400)。
 
 认证：登录或注册返回 `token`，之后请求头带 `Authorization: Bearer <token>`。
 （也支持 `qj_token` cookie，浏览器端使用。）
@@ -294,7 +294,6 @@ GET  /api/device/poll/{ticket}          → pending=false 时自动回填并消�
 ```
 
 `taskId` 省略时自动挑第一个未处理任务；`kind` 可限定 `sign` / `attendance`。
-每次调用扣 1 次额度，额度不足返回 402。
 
 返回：
 
@@ -422,26 +421,6 @@ GET  /api/device/poll/{ticket}          → pending=false 时自动回填并消�
   }
 }
 ```
-
----
-
-## 额度
-
-### `POST /api/quota/redeem` 🔒
-
-```json
-{ "code": "QJ-A1B2-C3D4" }
-```
-
-当前实现：卡密为**一次性**，且必须先在 `redeem_codes` 表预置（`code`, `amount`）。兑换时用条件 UPDATE 原子占位 `used_by`，未入库、格式不符或已使用的码一律返回 400。
-
-```bash
-# 预置一张 30 次卡密
-sqlite3 data/qingjin.db \
-  "INSERT INTO redeem_codes (code, amount, created_at) VALUES ('QJ-A1B2-C3D4', 30, '2026-11-04T12:00:00+08:00');"
-```
-
-返回 `{ "user": {...}, "granted": 30, "message": "兑换成功" }`。
 
 ---
 

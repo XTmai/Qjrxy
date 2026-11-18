@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // settings 表的读写：admin 页可改的运行时配置都落在这里
 // （诊断开关、识别服务参数等）。表结构极简（key/value），
 // 值由调用方负责序列化与加密（如 API key 先过 secure.Encrypt）。

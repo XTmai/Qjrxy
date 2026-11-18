@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package events 提供服务端到浏览器的轻量变更广播（SSE）。
 //
 // 只广播「哪类数据变了」，不携带业务数据：前端收到后让对应查询失效并

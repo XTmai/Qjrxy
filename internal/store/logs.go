@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package store
 
 import (
@@ -66,7 +69,7 @@ func (db *DB) UpdateLog(ctx context.Context, id int64, status, message, detail s
 //
 // 触发时机：任务同步发现该任务已出现在学校「已签到」列表里。
 // 只按当天约束——同名任务每天都会下发，昨天的待核对不能被今天的已签到误回填。
-// 额度不补扣：pending 本来就没扣过费。
+// 回填只改状态，不涉及任何计费。
 func (db *DB) MarkPendingLogsSigned(ctx context.Context, accountID int64, kind, taskName string) (int64, error) {
 	today := time.Now().Format("2006-01-02")
 	res, err := db.ExecContext(ctx, `

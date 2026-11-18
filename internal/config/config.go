@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package config
 
 import (
@@ -20,10 +23,6 @@ type Config struct {
 	OpenAPI     bool   // 是否开放 /api 给匿名（默认关闭，仅登录后可用）
 	AdminUser   string // 首次启动创建的管理员账号（空则不创建）
 	AdminPass   string
-	// QuotaEnabled 开启额度/卡密体系。
-	// 面向「托管运营」场景（多用户 + 卡密充值）；个人自部署保持默认关闭，
-	// 关闭时执行不扣额度、兑换接口不可用、前端隐藏额度相关 UI。
-	QuotaEnabled bool
 	// RegisterOpen 控制注册接口是否对外开放。
 	//
 	// 默认 false：仅当库中还没有任何用户（首次初始化）时允许注册，
@@ -63,7 +62,6 @@ type Config struct {
 //	QINGJIN_ADMIN_USER      管理员用户名（默认空，即首次访问时注册）
 //	QINGJIN_ADMIN_PASS      管理员密码
 //	QINGJIN_MULTI_USER      多用户/账号体系开关（默认 false=单用户直开；服务器多人用设为 true）
-//	QINGJIN_QUOTA_ENABLED   额度/卡密体系开关（默认 false；托管运营场景设为 true）
 //	QINGJIN_REGISTER_OPEN   是否允许自助注册（默认 false：仅首次初始化可注册）
 //	QINGJIN_TLS_INSECURE_HOSTS  允许跳过证书校验的主机后缀，逗号分隔（默认空=严格校验）
 func Load() (*Config, error) {
@@ -94,7 +92,6 @@ func Load() (*Config, error) {
 		SingleUser:       !multiUser,
 		AdminUser:        strings.TrimSpace(os.Getenv("QINGJIN_ADMIN_USER")),
 		AdminPass:        os.Getenv("QINGJIN_ADMIN_PASS"),
-		QuotaEnabled:     envBool("QINGJIN_QUOTA_ENABLED", false),
 		RegisterOpen:     envBool("QINGJIN_REGISTER_OPEN", false),
 		TLSInsecureHosts: splitList(os.Getenv("QINGJIN_TLS_INSECURE_HOSTS")),
 	}, nil

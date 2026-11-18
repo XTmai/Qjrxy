@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // 诊断覆盖率测试：锁住「所有出站请求都会被记录」这个承诺。
 //
 // 背景（2026-11-16）：排查安徽师范大学 NOTCLOUD 登录失败时，诊断日志里

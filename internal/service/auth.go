@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package service
 
 import (
@@ -639,6 +642,24 @@ func hasCredentials(a *store.Account) bool {
 	return strings.TrimSpace(a.PasswordEnc) != ""
 }
 
+// sessionRecoveryHint 用一句话说明「为什么自动恢复不了」，供用户直接照做。
+//
+// 实测（2026-11-17 安徽师范 26111702060）：业务会话失效后，CAS 票和
+// sessionToken 都已耗尽，只能密码重登；而该校认证页 checkNeedCaptcha
+// 返回 isNeed:true，代码在拿到挑战时即放弃，于是每个整点都失败一次，
+// 用户侧只看到「拉取不到任务」。这句话把真实原因摊开。
+func sessionRecoveryHint(account *store.Account) string {
+	switch {
+	case strings.TrimSpace(account.TGCEnc) == "" && !hasCredentials(account):
+		return "该账号没有可自动续期的票据，也没有保存密码，请到账号页手动登录一次"
+	case !hasCredentials(account):
+		return "登录票据已过期，请到账号页手动登录一次（扫码登录或学校登录）"
+	default:
+		return "自动重登未通过（若该校登录页要求图形验证码，只能手动登录一次）；" +
+			"请在账号页点「重新登录」"
+	}
+}
+
 // renewSessionWithTGC 续期业务会话。两条路：
 //
 //  1. 用保存的 CAS 票（tgc）直接换 service ticket；
@@ -755,7 +776,15 @@ func (s *Service) AutoRelogin(ctx context.Context, account *store.Account) (*sto
 		return nil, err
 	}
 	if ticket.ID != "" {
-		return nil, errors.New("本次登录需要图形验证码，请到账号页手动登录一次")
+		// 学校登录页要图形验证码：自动重登在这里必然过不去，会一直卡住。
+		// 实测 2026-11-17 安徽师范 26111702060：业务会话 16:02 失效后，
+		// 每个整点都来撞一次该校认证页（checkNeedCaptcha 恒为 isNeed:true），
+		// 每次都要下载一次验证码图片——纯属无效请求，还容易触发风控。
+		// 把账号标记成 expired，让调度器按「需人工处理」停下，等用户手动登录。
+		_ = s.db.UpdateAccountSession(ctx, account.ID, account.Cookies, "expired")
+		_ = s.db.RecordProbe(ctx, account.ID, "expired", "登录页要求图形验证码，需手动登录")
+		s.notify(account.UserID, events.TopicAccounts)
+		return nil, errors.New("本次登录需要图形验证码，请到账号页手动登录一次（自动重试不会通过）")
 	}
 	return s.db.AccountByID(ctx, account.UserID, account.ID)
 }
@@ -784,19 +813,33 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 	client := s.clientFor(account)
 	kinds := []cpdaily.TaskKind{cpdaily.KindAttendance, cpdaily.KindSign, cpdaily.KindCollect}
 	tasks, err := client.ListAllTasks(ctx, account.Host, kinds)
+	// recoveryErr 保留「自动恢复为什么失败」：恢复失败常常是确定性的
+	// （学校登录页要验证码 / 没票据也没密码），必须让上层看到真实原因，
+	// 否则调度器的 isTransientFailure 会把它当临时故障，每 10 分钟再撞
+	// 一次学校登录页，一整天下来既无意义又有风控风险。
+	var recoveryErr error
 	if err != nil && cpdaily.IsAuthExpired(err) {
 		// 拉取时才发现会话过期：先用 CAS 票续期，不行再密码重登，然后重试。
 		if updated, reErr := s.recoverSession(ctx, account); reErr == nil {
 			account = updated
 			client = s.clientFor(account)
 			tasks, err = client.ListAllTasks(ctx, account.Host, kinds)
+		} else {
+			recoveryErr = reErr
 		}
 	}
 	if err != nil {
 		if cpdaily.IsAuthExpired(err) {
 			_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
 			s.notify(userID, events.TopicAccounts)
-			return nil, fmt.Errorf("拉取任务失败：%w", err)
+			// 会话失效在这里就停住了，上面的 recoverSession 已经失败过一次。
+			// 用户真正需要知道的是「为什么自动恢复不了」，所以把恢复失败的
+			// 原因拼进去；调度器也据此判定是否需要人工介入。
+			hint := sessionRecoveryHint(account)
+			if recoveryErr != nil {
+				return nil, fmt.Errorf("拉取任务失败：%w（%s；自动恢复失败：%v）", err, hint, recoveryErr)
+			}
+			return nil, fmt.Errorf("拉取任务失败：%w（%s）", err, hint)
 		}
 		// 部分成功：某一类任务失败（如学校未开通信息收集），但其余已拿到。
 		// 本项目只用查寝，只要查寝那一类没整体失败就继续写缓存，

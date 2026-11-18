@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package cpdaily 实现今日校园（CPDaily / Campusphere）签到、查寝、收集等接口的协议层。
 //
 // 协议细节参考以下开源项目并做了整合（详见 README 致谢）：

@@ -5,8 +5,6 @@ export interface User {
   username: string;
   nickname: string;
   role: string;
-  quota: number;
-  quotaUsed: number;
   theme: string;
   createdAt: string;
 }
@@ -235,7 +233,6 @@ export interface SystemInfo {
   apiVersion: string;
   serverTime: string;
   tokenTTLDay: number;
-  quotaEnabled: boolean;
   /** 诊断日志是否在记录（管理员页控制） */
   diagEnabled?: boolean;
   /** false = 单用户模式：打开即用，无登录/注册 */
@@ -258,7 +255,6 @@ export interface AdminConfig {
   server: {
     multiUser: boolean;
     registerOpen: boolean;
-    quotaEnabled: boolean;
     tlsInsecureHosts: string;
   };
   photoPool: {

@@ -1,0 +1,18 @@
+# 统一行尾：仓库内一律 LF，检出时按平台转换。
+# 没有这个文件时 core.autocrlf=true 会让每次编辑都产生整文件 diff，
+# 也会让 Windows 与 Linux 构建出的产物出现无意义的差异。
+* text=auto eol=lf
+
+# 二进制文件不要做行尾转换或文本 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.db binary
+*.zip binary
+*.exe binary

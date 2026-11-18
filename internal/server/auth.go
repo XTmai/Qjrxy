@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package server
 
 import (
@@ -164,9 +167,6 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"manual-sign", "auto-plan", "multi-account", "photo",
 		"password-login", "device-id",
 	}
-	if s.svc.Config().QuotaEnabled {
-		features = append(features, "quota")
-	}
 	writeData(w, http.StatusOK, map[string]any{
 		// appVersion 是产品版本（页脚/关于页展示），clientVersion 才是模拟的
 		// 今日校园客户端版本；两者混用会把 9.9.24 当成 Qjrxy 的版本号。
@@ -175,7 +175,6 @@ func (s *Server) handleSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"apiVersion":    "v1",
 		"serverTime":    time.Now().Format(time.RFC3339),
 		"tokenTTLDay":   s.tokenTTL,
-		"quotaEnabled":  s.svc.Config().QuotaEnabled,
 		"diagEnabled":   diag.Enabled(),
 		"multiUser":     !s.svc.Config().SingleUser,
 		// 局域网可访问地址：扫码授权需要手机用这些地址打开本机

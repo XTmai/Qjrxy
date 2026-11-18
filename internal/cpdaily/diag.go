@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // 诊断埋点：cpdaily 全部 HTTP 流量的统一记录点。
 //
 // 用法（client.go 内）：请求头设置完毕后 `rec := c.diagStart(ctx, req)`；

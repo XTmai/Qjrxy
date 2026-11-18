@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package service
 
 import (
@@ -112,7 +115,7 @@ func (s *Service) ApplyRuntimeSettings() {
 	vision.Configure(key, base, model)
 
 	// 服务器运行模式：settings 覆盖环境变量，直接写回共享的 cfg 指针，
-	// 所有读取 cfg 的路径（鉴权、额度、systemInfo）立即看到新值。
+	// 所有读取 cfg 的路径（鉴权、systemInfo 等）立即看到新值。
 	// settings 表一旦写过某个键就永久压过环境变量——这个优先级对部署者
 	// 并不显而易见，覆盖发生时必须打到日志里，否则「env 设了多用户却没生效」
 	// 会变成一笔查不到的糊涂账。
@@ -122,9 +125,6 @@ func (s *Service) ApplyRuntimeSettings() {
 	}
 	if v := settings["server.registerOpen"]; v != "" {
 		s.cfg.RegisterOpen = v == "1"
-	}
-	if v := settings["server.quotaEnabled"]; v != "" {
-		s.cfg.QuotaEnabled = v == "1"
 	}
 	if v := settings["server.tlsInsecureHosts"]; v != "" || dbHas("server.tlsInsecureHosts", settings) {
 		hosts := splitHosts(v)
@@ -180,7 +180,7 @@ func validCoord(lon, lat float64) bool {
 
 // ---------- 认证 ----------
 
-// Register 注册用户。首个用户自动成为管理员并获得较高额度。
+// Register 注册用户。首个用户自动成为管理员。
 func (s *Service) Register(ctx context.Context, username, password, nickname string) (*store.User, error) {
 	username = strings.TrimSpace(username)
 	if len(username) < 3 {
@@ -196,7 +196,7 @@ func (s *Service) Register(ctx context.Context, username, password, nickname str
 	if nickname == "" {
 		nickname = username
 	}
-	user, err := s.db.CreateUser(ctx, username, nickname, hash, 50)
+	user, err := s.db.CreateUser(ctx, username, nickname, hash)
 	if err != nil {
 		return nil, err
 	}

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package server
 
 import (
@@ -452,74 +455,6 @@ func (s *Server) servePhotoFile(w http.ResponseWriter, r *http.Request, path str
 	}
 	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeFile(w, r, path)
-}
-
-// handleRedeemQuota 兑换额度卡密。
-func (s *Server) handleRedeemQuota(w http.ResponseWriter, r *http.Request) {
-	user, err := requireUser(r.Context())
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	// 额度体系关闭（个人自部署默认）时兑换无意义，明确拒绝。
-	if !s.svc.Config().QuotaEnabled {
-		writeError(w, badRequest("额度功能未启用（个人自部署无需兑换）"))
-		return
-	}
-	var req struct {
-		Code string `json:"code"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, err)
-		return
-	}
-	code, ok := normalizeRedeemCode(req.Code)
-	if !ok {
-		writeError(w, badRequest("卡密格式不正确"))
-		return
-	}
-	// 卡密必须在库里预置且未被使用过；面额取自库，不再由格式推断。
-	// 烧码与加额度必须在同一个事务里：分两步的话，烧码提交后加额度失败，
-	// 卡密就被白白作废且无法重试（重试会返回「已被使用」）。
-	amount, err := s.svc.DB().RedeemAndGrant(r.Context(), code, user.ID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeError(w, badRequest("卡密无效或已被使用"))
-		return
-	}
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	updated, err := s.svc.DB().UserByID(r.Context(), user.ID)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeData(w, http.StatusOK, map[string]any{"user": updated, "granted": amount, "message": "兑换成功"})
-}
-
-// normalizeRedeemCode 校验卡密格式并归一化（大写、去空白）。
-//
-// 只做格式校验，是否有效、面额多少一律以数据库里的发卡记录为准。
-// 早期实现按格式直接返回固定 30 次且不落任何使用记录，
-// 导致同一个码可以无限次兑换。
-func normalizeRedeemCode(code string) (string, bool) {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	if !strings.HasPrefix(code, "QJ-") {
-		return "", false
-	}
-	parts := strings.Split(strings.TrimPrefix(code, "QJ-"), "-")
-	if len(parts) != 2 || len(parts[0]) != 4 || len(parts[1]) != 4 {
-		return "", false
-	}
-	for _, p := range parts {
-		for _, ch := range p {
-			if !strings.ContainsRune("0123456789ABCDEF", ch) {
-				return "", false
-			}
-		}
-	}
-	return code, true
 }
 
 // helpers

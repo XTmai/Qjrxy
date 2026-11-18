@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // 管理员接口：运行时配置（诊断开关、识别服务参数）的查看与修改。
 //
 // 权限：登录之外还要求管理员——多用户模式下 role=admin，单用户模式
@@ -46,7 +49,6 @@ type adminVision struct {
 type adminServer struct {
 	MultiUser        bool   `json:"multiUser"`
 	RegisterOpen     bool   `json:"registerOpen"`
-	QuotaEnabled     bool   `json:"quotaEnabled"`
 	TLSInsecureHosts string `json:"tlsInsecureHosts"`
 }
 
@@ -76,7 +78,6 @@ type adminConfigUpdate struct {
 	// 不在这里设一个可用的密码，会话一旦丢失就无法再登录（永久锁死）。
 	AdminPassword       *string `json:"adminPassword"`
 	RegisterOpen        *bool   `json:"registerOpen"`
-	QuotaEnabled        *bool   `json:"quotaEnabled"`
 	TLSInsecureHosts    *string `json:"tlsInsecureHosts"`
 	PhotoPoolLimitBytes *int64  `json:"photoPoolLimitBytes"`
 }
@@ -130,7 +131,6 @@ func (s *Server) handleAdminGetConfig(w http.ResponseWriter, r *http.Request) {
 		Server: adminServer{
 			MultiUser:        !cfg.SingleUser,
 			RegisterOpen:     cfg.RegisterOpen,
-			QuotaEnabled:     cfg.QuotaEnabled,
 			TLSInsecureHosts: strings.Join(cfg.TLSInsecureHosts, ","),
 		},
 		PhotoPool: adminPhotoPool{
@@ -259,17 +259,6 @@ func (s *Server) handleAdminSaveConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = append(changed, "自助注册="+onOff(*in.RegisterOpen))
-	}
-	if in.QuotaEnabled != nil {
-		v := "0"
-		if *in.QuotaEnabled {
-			v = "1"
-		}
-		if err := s.svc.DB().SetSetting(ctx, "server.quotaEnabled", v); err != nil {
-			writeError(w, err)
-			return
-		}
-		changed = append(changed, "额度体系="+onOff(*in.QuotaEnabled))
 	}
 	if in.TLSInsecureHosts != nil {
 		hosts := strings.TrimSpace(*in.TLSInsecureHosts)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package captcha 管理「等待用户手点」的签到验证码会话。
 //
 // 自动识别不可用时（未配置识别服务、模型报错、九张图里没找到目标物），

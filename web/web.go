@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 // Package web 内嵌前端静态资源，保证单文件二进制即可部署。
 //
 // dist 目录由 web/frontend 的 Vite 构建产出（make build）：

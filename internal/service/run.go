@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Qjrxy contributors
+
 package service
 
 import (
@@ -5,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -105,32 +109,56 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	// 自动重登后会再调一次 Sign，用 Once 保证同一次执行复用同一张。
 	var photoOnce sync.Once
 	var resolvedPhoto string
-	signOpts := cpdaily.SignOptions{
-		Kind: cpdaily.TaskKind(task.Kind),
-		Task: cpdaily.Task{
-			Kind:            cpdaily.TaskKind(task.Kind),
-			SignInstanceWID: task.SignInstanceWID,
-			SignWID:         task.SignWID,
-			TaskName:        task.TaskName,
-		},
-		Lon:      lon,
-		Lat:      lat,
-		Position: account.Address,
-		Abnormal: account.Abnormal,
-		ResolvePhoto: func() (string, bool) {
-			photoOnce.Do(func() {
-				resolvedPhoto, _ = s.runPhoto(ctx, account)
-			})
-			return resolvedPhoto, resolvedPhoto != ""
-		},
+	// buildSignOpts 按任务构造提交参数。任务被学校删掉重发时要换成新
+	// wid 重试一次，所以不能把 task 直接焊死在闭包里。
+	buildSignOpts := func(t *store.Task) cpdaily.SignOptions {
+		signOpts := cpdaily.SignOptions{
+			Kind: cpdaily.TaskKind(t.Kind),
+			Task: cpdaily.Task{
+				Kind:            cpdaily.TaskKind(t.Kind),
+				SignInstanceWID: t.SignInstanceWID,
+				SignWID:         t.SignWID,
+				TaskName:        t.TaskName,
+			},
+			Lon:      lon,
+			Lat:      lat,
+			Position: account.Address,
+			Abnormal: account.Abnormal,
+			ResolvePhoto: func() (string, bool) {
+				photoOnce.Do(func() {
+					resolvedPhoto, _ = s.runPhoto(ctx, account)
+				})
+				return resolvedPhoto, resolvedPhoto != ""
+			},
+		}
+		// 手动执行时允许「自动识别失败 → 弹窗让用户点」。
+		// 定时任务不注入：那个时间点通常没人看屏幕，等满 100 秒只是白占资源。
+		if defaultIfEmpty(opts.Source, "manual") == "manual" {
+			signOpts.ManualCaptcha = s.manualCaptcha(opts.UserID, account.ID)
+		}
+		return signOpts
 	}
-	// 手动执行时允许「自动识别失败 → 弹窗让用户点」。
-	// 定时任务不注入：那个时间点通常没人看屏幕，等满 100 秒只是白占资源。
-	if defaultIfEmpty(opts.Source, "manual") == "manual" {
-		signOpts.ManualCaptcha = s.manualCaptcha(opts.UserID, account.ID)
-	}
+	signOpts := buildSignOpts(task)
 
 	result, detail, err := client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
+	// 任务已被学校删除（缓存里的 wid 过期）：刷新任务列表，按新任务
+	// 重试一次。实测 2026-11-17 三峡大学科技学院在 16:00 后把旧任务删掉
+	// 重发了一条（41461 → 41488），不重试的话这些账号当天必然全部失败。
+	if err != nil && errors.Is(err, cpdaily.ErrTaskGone) {
+		fresh, syncErr := s.resyncTaskAfterGone(ctx, opts, account, task)
+		if syncErr == nil && fresh != nil {
+			log.Printf("[run] 账号 %d 的任务 %s(wid=%s) 已被学校删除，改用新任务 %s(wid=%s) 重试",
+				account.ID, task.TaskName, task.SignInstanceWID,
+				fresh.TaskName, fresh.SignInstanceWID)
+			// 缓存已在 resyncTaskAfterGone 里用学校的全量列表覆盖，
+			// 旧的 wid 不复存在，NextTaskWindow 不会再按老窗口空转。
+			task = fresh
+			signOpts = buildSignOpts(task)
+			result, detail, err = client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
+		} else if syncErr != nil {
+			log.Printf("[run] 账号 %d 任务已被删除，但重新同步失败：%v", account.ID, syncErr)
+		}
+	}
 	// 提交时才发现会话失效：自动恢复一次并重试，用户无感知。
 	// recoverSession 先试 CAS 票续期（扫码/短信账号没有密码可用），再试密码重登。
 	if err == nil && !result.Success && cpdaily.IsAuthExpired(errors.New(result.Message)) {
@@ -293,7 +321,7 @@ func (s *Service) NextTaskWindow(ctx context.Context, accountID int64, kind stri
 // HasRunnableTask 判断账号当前是否存在可提交的指定类型任务。
 //
 // 供调度器在真正提交前做前置判断：任务还没到签到时间时直接等下一轮，
-// 不要发起一次必然被拒的请求（既浪费额度也会污染执行记录）。
+// 不要发起一次必然被拒的请求（既白白请求也会污染执行记录）。
 func (s *Service) HasRunnableTask(ctx context.Context, accountID int64, kind string) bool {
 	w, ok := s.NextTaskWindow(ctx, accountID, kind)
 	return ok && w.Ready
@@ -378,10 +406,47 @@ func noRunnableTaskMessage(cached []store.Task) string {
 	return "当前没有待处理的查寝任务"
 }
 
+// resyncTaskAfterGone 在提交发现「任务已不存在」后刷新任务列表，
+// 并从新列表里挑一个可执行的任务。
+//
+// 学校删任务重发时 signInstanceWid/signWid 都会变，任务名通常也微调，
+// 因此不能靠名字匹配，只能同步后用同一套 pickTask 规则重挑。
+// 返回 nil 表示学校侧确实已经没有可执行的查寝任务了（不是错误）。
+func (s *Service) resyncTaskAfterGone(ctx context.Context, opts RunOptions, account *store.Account, gone *store.Task) (*store.Task, error) {
+	if _, err := s.SyncTasks(ctx, opts.UserID, account.ID); err != nil {
+		return nil, err
+	}
+	cached, err := s.db.TasksByAccount(ctx, account.ID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cached {
+		t := cached[i]
+		if t.Kind != string(cpdaily.KindAttendance) {
+			continue
+		}
+		if opts.Kind != "" && t.Kind != opts.Kind {
+			continue
+		}
+		if t.Status == "done" || t.Status == "leave" {
+			continue
+		}
+		// 还是那条已经报废的任务（列表接口有延迟，可能仍返回旧 wid），跳过。
+		if t.SignInstanceWID == gone.SignInstanceWID && t.SignWID == gone.SignWID {
+			continue
+		}
+		if err := checkTaskWindow(&t); err != nil {
+			continue
+		}
+		fresh := t
+		return &fresh, nil
+	}
+	return nil, nil
+}
+
 // confirmPollDelays 是回查轮询的等待间隔。
 //
-// 多数学校提交后列表立即可见（第一次就命中）；实测 siit、nut 这类学校的
-// 列表有秒级延迟——siit 在 2026-11-13 17:41 的提交直到约 21 秒后才翻转到
+// 多数学校提交后列表立即可见（第一次就命中）；实测 siit、nut 这类学校的// 列表有秒级延迟——siit 在 2026-11-13 17:41 的提交直到约 21 秒后才翻转到
 // 已签到。单次回查必然读到旧数据，把真成功误判成「待核对」。
 // 窗口按 22 秒 + 请求耗时设计，覆盖实测最慢的学校。
 var confirmPollDelays = []time.Duration{0, 3 * time.Second, 8 * time.Second, 15 * time.Second, 22 * time.Second}

@@ -1,5 +1,5 @@
 // 设置：URL 驱动的 tab（沿用 openilink settings 模式）。
-// 外观 / 安全（改密）/ 额度（QINGJIN_QUOTA_ENABLED=true 时）/ 关于。
+// 外观 / 安全（改密）/ 管理员 / 关于。
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { setToken } from "@/api/client";
 import type { AdminConfig } from "@/lib/types";
 
-const TABS = ["appearance", "security", "quota", "admin", "about"] as const;
+const TABS = ["appearance", "security", "admin", "about"] as const;
 type Tab = (typeof TABS)[number];
 
 export function SettingsPage() {
@@ -28,7 +28,6 @@ export function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const { data: info } = useInfo();
 
-  const quotaOn = info?.quotaEnabled ?? false;
   const singleUser = info !== undefined && !info.multiUser;
   // 管理员：多用户模式下 role=admin；单用户模式本机自用即管理员。
   const isAdmin = singleUser || user?.role === "admin";
@@ -38,14 +37,10 @@ export function SettingsPage() {
   const tab: Tab = TABS.includes(rawTab) && !(rawTab === "admin" && !isAdmin) ? rawTab : "appearance";
   const switchTab = (t: Tab) => navigate(`/settings/${t}`, { replace: true });
 
-  const remaining = user ? Math.max(0, user.quota - user.quotaUsed) : 0;
-  const usedPct = user && user.quota > 0 ? Math.min(100, Math.round((user.quotaUsed / user.quota) * 100)) : 0;
 
   const [oldPass, setOldPass] = useState("");
   const [newPass, setNewPass] = useState("");
   const [pwError, setPwError] = useState("");
-  const [code, setCode] = useState("");
-  const [redeemError, setRedeemError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const changePassword = async () => {
@@ -60,21 +55,6 @@ export function SettingsPage() {
       setNewPass("");
     } catch (e) {
       setPwError(e instanceof Error ? e.message : "修改失败");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const redeem = async () => {
-    setRedeemError("");
-    if (!code.trim()) return setRedeemError("请输入卡密");
-    setBusy(true);
-    try {
-      const res = await api.redeem(code.trim());
-      toast({ title: `兑换成功，增加 ${res.granted} 次` });
-      setCode("");
-    } catch (e) {
-      setRedeemError(e instanceof Error ? e.message : "兑换失败");
     } finally {
       setBusy(false);
     }
@@ -99,11 +79,6 @@ export function SettingsPage() {
           <TabsTrigger value="security" className="h-auto px-2 py-1.5 sm:px-6">
             安全
           </TabsTrigger>
-          {quotaOn && (
-            <TabsTrigger value="quota" className="h-auto px-2 py-1.5 sm:px-6">
-              额度
-            </TabsTrigger>
-          )}
           {isAdmin && (
             <TabsTrigger value="admin" className="h-auto px-2 py-1.5 sm:px-6">
               管理员
@@ -211,50 +186,6 @@ export function SettingsPage() {
           )}
         </TabsContent>
 
-        {/* 额度（仅托管运营开启时） */}
-        {quotaOn && (
-          <TabsContent value="quota" className="m-0 space-y-5">
-            <Card className="border-border/50">
-              <CardHeader>
-                <CardTitle className="text-base">额度</CardTitle>
-                <CardDescription>每次执行扣 1 次，卡密由运营方发放</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl font-semibold tabular-nums">{remaining}</span>
-                  <span className="text-muted-foreground text-sm">次可用</span>
-                  <Badge variant={remaining > 5 ? "success" : "warning"}>
-                    累计使用 {user?.quotaUsed ?? 0}
-                  </Badge>
-                </div>
-                {/* 进度条 */}
-                {user && user.quota > 0 && (
-                  <div className="bg-muted h-2 w-full max-w-md overflow-hidden rounded-full">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        usedPct > 90 ? "bg-destructive" : usedPct > 70 ? "bg-amber-500" : "bg-primary"
-                      }`}
-                      style={{ width: `${usedPct}%` }}
-                    />
-                  </div>
-                )}
-                <div className="flex max-w-md gap-2">
-                  <Input
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    placeholder="卡密，如 QJ-A1B2-C3D4"
-                    className="flex-1"
-                  />
-                  <Button variant="outline" disabled={busy} onClick={() => void redeem()}>
-                    兑换
-                  </Button>
-                </div>
-                {redeemError && <p className="text-destructive text-sm">{redeemError}</p>}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        )}
-
         {/* 管理员（role=admin 或单用户模式；其他人不可见也进不来） */}
         {isAdmin && (
           <TabsContent value="admin" className="m-0 space-y-5">
@@ -298,7 +229,8 @@ export function SettingsPage() {
                 </div>
               )}
               <p className="text-muted-foreground text-xs leading-relaxed">
-                本项目仅供个人学习与研究。请使用本人或已获授权的账号，遵守学校规定与相关法律法规。
+                本项目按「现状」提供，不附任何担保；请仅用于本人所有或已获授权的账号，
+                并在符合所在学校规定与当地法律法规的前提下使用。
               </p>
               <div className="flex gap-2 pt-1">
                 <a href="/api/selftest" target="_blank" rel="noreferrer">
@@ -537,16 +469,6 @@ function AdminPanel() {
             <Switch
               checked={cfg?.server.registerOpen ?? false}
               onCheckedChange={(v) => void save({ registerOpen: v }, v ? "自助注册已开启" : "自助注册已关闭")}
-            />
-          </div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">额度体系</p>
-              <p className="text-muted-foreground text-xs">托管运营场景使用：执行扣次数、卡密兑换；个人使用保持关闭</p>
-            </div>
-            <Switch
-              checked={cfg?.server.quotaEnabled ?? false}
-              onCheckedChange={(v) => void save({ quotaEnabled: v }, v ? "额度体系已开启" : "额度体系已关闭")}
             />
           </div>
         </CardContent>
