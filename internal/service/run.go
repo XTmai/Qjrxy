@@ -39,6 +39,9 @@ type RunOutcome struct {
 	Message string `json:"message"`
 	Hint    string `json:"hint"`
 	Task    string `json:"taskName"`
+	// Code 是服务端业务码（或本端定义的确定性标记，如 sign_mode_nfc）。
+	// 调度器用它区分「确定性放弃」与「可重试」，不靠匹配消息文案。
+	Code string `json:"code,omitempty"`
 }
 
 // RunTask 执行一次签到/查寝，并写入执行记录。
@@ -140,7 +143,51 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	}
 	signOpts := buildSignOpts(task)
 
-	result, detail, err := client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
+	// 验证码频控闸门：同一账号同一时刻只允许一条验证码链路。
+	// 后到的触发直接放弃本轮，不去并发争抢学校的验证码接口——
+	// 并发只会让双方都更容易撞上 20000015「验证过于频繁」。
+	// 只在「可能需要验证码」时才占用；不需要验证码的账号毫无影响。
+	if remain := s.captchaBlockedRemaining(account.ID); remain > 0 {
+		msg := fmt.Sprintf("验证码请求被学校频控，%d 秒后再试", int(remain.Seconds()+0.5))
+		detailJSON := marshalDetail(map[string]any{"throttled": true, "remainSeconds": int(remain.Seconds())})
+		_ = s.db.UpdateLog(ctx, logID, store.StatusPending, msg, detailJSON)
+		return &RunOutcome{
+			LogID: logID, Status: store.StatusPending, Message: msg,
+			Hint: "学校对验证码接口有频率限制，已在自动退避中，无需手动重试",
+			Task: task.TaskName, Code: "captcha_throttled",
+		}, nil
+	}
+	releaseSlot, slotOK := s.acquireCaptchaSlot(account.ID)
+	if !slotOK {
+		msg := "该账号已有一轮签到正在处理验证码"
+		detailJSON := marshalDetail(map[string]any{"concurrent": true})
+		_ = s.db.UpdateLog(ctx, logID, store.StatusPending, msg, detailJSON)
+		return &RunOutcome{
+			LogID: logID, Status: store.StatusPending, Message: msg,
+			Hint: "请等待上一轮结束，重复点击不会加快速度",
+			Task: task.TaskName, Code: "captcha_busy",
+		}, nil
+	}
+	// 成功拿到 ticket 就清退避；被频控则记下来。
+	var result *cpdaily.SignResult
+	var detail *cpdaily.TaskDetail
+	defer func() {
+		releaseSlot()
+		if err != nil && errors.Is(err, cpdaily.ErrCaptchaThrottled) {
+			s.noteCaptchaThrottled(account.ID)
+			return
+		}
+		if result != nil && result.Code == "captcha_throttled" {
+			s.noteCaptchaThrottled(account.ID)
+			return
+		}
+		// 有任何结果（提交被受理）都说明频控窗口已过，清掉退避。
+		if result != nil {
+			s.clearCaptchaThrottle(account.ID)
+		}
+	}()
+
+	result, detail, err = client.Sign(ctx, account.Host, account.TenantID, device, signOpts)
 	// 任务已被学校删除（缓存里的 wid 过期）：刷新任务列表，按新任务
 	// 重试一次。实测 2026-11-17 三峡大学科技学院在 16:00 后把旧任务删掉
 	// 重发了一条（41461 → 41488），不重试的话这些账号当天必然全部失败。
@@ -175,6 +222,20 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		result.Hint = sanitizeSchoolMessage(result.Hint)
 	}
 	if err != nil {
+		// 学校租户产品到期：确定性终止。重试、重登、换网络都不会有用，
+		// 必须让用户看到「是学校那边停了」，而不是一条含糊的临时失败
+		// （实测 2026-11-18 武汉轻工全天 25 次无效重试）。
+		if cpdaily.IsTenantExpired(err) {
+			msg := "学校侧的今日校园租户产品已到期"
+			detailJSON := marshalDetail(map[string]any{"error": err.Error(), "tenantExpired": true})
+			_ = s.db.UpdateLog(ctx, logID, store.StatusFailed, msg, detailJSON)
+			return &RunOutcome{
+				LogID: logID, Status: store.StatusFailed, Message: msg,
+				Hint: "这不是本工具的故障：该校与今日校园的服务授权已到期，" +
+					"所有接口都返回「产品已到期」。需要联系学校管理员续订后才能恢复，本工具无需改动",
+				Task: task.TaskName, Code: cpdaily.ErrTenantExpiredCode,
+			}, nil
+		}
 		detailJSON := marshalDetail(map[string]any{"error": err.Error()})
 		_ = s.db.UpdateLog(ctx, logID, store.StatusPending, err.Error(), detailJSON)
 		return &RunOutcome{LogID: logID, Status: store.StatusPending, Message: err.Error(),
@@ -227,7 +288,12 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 	}
 
 	status := store.StatusFailed
-	if isVerification(result.Code, result.Message) {
+	// 任务类型决定的确定性不可执行（NFC 碰卡 / 现场扫码）优先判定：
+	// 这类结果的消息里带「二维码」「NFC」等词，若交给 isVerification
+	// 会被当成「待核对」继续重试，而它重试多少次都不会成功。
+	if IsTaskModeUnsupported(result.Code) {
+		status = store.StatusFailed
+	} else if isVerification(result.Code, result.Message) {
 		status = store.StatusPending
 	}
 	_ = s.db.UpdateLog(ctx, logID, status, defaultIfEmpty(result.Message, "提交失败"), detailJSON)
@@ -242,7 +308,7 @@ func (s *Service) RunTask(ctx context.Context, opts RunOptions) (*RunOutcome, er
 		hint = defaultIfEmpty(hint, "请先联系辅导员在辅导猫「手机授权管理」中授权本机，处理后手动执行或重置计划")
 	}
 	return &RunOutcome{LogID: logID, Status: status, Message: result.Message,
-		Hint: hint, Task: task.TaskName}, nil
+		Hint: hint, Task: task.TaskName, Code: result.Code}, nil
 }
 
 // TaskWindow 是一个任务的签到时间窗口。
@@ -589,6 +655,23 @@ func IsDeviceAuthRequired(code, message string) bool {
 		}
 	}
 	return false
+}
+
+// IsTaskModeUnsupported 判断失败是否因为「该任务无法由手机端完成」
+// （NFC 碰卡 / 现场扫二维码）。
+//
+// 由 cpdaily.Sign 在拉详情后、提交前直接返回，学校侧根本没有收到提交。
+// 这类结果必须按确定性失败处理并停止当天重试，否则会反复拉起验证码流程。
+func IsTaskModeUnsupported(code string) bool {
+	return code == "sign_mode_nfc" || code == "sign_mode_qrcode"
+}
+
+// IsTenantExpired 判断失败是否因为学校租户的产品授权到期。
+//
+// 这类失败与账号、会话、网络都无关，重试没有任何意义，
+// 必须停下来等学校续订。
+func IsTenantExpired(code string) bool {
+	return code == cpdaily.ErrTenantExpiredCode
 }
 
 // isVerification 判断失败是否属于"需要人工核对"而非确定失败。

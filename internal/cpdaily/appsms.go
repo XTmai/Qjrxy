@@ -461,8 +461,12 @@ func exchangeHopPolicy(target, originHost string) exchangeHop {
 		ru = (&url.URL{Scheme: "https", Host: originHost}).ResolveReference(ru)
 	}
 	originHostname := (&url.URL{Host: originHost}).Hostname()
+	// 路径比较先去掉尾斜杠：部分学校下发的 redirect_uri 是
+	// "/iap/oauthCallback/"（带尾斜杠），严格比较会把这条合法链路
+	// 判成「跳出了学校站点」而中止换票。
+	ruPath := strings.TrimSuffix(ru.Path, "/")
 	if ru.Hostname() == "" || !strings.EqualFold(ru.Hostname(), originHostname) ||
-		!strings.HasSuffix(ru.Path, "/iap/oauthCallback") {
+		!strings.HasSuffix(ruPath, "/iap/oauthCallback") {
 		return hopDeny
 	}
 	return hopOAuthGateway

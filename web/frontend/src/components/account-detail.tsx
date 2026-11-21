@@ -543,6 +543,23 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+// tgcStale 判断续期票据是否已超过主动轮换阈值（12h，与后端一致）。
+// 只做展示分层用，真正的轮换决策在后端。
+function tgcStale(iso: string): boolean {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) && Date.now() - t > 12 * 3600_000;
+}
+
+// tgcAgeSuffix 拼在登录检测文案后面：一眼看出续期凭据的新鲜度。
+// 有票据才显示；纯密码账号（无票据）不产生噪音。
+function tgcAgeSuffix(iso?: string): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const desc = relativeTime(iso);
+  return tgcStale(iso) ? ` · 票据已老化（${desc}轮换）` : ` · 票据新鲜（${desc}轮换）`;
+}
+
 function LogDetailRows({ raw }: { raw: string }) {
   try {
     const d = JSON.parse(raw) as Record<string, unknown>;
@@ -655,7 +672,7 @@ function DeviceTab({
       desc:
         account.loginStatus === "authorized"
           ? account.lastProbeAt
-            ? `已登录 · ${relativeTime(account.lastProbeAt)}检测`
+            ? `已登录 · ${relativeTime(account.lastProbeAt)}检测${tgcAgeSuffix(account.tgcRefreshedAt)}`
             : "已登录"
           : "选择账号密码或短信验证码登录",
       icon: LogIn,

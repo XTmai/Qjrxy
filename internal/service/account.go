@@ -52,6 +52,25 @@ type Service struct {
 
 	// photoMu 串行化「容量检查 + 落盘」，避免并发上传同时通过上限检查。
 	photoMu sync.Mutex
+
+	// captchaGate 按账号串行化验证码流程并施加跨轮退避。
+	//
+	// 学校的验证码接口有频控（实测重复请求返回 20000015「验证过于频繁」）。
+	// 同一账号并发或连续触发时，各自独立重试会互相延长限流窗口：
+	// 2026-11-18 某账号 7 分钟内跑了 23 轮，其中 8 次被频控拒绝。
+	// 这里做两件事：
+	//   1. 同一账号同一时刻只允许一条验证码链路（避免并发互撞）；
+	//   2. 被频控后记下解禁时刻，期间的触发直接跳过。
+	captchaGateMu sync.Mutex
+	captchaGate   map[int64]*captchaAccountGate
+}
+
+// captchaAccountGate 是单个账号的验证码闸门状态。
+type captchaAccountGate struct {
+	// busy 表示当前已有链路在跑，后到的触发直接放弃本轮（不排队）。
+	busy bool
+	// blockedUntil 是频控解禁时刻；零值表示未受限。
+	blockedUntil time.Time
 }
 
 // New 创建服务。

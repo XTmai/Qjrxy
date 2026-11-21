@@ -434,6 +434,9 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 	// validate 失败才需要等满服务端的 15 秒刷新限制；识别失败时服务端
 	// 还没开始计时，换一张只要几秒。区分开来能少等三分之一。
 	validateRejected := false
+	// tooFrequent 表示本轮被学校频控拒绝。命中后立刻结束本轮，
+	// 把等待交给调用方的跨轮退避——在本轮里接着试只会延长限流窗口。
+	tooFrequent := false
 	for try := 0; try < captchaMaxTry; try++ {
 		if try > 0 {
 			wait := captchaRecognizeRetryWait
@@ -512,7 +515,16 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 		}
 		ticket := jsonString(validateOut, "result")
 		if ticket == "" {
+			vc := captchaResultCode(validateOut)
 			lastErr = errors.New("验证码校验未通过：" + flattenJSON(validateOut))
+			// 「验证过于频繁」不是识别错误，而是我们撞了学校的限流。
+			// 这种情况下继续重试只会让限流窗口不断重置，越试越失败：
+			// 实测 2026-11-18 某账号 7 分钟内 23 轮里 8 次都是这个错误。
+			// 直接结束本轮，把等待交给上层的跨轮退避。
+			if vc == captchaTooFrequentCode {
+				tooFrequent = true
+				break
+			}
 			validateRejected = true
 			continue
 		}
@@ -521,7 +533,39 @@ func (c *Client) solveCaptcha(ctx context.Context, host string, ch *CaptchaChall
 	if lastErr == nil {
 		lastErr = errors.New("验证码处理失败")
 	}
+	if tooFrequent {
+		// 把「过于频繁」单独标注出来，供上层决定退避多久。
+		lastErr = fmt.Errorf("%w（%s）", ErrCaptchaThrottled, lastErr.Error())
+	}
 	return "", usedManual, lastErr
+}
+
+// 验证码接口的业务码（实测）。
+const (
+	// captchaTooFrequentCode 表示撞了学校的刷新频控。必须退避，
+	// 不能当成识别失败立刻重试。
+	captchaTooFrequentCode = "20000015"
+	// captchaExpiredCode 表示这张验证码会话已过期，换一张即可。
+	captchaExpiredCode = "20000006"
+	// captchaMismatchCode 表示选出的图与答案不符（真正的识别错误）。
+	captchaMismatchCode = "20000007"
+)
+
+// ErrCaptchaThrottled 表示被学校验证码频控拒绝，需要等待后重试。
+var ErrCaptchaThrottled = errors.New("验证码请求过于频繁，需要等待")
+
+// captchaResultCode 从 validate 响应里取业务码。
+//
+// code 既可能是数字也可能是带引号的字符串（不同部署不一致），
+// 且可能有前后空白，所以先 TrimSpace 再去引号。
+func captchaResultCode(out map[string]json.RawMessage) string {
+	raw, ok := out["code"]
+	if !ok {
+		return ""
+	}
+	s := strings.TrimSpace(string(raw))
+	s = strings.Trim(s, `"`)
+	return strings.TrimSpace(s)
 }
 
 // buildCaptchaGrid 下载 9 张候选图并拼成九宫格，返回 data URL 与可用格子数。

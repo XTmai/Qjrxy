@@ -173,8 +173,14 @@ func (s *Scheduler) probeTick(ctx context.Context, now time.Time) {
 	if len(results) == 0 {
 		return
 	}
-	var ok, relogged, expired int
+	var ok, relogged, expired, skipped int
 	for _, r := range results {
+		// 被跳过的探测（如学校租户已到期）没发过请求，不该算成"需要处理"，
+		// 否则每小时的汇总里都会出现一批假的失败项。
+		if r.Skipped {
+			skipped++
+			continue
+		}
 		switch r.Status {
 		case "authorized":
 			ok++
@@ -186,7 +192,12 @@ func (s *Scheduler) probeTick(ctx context.Context, now time.Time) {
 			log.Printf("账号 %s 需要重新登录：%s", r.AccountName, r.Message)
 		}
 	}
-	log.Printf("登录态探测完成：正常 %d，自动恢复 %d，需处理 %d", ok, relogged, expired)
+	if skipped > 0 {
+		log.Printf("登录态探测完成：正常 %d，自动恢复 %d，需处理 %d，跳过 %d（学校租户到期）",
+			ok, relogged, expired, skipped)
+	} else {
+		log.Printf("登录态探测完成：正常 %d，自动恢复 %d，需处理 %d", ok, relogged, expired)
+	}
 }
 
 // Stop 停止调度循环并等待当前轮结束。
@@ -498,6 +509,20 @@ func (s *Scheduler) runPlan(ctx context.Context, plan store.Plan, now time.Time)
 	if service.IsDeviceAuthRequired("", outcome.Message) {
 		s.recordPlanRun(ctx, plan, "需人工处理（设备需辅导员授权）："+outcome.Message)
 		log.Printf("计划 %d 需人工处理：设备需授权，已停止当天自动重试", plan.ID)
+		return
+	}
+	// 学校租户产品到期：确定性终止，不再重试。
+	// 这既不是网络问题也不是会话问题，反复请求只会白耗额度与日志。
+	if service.IsTenantExpired(outcome.Code) {
+		s.recordPlanRun(ctx, plan, "学校侧产品已到期："+outcome.Message)
+		log.Printf("计划 %d 学校租户产品已到期，已停止当天重试", plan.ID)
+		return
+	}
+	// 任务类型本身不可由手机端完成（NFC 碰卡 / 现场扫码）：确定性放弃。
+	// 重试只会白耗验证码次数，并给学校侧留下异常提交记录。
+	if service.IsTaskModeUnsupported(outcome.Code) {
+		s.recordPlanRun(ctx, plan, "任务不支持自动化："+outcome.Message)
+		log.Printf("计划 %d 任务类型不支持自动化，已停止当天重试：%s", plan.ID, outcome.Message)
 		return
 	}
 	// 待核对与临时性失败都不写 last_run_at，保留当天机会：

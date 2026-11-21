@@ -22,6 +22,8 @@ export interface Account {
   lastLoginAt: string;
   lastProbeAt: string;
   lastProbeMsg: string;
+  /** CAS 续期票据最后轮换时刻；超过半天未刷新说明即将/已经掉线 */
+  tgcRefreshedAt?: string;
   deviceId: string;
   deviceModel: string;
   systemVersion: string;

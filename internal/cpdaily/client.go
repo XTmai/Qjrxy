@@ -376,6 +376,13 @@ func (c *Client) postJSON(ctx context.Context, rawURL string, headers map[string
 		if resp.StatusCode == http.StatusMethodNotAllowed && looksLikeSessionRedirect(resp, raw, trace) {
 			return nil, &APIError{Code: "401", Message: "登录状态已失效（业务接口被重定向到登录页），需要重新登录"}
 		}
+		// 420 不是标准状态码，实测用于「学校租户产品已到期」：
+		// 返回 HTML「错误 420 感谢您的使用与支持！现提醒您，产品已到期~」。
+		// 这不是会话问题，重登/续期都没有意义，必须作为确定性终止处理，
+		// 让用户知道是学校侧的授权停了，而不是我们这边坏了。
+		if resp.StatusCode == tenantExpiredStatusCode {
+			return nil, &APIError{Code: ErrTenantExpiredCode, Message: "学校侧的今日校园租户产品已到期"}
+		}
 		return nil, &APIError{Code: strconv.Itoa(resp.StatusCode),
 			Message: truncate(string(raw), 200)}
 	}
@@ -420,6 +427,30 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("%s（code=%s）", e.Message, e.Code)
+}
+
+// tenantExpiredStatusCode 是学校租户产品到期时返回的非标准状态码。
+//
+// 实测（2026-11-18 武汉轻工 whpu.campusphere.net）：所有业务接口返回
+// HTTP 420 + HTML「错误 420 …产品已到期~」。刷新登录态没有意义。
+const tenantExpiredStatusCode = 420
+
+// ErrTenantExpiredCode 是本端定义的「租户到期」标记码。
+//
+// 不用裸的 "420" 与真实 HTTP 码混在一起，避免上层把它当成普通 4xx；
+// 调度器凭这个码停止当天重试并在界面上给出明确原因。
+const ErrTenantExpiredCode = "tenant_expired"
+
+// IsTenantExpired 判断错误是否为「学校侧产品已到期」。
+func IsTenantExpired(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae *APIError
+	if errors.As(err, &ae) {
+		return ae.Code == ErrTenantExpiredCode
+	}
+	return strings.Contains(err.Error(), "产品已到期")
 }
 
 // IsAuthExpired 判断错误是否属于「会话失效，需要重新登录」。

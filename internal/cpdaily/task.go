@@ -110,13 +110,21 @@ type Task struct {
 
 // TaskDetail 是任务详情（仅取提交所需字段）。
 type TaskDetail struct {
-	SignInstanceWID string       `json:"signInstanceWid"`
-	TaskName        string       `json:"taskName"`
-	IsPhoto         FlexInt      `json:"isPhoto"`
-	IsNeedExtra     FlexInt      `json:"isNeedExtra"`
-	IsMalposition   FlexInt      `json:"isMalposition"`
-	ExtraFields     []ExtraField `json:"extraField"`
-	SignPlaces      []SignPlace  `json:"signPlaceSelected"`
+	SignInstanceWID string `json:"signInstanceWid"`
+	TaskName        string `json:"taskName"`
+	// SignMode 是学校的签到方式。实测取值：
+	//   0 = 普通（定位）签到
+	//   3 = 二维码签到
+	//   5 = NFC 设备签到
+	// 列表接口不返回它（taskType 常为 null），只能从详情里读，
+	// 因此必须在拉详情之后、走任何提交前判断，否则会给 NFC 任务
+	// 白跑一整轮九宫格验证码。
+	SignMode      FlexInt      `json:"signMode"`
+	IsPhoto       FlexInt      `json:"isPhoto"`
+	IsNeedExtra   FlexInt      `json:"isNeedExtra"`
+	IsMalposition FlexInt      `json:"isMalposition"`
+	ExtraFields   []ExtraField `json:"extraField"`
+	SignPlaces    []SignPlace  `json:"signPlaceSelected"`
 	// SignStatus 是详情里的签到状态（0/1 未签，2 未到时间，3 已过期，4 已签到）。
 	// 提交前用它挡掉「已经签过」的任务，避免重试路径重复提交。
 	SignStatus FlexString      `json:"signStatus"`
@@ -705,6 +713,43 @@ type SignResult struct {
 	CaptchaBy string `json:"captchaBy,omitempty"`
 }
 
+// SignMode 取值（实测）。
+const (
+	signModeLocation = 0 // 普通定位签到，本项目支持
+	signModeQRCode   = 3 // 二维码签到，需要现场扫码，无法代做
+	signModeNFC      = 5 // NFC 设备签到，必须到现场的机器上碰卡
+)
+
+// unsupportedSignModeResult 在任务类型无法由手机端完成时给出结论。
+//
+// 返回值语义：
+//   - 已知的不可执行模式（二维码 / NFC）→ 返回「确定性失败」结果，
+//     调用方据此停止当天重试。这类任务无论重试多少次都不可能成功，
+//     继续跑只会白耗验证码次数，并给学校侧留下异常提交记录。
+//   - 未知模式 → 返回 nil，交给原流程按服务端判定。
+//     宁可多发一次请求，也不要因为出现新的 signMode 就误判成"不支持"。
+func unsupportedSignModeResult(mode int) *SignResult {
+	switch mode {
+	case signModeNFC:
+		return &SignResult{
+			Success: false,
+			Code:    "sign_mode_nfc",
+			Message: "该任务要求到 NFC 设备上碰卡签到，手机端无法完成",
+			Hint: "这不是工具故障：学校把这条查寝任务设成了 NFC 打卡，" +
+				"只能本人到宿舍楼下的机器上碰一下。自动化对这类任务不生效，请在计划里排除该任务",
+		}
+	case signModeQRCode:
+		return &SignResult{
+			Success: false,
+			Code:    "sign_mode_qrcode",
+			Message: "该任务要求现场扫二维码签到，手机端无法代办",
+			Hint: "这不是工具故障：二维码由老师现场出示，且每次不同，" +
+				"无法预先生成，请在计划里排除该任务",
+		}
+	}
+	return nil
+}
+
 // Sign 执行完整签到流程：拉详情 → 组表单 → 加密 → 提交。
 func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceProfile, opts SignOptions) (*SignResult, *TaskDetail, error) {
 	detail, err := c.FetchDetail(ctx, host, opts.Kind, opts.Task)
@@ -721,6 +766,19 @@ func (c *Client) Sign(ctx context.Context, host, tenantID string, device DeviceP
 			Code:    "0",
 			Message: "该任务已签到，无需重复提交",
 		}, detail, nil
+	}
+
+	// 非手机端可直接完成的任务，一律在这里拦下。
+	//
+	// signMode 只有详情里才有（列表接口的 taskType 常为 null），所以这是
+	// 第一次能确定任务类型的位置，也是最后能省掉无效请求的位置：
+	// 丢给它走流程的话，会先白跑一整轮九宫格验证码（下载 9 张图、识别、
+	// 换 ticket），提交后仍被学校以 2210060000 拒绝。
+	// 实测 2026-11-18 安徽城市管理职业学院 25231011 因此 7 分钟内跑了 23 轮。
+	if mode := detail.SignMode.Int(); mode != 0 {
+		if r := unsupportedSignModeResult(mode); r != nil {
+			return r, detail, nil
+		}
 	}
 
 	check := detail.CheckRange(opts.Lon, opts.Lat)
@@ -913,16 +971,24 @@ func (c *Client) tryCaptchaBeforeSubmit(ctx context.Context, host string, kind T
 func captchaAbortResult(cause error, byManual bool) *SignResult {
 	msg := "验证码未完成"
 	hint := "本次签到未完成，需要时请重新执行"
+	code := ""
 	if cause != nil {
 		msg = cause.Error()
-		if errors.Is(cause, ErrManualCaptchaAborted) {
+		switch {
+		case errors.Is(cause, ErrManualCaptchaAborted):
 			hint = "本次签到未完成，需要时请重新执行"
-		} else {
+		case errors.Is(cause, ErrCaptchaThrottled):
+			// 被学校频控：这不是「解不出来」，而是需要等待。
+			// code 带出去，上层据此进入退避而不是判定失败。
+			code = "captcha_throttled"
+			hint = "学校对验证码接口有频率限制，系统会自动退避后重试，无需手动操作"
+		default:
 			hint = "验证码处理失败：" + cause.Error()
 		}
 	}
 	return &SignResult{
 		Success:   false,
+		Code:      code,
 		Message:   msg,
 		Hint:      hint,
 		CaptchaBy: captchaBy(byManual),

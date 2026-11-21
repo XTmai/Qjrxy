@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS accounts (
 	app_version    TEXT NOT NULL DEFAULT '',
 	build_id       TEXT NOT NULL DEFAULT 'VLFCNXM',
 	app_user_id    TEXT NOT NULL DEFAULT '',
+	-- tgc_refreshed_at 记录 CAS 票（tgc）最后一次成功轮换/签发的时刻。
+	-- 用于「主动轮换」：存龄超过阈值的票在探测时用 sessionToken 换新，
+	-- 让学校侧永远看到一张刚出厂的票，避免长期闲置后被回收。
+	tgc_refreshed_at TEXT NOT NULL DEFAULT '',
 	address        TEXT NOT NULL DEFAULT '',
 	lon            REAL NOT NULL DEFAULT 0,
 	lat            REAL NOT NULL DEFAULT 0,
@@ -197,6 +201,8 @@ func (db *DB) migrate() error {
 		// app_user_id 是今日校园 App 账号的 userId，扫码取票时落库，用于防止绑错人。
 		`ALTER TABLE accounts ADD COLUMN app_user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE logs ADD COLUMN trace_id TEXT NOT NULL DEFAULT ''`,
+		// tgc_refreshed_at 见 schema 内注释：CAS 票轮换时刻，供主动轮换计算存龄。
+		`ALTER TABLE accounts ADD COLUMN tgc_refreshed_at TEXT NOT NULL DEFAULT ''`,
 	} {
 		_, _ = db.Exec(stmt)
 	}

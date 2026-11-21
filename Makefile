@@ -1,7 +1,7 @@
 .PHONY: build run test vet clean linux windows mac docker release frontend frontend-dev
 
 BINARY := bin/qjrxy
-VERSION := 1.6.2
+VERSION := 1.6.4
 RELEASE := release
 
 # 前端产物（web/dist）是 go:embed 的输入。只改后端时不需要跑这个。

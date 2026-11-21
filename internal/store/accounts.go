@@ -20,14 +20,18 @@ type Account struct {
 	PasswordEnc string `json:"-"`
 	// TGCEnc 是登录时拿到的 CAS 票（tgc）的密文。票过期后用它重新换取
 	// 业务会话，是短信登录（无密码）唯一的自动恢复手段。
-	TGCEnc      string `json:"-"`
-	TenantID    string `json:"tenantId"`
-	Host        string `json:"host"`
-	IDSURL      string `json:"idsUrl"`
-	JoinType    string `json:"joinType"`
-	Cookies     string `json:"-"`
-	LoginStatus string `json:"loginStatus"`
-	LastLoginAt string `json:"lastLoginAt"`
+	TGCEnc string `json:"-"`
+	// TGCRefreshedAt 是 CAS 票最后一次成功轮换/签发的时刻（RFC3339）。
+	// 「主动轮换」用它计算存龄：存龄过长的票在探测时换成新的，
+	// 让学校侧始终见到一张活跃票，避免长期闲置后被回收。
+	TGCRefreshedAt string `json:"tgcRefreshedAt,omitempty"`
+	TenantID       string `json:"tenantId"`
+	Host           string `json:"host"`
+	IDSURL         string `json:"idsUrl"`
+	JoinType       string `json:"joinType"`
+	Cookies        string `json:"-"`
+	LoginStatus    string `json:"loginStatus"`
+	LastLoginAt    string `json:"lastLoginAt"`
 	// LastProbeAt / LastProbeMsg 记录最近一次登录态探测的结果，供前端展示。
 	LastProbeAt   string `json:"lastProbeAt"`
 	LastProbeMsg  string `json:"lastProbeMsg"`
@@ -64,7 +68,7 @@ func (a Account) HasCookie() bool {
 	return strings.TrimSpace(a.Cookies) != ""
 }
 
-const accountColumns = `id, user_id, alias, school_name, username, password_enc, tgc_enc, tenant_id, host, ids_url,
+const accountColumns = `id, user_id, alias, school_name, username, password_enc, tgc_enc, tgc_refreshed_at, tenant_id, host, ids_url,
 	join_type, cookies, login_status, last_login_at, last_probe_at, last_probe_msg,
 	device_id, device_model, system_version, platform,
 	wis_device_id, user_agent, app_version, build_id, app_user_id, address, lon, lat, abnormal, photo_path,
@@ -73,6 +77,7 @@ const accountColumns = `id, user_id, alias, school_name, username, password_enc,
 func scanAccount(scanner interface{ Scan(...any) error }) (*Account, error) {
 	var a Account
 	err := scanner.Scan(&a.ID, &a.UserID, &a.Alias, &a.SchoolName, &a.Username, &a.PasswordEnc, &a.TGCEnc,
+		&a.TGCRefreshedAt,
 		&a.TenantID, &a.Host, &a.IDSURL, &a.JoinType, &a.Cookies, &a.LoginStatus, &a.LastLoginAt,
 		&a.LastProbeAt, &a.LastProbeMsg,
 		&a.DeviceID, &a.DeviceModel, &a.SystemVersion, &a.Platform, &a.WisDeviceID, &a.UserAgent,
@@ -206,14 +211,17 @@ func (db *DB) UpdateAccountSession(ctx context.Context, id int64, cookies, statu
 	return err
 }
 
-// UpdateAccountTGC 只更新续期票据。
+// UpdateAccountTGC 只更新续期票据，同时记录轮换时刻。
 //
 // 不能拿账号结构体整体 UpdateAccount：导入时先写 cookies、再写 tgc，
 // 结构体里的 cookies 还是创建时的旧值（空），会把刚写入的登录态覆盖掉。
+// tgc_refreshed_at 与票同生：每次写入新票都意味着这张票「刚出厂」，
+// 主动轮换据此计算存龄。
 func (db *DB) UpdateAccountTGC(ctx context.Context, id int64, tgcEnc string) error {
+	ts := now()
 	_, err := db.ExecContext(ctx,
-		`UPDATE accounts SET tgc_enc = ?, updated_at = ? WHERE id = ?`,
-		tgcEnc, now(), id)
+		`UPDATE accounts SET tgc_enc = ?, tgc_refreshed_at = ?, updated_at = ? WHERE id = ?`,
+		tgcEnc, ts, ts, id)
 	return err
 }
 

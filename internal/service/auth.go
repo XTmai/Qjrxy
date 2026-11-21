@@ -526,7 +526,10 @@ type ProbeResult struct {
 	Message   string `json:"message"`
 	TaskCount int    `json:"taskCount"`
 	Relogged  bool   `json:"relogged"`
-	Error     string `json:"error,omitempty"`
+	// Skipped 表示本次探测被跳过（如学校租户已到期），没有向学校发请求。
+	// 批量探测的汇总里要把它单独计数，否则会被误报成"失败"。
+	Skipped bool   `json:"skipped,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 // ProbeAccount 探测单个账号的登录态，并在会话失效时自动重新登录、同步任务。
@@ -543,6 +546,42 @@ func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) Prob
 	// 免得在每个 return 前重复加。参数在 defer 时求值，账号指针后续被
 	// 替换也不影响用户归属。
 	defer s.notify(account.UserID, events.TopicAccounts)
+
+	// 学校租户产品已到期：探测也是白跑。
+	// 这类失败与登录态无关，继续每小时探一次只会刷日志、无谓消耗，
+	// 所以直接跳过并保持原有状态（实测 2026-11-19 武汉轻工仍在每小时被探）。
+	if remain := s.tenantExpiredCooldownRemaining(account.ID); remain > 0 {
+		res.Status = account.LoginStatus
+		res.Message = fmt.Sprintf("学校侧产品已到期（%d 分钟内不再探测）", int(remain.Minutes()+0.5))
+		res.Skipped = true
+		return res
+	}
+
+	// App 会话（sessionToken）已判死：自动恢复注定失败。
+	// 根凭据死了，换票/续期/密码兜底全都救不回来（实测 2026-11-19~21
+	// 燕山等 6 个账号每天 7~8 轮无效请求）。冷却期内直接跳过，
+	// 卡片上明确提示「重新短信登录」，等用户处理。
+	if remain := s.appSessionDeadRemaining(account.ID); remain > 0 {
+		skip := appSessionDeadSkipResult(account, remain)
+		_ = s.db.RecordProbe(ctx, account.ID, account.LoginStatus, skip.Message)
+		return skip
+	}
+
+	// 主动轮换：CAS 票存龄超过阈值的账号，趁探测时换一张新票。
+	// v-9012 可用 sessionToken 随时签发全新 TGC（2026-11-19 探测实验
+	// 实锤），让学校侧永远见到活跃票，避免「长期闲置 → 整批失效」。
+	// 放在 recoverSession 之前：票还活着时轮换是最便宜的路径。
+	if rotated, rerr := s.rotateTGCIfStale(ctx, account); rerr != nil {
+		log.Printf("[auth] 账号 %d 主动轮换 CAS 票失败：%v", account.ID, rerr)
+		if isAppSessionDeadErr(rerr) {
+			skip := appSessionDeadSkipResult(account, appSessionDeadCooldown)
+			_ = s.db.RecordProbe(ctx, account.ID, account.LoginStatus, skip.Message)
+			return skip
+		}
+	} else if rotated {
+		res.Relogged = true
+		log.Printf("[auth] 账号 %d CAS 票已主动轮换", account.ID)
+	}
 
 	// 情况一：从未登录过 / 已标记失效 → 先用 CAS 票续期，再尝试密码重登
 	if !account.HasCookie() || strings.EqualFold(account.LoginStatus, "expired") {
@@ -616,6 +655,11 @@ func (s *Service) ProbeAccount(ctx context.Context, account *store.Account) Prob
 		res.Status = "authorized"
 	}
 	res.Message = prefix + "，" + detail
+	// 探测成功说明租户恢复正常（学校续订了），清掉到期冷却。
+	s.clearTenantExpired(account.ID)
+	// 同理，会话能正常工作也证明 App 会话恢复了（用户已重新登录），
+	// 解除失效冷却，恢复常规探测节奏。
+	s.clearAppSessionDead(account.ID)
 	_ = s.db.RecordProbe(ctx, account.ID, "authorized", res.Message)
 	return res
 }
@@ -829,6 +873,13 @@ func (s *Service) SyncTasks(ctx context.Context, userID, accountID int64) ([]sto
 		}
 	}
 	if err != nil {
+		// 学校租户产品到期：记下冷却，后续探测直接跳过。
+		// 这不属于登录问题，不该把账号标成 expired 让用户去重登。
+		if cpdaily.IsTenantExpired(err) {
+			s.noteTenantExpired(account.ID)
+			_ = s.db.RecordProbe(ctx, account.ID, account.LoginStatus, "学校侧产品已到期")
+			return nil, fmt.Errorf("学校侧的今日校园租户产品已到期：%w", err)
+		}
 		if cpdaily.IsAuthExpired(err) {
 			_ = s.db.UpdateAccountSession(ctx, account.ID, encodeCookies(client.Cookies()), "expired")
 			s.notify(userID, events.TopicAccounts)
